@@ -2,7 +2,7 @@
 import streamlit as st
 from services import rag
 from core.guardrails import validate_citations
-from ui.common import source_card
+from ui.common import source_card, require_library
 
 
 EX = ["这篇论文提出了什么模型？", "训练用了什么 GPU？数量和型号？",
@@ -13,6 +13,7 @@ EX = ["这篇论文提出了什么模型？", "训练用了什么 GPU？数量�
 def render(ctx):
     st.header("💬 跨文献问答与溯源")
     st.caption("Dense+Sparse 混合检索 → RRF 融合 → 可选 LLM 重排；每个结论带【n】内联引用与原文锚点。")
+    require_library(ctx)
     st.session_state.setdefault("qa_runs", [])
     st.session_state.setdefault("qa_q", "")
 

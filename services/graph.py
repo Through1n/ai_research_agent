@@ -17,6 +17,12 @@ def norm(s):
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", (s or "").lower())).strip()
 
 
+# 标题中常见的无区分度词，候选生成时忽略
+_STOP = {"the", "a", "an", "of", "and", "or", "for", "with", "on", "in", "to", "via",
+         "using", "based", "toward", "towards", "study", "method", "model", "network",
+         "learning", "deep", "neural", "paper", "new", "novel", "approach", "framework"}
+
+
 _REF_HEAD = re.compile(r"(?:^|\n|(?<=[.!?] ))\s*(?:[A-Z]\s*)?(references|bibliography|literature cited|works cited|参考文献)\b",
                       re.IGNORECASE)
 
@@ -36,8 +42,8 @@ def _ref_entries(ref_text):
     return [p.strip() for p in parts if len(p.strip()) > 25]
 
 
-def cites(full_a, ref_a, title_b, arxiv_b):
-    """判断论文 A 是否引用了论文 B。返回 (bool, 证据)。"""
+def cites(full_a, ref_a, title_b, arxiv_b, entries=None):
+    """判断论文 A 是否引用了论文 B。返回 (bool, 证据)。entries 可传入预解析条目以复用。"""
     if arxiv_b and re.search(r"\d{4}\.\d{4,5}", arxiv_b):
         if arxiv_b in full_a:
             return True, f"正文/文献中出现 arXiv 号 {arxiv_b}"
@@ -46,42 +52,58 @@ def cites(full_a, ref_a, title_b, arxiv_b):
     if len(toks) < 4:
         return False, ""
     best, best_score = "", 0.0
-    for entry in _ref_entries(ref_a):
-        en = norm(entry)
-        et = en.split()
+    for entry in (entries if entries is not None else _ref_entries(ref_a)):
+        en = entry[0]
+        et = entry[1]
         window_best = 0.0
         for i in range(0, max(1, len(et) - len(toks) + 1)):
             window = et[i:i + len(toks)]
             overlap = len(set(window) & set(toks)) / len(toks)
             window_best = max(window_best, overlap)
         if window_best > best_score:
-            best, best_score = entry[:160], window_best
+            best, best_score = entry[2][:160], window_best
     if best_score >= 0.8:
         return True, f"参考文献条目高度匹配（{best_score:.0%}）：{best}"
     return False, ""
 
 
+def parsed_entries(ref_a):
+    """预解析参考文献条目：[(归一文本, token列表, 原文截断)]，供多候选复用。"""
+    out = []
+    for e in _ref_entries(ref_a):
+        en = norm(e)
+        out.append((en, en.split(), e))
+    return out
+
+
 def _title_token_index(titles_by_node):
-    """标题 token → 节点列表 的倒排索引，用于候选生成。"""
-    idx = {}
+    """标题 token → 节点列表 的倒排索引；同时返回 token 频率用于稀有度加权。"""
+    idx, freq = {}, {}
     for name, t in titles_by_node.items():
         for w in set(norm(t).split()):
-            if len(w) > 2:
+            if len(w) > 2 and w not in _STOP:
                 idx.setdefault(w, []).append(name)
-    return idx
+                freq[w] = freq.get(w, 0) + 1
+    return idx, freq
 
 
-def _candidates(ref_a, idx, own):
-    """按参考文献区出现的标题词根收集候选被引节点（共享词数≥2）。"""
+def _candidates(ref_a, idx, freq, own, n_nodes):
+    """按参考文献区出现的标题词根收集候选被引节点，用稀有度(IDF)加权抑制假候选。"""
     entry_tok = set()
     for e in _ref_entries(ref_a):
-        entry_tok.update(w for w in norm(e).split() if len(w) > 2)
+        entry_tok.update(w for w in norm(e).split() if len(w) > 2 and w not in _STOP)
     votes = {}
     for w in entry_tok:
+        w_freq = freq.get(w, 1)
+        if w_freq >= max(2, int(n_nodes * 0.5)):
+            continue                      # 出现在半数标题中的词无区分度，直接忽略
+        idf = math.log(1 + n_nodes / w_freq)
         for name in idx.get(w, []):
             if name != own:
-                votes[name] = votes.get(name, 0) + 1
-    return [n for n, c in sorted(votes.items(), key=lambda x: -x[1]) if c >= 2]
+                votes[name] = votes.get(name, 0) + idf
+    thresh = 1.5 * math.log(1 + n_nodes / 2)   # 约等于「两个稀有词」的权重
+    ranked = sorted(votes.items(), key=lambda x: -x[1])
+    return [n for n, s in ranked if s >= thresh]
 
 
 def build_graph(ctx, progress_cb=None):
@@ -91,7 +113,7 @@ def build_graph(ctx, progress_cb=None):
     rep_of_group = {gid: _lib.latest_of(files)[0] for gid, files in _lib.group_versions(ctx).items()}
     reps = list(dict.fromkeys(rep_of_group.values()))
     titles = {n: ctx.papers[n].get("title", n) for n in reps}
-    idx = _title_token_index(titles)
+    idx, freq = _title_token_index(titles)
 
     full, refs = {}, {}
     for name in reps:
@@ -99,14 +121,24 @@ def build_graph(ctx, progress_cb=None):
         full[name] = text
         refs[name] = ref_section(text)
 
+    emb_cache = {}   # 每篇论文的参考文献条目向量只推理一次，供全部候选复用
+
+    def ref_vectors(name):
+        if name not in emb_cache:
+            entries = _ref_entries(refs[name])[:14]
+            emb_cache[name] = (entries, ctx.embed(entries) if entries else [])
+        return emb_cache[name]
+
     edges = []
     for i, a in enumerate(reps):
         if progress_cb:
             progress_cb((i + 1) / len(reps))
-        for b in _candidates(refs[a], idx, a):
-            ok, ev = cites(full[a], refs[a], titles[b], ctx.papers[b].get("arxiv_id"))
+        a_entries = parsed_entries(refs[a])
+        for b in _candidates(refs[a], idx, freq, a, len(reps)):
+            ok, ev = cites(full[a], refs[a], titles[b], ctx.papers[b].get("arxiv_id"),
+                           entries=a_entries)
             if not ok:
-                ok, ev = _semantic_cite(ctx, refs[a], titles[b])
+                ok, ev = _semantic_cite(ctx, titles[b], *ref_vectors(a))
             if ok:
                 G.add_node(a, title=titles[a], version=ctx.papers[a].get("version", ""))
                 G.add_node(b, title=titles[b], version=ctx.papers[b].get("version", ""))
@@ -115,16 +147,14 @@ def build_graph(ctx, progress_cb=None):
     return G, edges
 
 
-def _semantic_cite(ctx, ref_a, title_b):
+def _semantic_cite(ctx, title_b, entries, entry_vecs):
     """词面匹配失败时的语义兜底：标题向量 vs 参考文献条目向量 最佳余弦≥0.72。"""
-    entries = _ref_entries(ref_a)
-    if not entries or not ctx.chunks:
+    if not entries or not entry_vecs:
         return False, ""
     try:
         qv = ctx.embed([title_b])[0]
-        evs = ctx.embed([e[:400] for e in entries[:12]])
         best, bi = 0.0, 0
-        for j, e in enumerate(evs):
+        for j, e in enumerate(entry_vecs):
             s = cosine(qv, e)
             if s > best:
                 best, bi = s, j

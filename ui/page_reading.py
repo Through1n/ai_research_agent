@@ -78,11 +78,13 @@ def render(ctx):
     with tabs[3]:
         cit = st.text_input("引用标记（如 13）", key="cit")
         if st.button("🔗 生成双向跳转", key="cit_go") and cit:
+            from services.graph import ref_section
             full = "".join(p.get_text() for p in doc)
             bp = re.compile(rf".{{0,180}}\[{re.escape(cit.strip('[]'))}\].{{0,180}}", re.DOTALL)
             bm = [m.strip().replace("\n", " ") for m in bp.findall(full[:30000]) if len(m.strip()) > 30]
+            refs = ref_section(full)   # 锚定 References 标题区，兼容多种排版
             rp = re.compile(rf"\[{re.escape(cit.strip('[]'))}\]\s*(.*?)(?=\n\s*\[|\Z)", re.DOTALL)
-            rm = [m.strip().replace("\n", " ") for m in rp.findall(full[-20000:]) if 20 < len(m.strip()) < 800]
+            rm = [m.strip().replace("\n", " ") for m in rp.findall(refs) if 20 < len(m.strip()) < 800]
             embed_html(citation_jump_html(bm[0] if bm else "未找到正文位置。",
                                                rm[0] if rm else "未找到参考文献条目。"),
                             height=560, scrolling=True)

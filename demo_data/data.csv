@@ -1,4 +1,10 @@
-epoch,loss
-"1	",2
-2,3
-3,4
+﻿model,params_M,bleu_en_de,bleu_en_fr,train_gpu_days,infer_ms_per_sent
+Transformer-base,65,27.3,41.0,0.5,18
+Transformer-big,213,28.4,41.8,3.5,42
+BERT-base,110,0.0,0.0,1.0,15
+BERT-large,340,0.0,0.0,4.0,33
+GPT-1,117,0.0,0.0,0.3,20
+GPT-2,1500,0.0,0.0,0.8,65
+GPT-3,175000,0.0,0.0,300.0,210
+ELMo,28,18.0,25.0,0.2,12
+LSTM-SOTA,40,25.2,37.7,2.5,30

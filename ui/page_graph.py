@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from services import graph as g
-from ui.common import embed_html
+from ui.common import embed_html, require_library
 
 
 def render(ctx):
@@ -11,16 +11,22 @@ def render(ctx):
     st.caption("自动解析论文间真实引用关系，PageRank/中心性挖掘基石论文，结合时间线过滤已被解决的旧 idea。")
     st.session_state.setdefault("graph_pack", None)
 
+    if not require_library(ctx):
+        return
+
     if st.button("🕸️ 构建引用图谱"):
-        if not ctx.files:
-            st.warning("请先导入论文。"); return
-        G, edges = g.build_graph(ctx)
+        bar = st.progress(0.0, text="解析引用关系…")
+        G, edges = g.build_graph(ctx, progress_cb=lambda r: bar.progress(min(r, 1.0)))
+        bar.progress(1.0, text="图论指标计算…")
         metrics = g.analyze(G)
         corner, edge = g.classify_papers(G, metrics)
         html = g.graph_html(G, metrics, corner)
+        bar.empty()
         st.session_state.graph_pack = {
             "html": html, "metrics": metrics, "corner": corner, "edge": edge,
             "edges": edges, "nodes": list(G.nodes)}
+        if not edges:
+            st.info("未检测到文献间的真实引用关系。提示：需导入存在引用关系的论文（如 BERT 与 Transformer）。")
 
     pack = st.session_state.graph_pack
     if pack:
@@ -35,7 +41,8 @@ def render(ctx):
         }).sort_values("PageRank", ascending=False)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        st.success("🏆 基石论文：" + "、".join(f"《{ctx.papers[n]['title']}》" for n in pack["corner"]))
+        if pack["corner"]:
+            st.success("🏆 基石论文：" + "、".join(f"《{ctx.papers[n]['title']}》" for n in pack["corner"]))
         if pack["edge"]:
             st.caption("🌿 边缘衍生（暂未被他文引用）：" + "、".join(
                 f"《{ctx.papers[n]['title']}》" for n in pack["edge"]))

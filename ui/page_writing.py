@@ -13,6 +13,14 @@ def _csv_section(ctx):
     cf = st.file_uploader("上传 CSV", type=["csv"], key="csv")
     if cf:
         st.session_state.df = pd.read_csv(cf)
+    if st.button("📂 载入示例数据 demo_data/data.csv"):
+        import os
+        from config import DEMO_DIR
+        p = os.path.join(str(DEMO_DIR), "data.csv")
+        if os.path.exists(p):
+            st.session_state.df = pd.read_csv(p)
+        else:
+            st.warning("未找到示例 CSV。")
     df = st.session_state.get("df")
     if df is None:
         return
@@ -31,11 +39,17 @@ def _csv_section(ctx):
         st.plotly_chart(px.scatter(df, x=x, y=y, template=tpl), use_container_width=True)
     elif ct == "三维雷达图":
         nums = df.select_dtypes(include="number").columns.tolist()
+        label_col = x if x not in nums else (cols[0] if cols[0] not in nums else None)
         if len(nums) >= 3:
+            # 每个维度=一个数值列(归一化到0-1)，每条折线=数据中的一行样本
+            norm = df[nums[:6]] / df[nums[:6]].max()
             fg = go.Figure()
-            for c in nums[:5]:
-                fg.add_trace(go.Scatterpolar(r=df[c], theta=[f"{c}"] * len(df), fill="toself", name=str(c)))
+            for i, row in norm.iterrows():
+                fg.add_trace(go.Scatterpolar(r=list(row), theta=nums[:6], fill="toself",
+                                             name=str(df.iloc[i][label_col])[:22] if label_col else f"#{i}"))
             st.plotly_chart(fg, use_container_width=True)
+        else:
+            st.info("三维雷达图需要至少 3 个数值列。")
     elif ct == "相关性热力图":
         nums = df.select_dtypes(include="number")
         if len(nums.columns) >= 2:
