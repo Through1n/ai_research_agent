@@ -2,12 +2,56 @@
 import pymupdf as fitz
 
 
+def _ordered_dict_blocks(page, pw):
+    """对 page.get_text('dict')['blocks'] 按阅读顺序排序。
+
+    双栏判定与 parsing._sorted_blocks_by_column 一致：取竖直中线 x_mid=pw/2，
+    文本块>=4 且无块跨中线 → 双栏（左栏 x0<x_mid 在前，右栏在后，各按 y0 升序）；
+    否则单栏按 y0 升序。绝对定位视觉不变，但 DOM/选区阅读顺序更自然。
+    """
+    raw = page.get_text("dict")["blocks"]
+    text_blocks = [b for b in raw if b.get("type") == 0]
+    x_mid = pw / 2.0
+    if len(text_blocks) < 4:
+        return sorted(raw, key=lambda b: _block_y(b))
+    crossed = any(_block_x0(b) < x_mid < _block_x1(b) for b in text_blocks)
+    if crossed:
+        return sorted(raw, key=lambda b: _block_y(b))
+    left = sorted([b for b in text_blocks if _block_x0(b) < x_mid], key=lambda b: _block_y(b))
+    right = sorted([b for b in text_blocks if _block_x0(b) >= x_mid], key=lambda b: _block_y(b))
+    # 保留非文本块（图片等）原位：按 y 插入到结果中
+    others = [b for b in raw if b.get("type") != 0]
+    ordered = left + right + others
+    return sorted(ordered, key=lambda b: _block_y(b))
+
+
+def _block_x0(b):
+    try:
+        return b["lines"][0]["spans"][0]["bbox"][0]
+    except (KeyError, IndexError):
+        return 0.0
+
+
+def _block_x1(b):
+    try:
+        return b["lines"][0]["spans"][0]["bbox"][2]
+    except (KeyError, IndexError):
+        return 0.0
+
+
+def _block_y(b):
+    try:
+        return b["lines"][0]["spans"][0]["bbox"][1]
+    except (KeyError, IndexError):
+        return 0.0
+
+
 def native_page_html(doc, page_num):
-    """文本块+坐标→HTML，文字可选中复制，尽量还原双栏版式。"""
+    """文本块+坐标→HTML，文字可选中复制，尽量还原双栏版式（左栏在前右栏在后）。"""
     page = doc[page_num - 1]
     pw, ph = page.rect.width, page.rect.height
     spans_html = []
-    for block in page.get_text("dict")["blocks"]:
+    for block in _ordered_dict_blocks(page, pw):
         if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
@@ -51,6 +95,7 @@ color:#fff;padding:5px 14px;border-radius:14px;font-size:12px;z-index:9;}}
 <script>
 const l=document.getElementById('l'),r=document.getElementById('r');
 let syncing=false;
+// 按 scrollTop/scrollHeight 比例双向同步滚动
 function link(src,dst){{src.addEventListener('scroll',()=>{{if(syncing)return;syncing=true;
   const s=src.scrollTop/(src.scrollHeight-src.clientHeight||1);
   dst.scrollTop=s*(dst.scrollHeight-dst.clientHeight);requestAnimationFrame(()=>syncing=false);}});}}
@@ -59,6 +104,9 @@ function bindPane(a,b){{a.querySelectorAll('p').forEach(p=>p.addEventListener('m
   const i=p.dataset.i;[a,b].forEach(pn=>pn.querySelectorAll('p').forEach(q=>q.classList.toggle('active',q.dataset.i===i)));
   const t=b.querySelector(`p[data-i="${{i}}"]`);if(t)t.scrollIntoView({{block:'nearest'}});}}));}}
 bindPane(l,r);bindPane(r,l);
+// 划词翻译后点击任意段落清空选区，避免下次选中残留
+[l,r].forEach(pane=>pane.addEventListener('click',()=>{{
+  setTimeout(()=>{{const sel=window.getSelection();if(sel)sel.removeAllRanges();}},120);}}));
 </script></body></html>"""
 
 
