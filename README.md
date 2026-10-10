@@ -2,6 +2,18 @@
 
 > 智领科研 · 意图驱动 —— 基于大模型与 Agent 架构的全流程科研助手
 
+![screenshot](docs/screenshots/main.png)
+
+[在线演示（待部署）](https://example.com)
+
+**一键运行**：
+
+```bash
+git clone <repo> && cd ai_research_agent
+pip install -r requirements.txt
+streamlit run app.py
+```
+
 全国高校 AI 大模型挑战赛参赛作品。系统深度融合大语言模型（LLM）的通用推理能力与 Agent 架构的自主交互能力，
 从 0 到 1 构建覆盖**文献智能解析、抗幻觉问答、沉浸式对比翻译、自动检索追踪推荐、引用图谱分析与学术写作辅助**的
 全流程「科研助手 Agent」。六大命题模块全部闭环，关键指标均以**官方赛题 PDF 数据集实测**背书。
@@ -22,6 +34,21 @@
 **Agent 内核**：任务规划（Task Planning）、多专家路由（Multi-Agent Router）、Function Calling 闭环、
 短期/长期记忆与用户画像、三层 Guardrails（输入注入检测 / 输出脱敏与角标校验 / 执行沙箱）、
 全程思考过程（Trace）可视化与流式输出。
+
+---
+
+## ⚖️ 功能矩阵（vs 传统 RAG / 通用 Copilot）
+
+| 能力 | 传统 RAG | 通用 Copilot | 本项目 |
+|---|---|---|---|
+| 双栏 PDF 解析 | ❌ | ❌ | ✅ 按 x 坐标分栏 |
+| 抗幻觉 RAG | ⚠️ | ❌ | ✅ 角标白名单+自动修复环 |
+| 引用含金量评估 | ❌ | ❌ | ✅ CCF 名单+arXiv/DOI/年份规则打分 |
+| 引用图谱挖掘 | ❌ | ❌ | ✅ PageRank/介面中心性/时间线综述 |
+| 多 Provider 切换 | ❌ | ⚠️ | ✅ 智谱/DeepSeek/通义/OpenAI/Ollama |
+| 定时追踪新论文 | ❌ | ❌ | ✅ arxiv 增量检查工具 |
+| GitHub 复现性评估 | ❌ | ❌ | ✅ star/license/pushed_at |
+| 中英对照同步阅读 | ❌ | ⚠️ | ✅ 双栏 JS 同步滚动 |
 
 ---
 
@@ -173,6 +200,24 @@ ai_research_agent/
 - 演示视频脚本：`docs/演示视频脚本.md`（5–8 分钟逐段台词 + 录制检查清单）
 - 界面截图：`docs/shots/`
 - 在线演示：部署后填入评审地址（Docker 一键部署，见技术文档第 6 章）
+
+---
+
+## 🎯 赛题要求对照表（P0 五项 + P1 关键项）
+
+> 对照 `docs/audit_report_20261010.md` 审计清单，逐条标注实现位置与修复状态。
+
+| 赛题要求 | 实现位置 | 状态 |
+|---|---|---|
+| 双栏 PDF 解析（P0-3） | services/parsing.py `_sorted_blocks_by_column` | ✅ 已修复 |
+| 出处锚点可点击（P0-1） | ui/common.py `source_card` + ui/page_reading.py query_params | ✅ 已修复 |
+| 幻觉防护自动修复（P0-2） | ui/page_qa.py 调 services/rag.py `answer()` | ✅ 已修复 |
+| 无幻觉 References（P0-4） | services/writing.py `_sanitize_citations` + `_pdf_reference_entries` | ✅ 已修复 |
+| 引用含金量（P0-5） | services/citation_quality.py + tools/definitions.py `t_citation_quality` | ✅ 已修复 |
+| 图谱驱动综述（P1-7） | services/graph.py `generate_review` 三层分层 | ✅ 已修复 |
+| Future Work 自动排除（P1-15） | services/graph.py `explore_future` 规则预判 | ✅ 已修复 |
+| 定时追踪工具化（P1-9） | tools/definitions.py `t_track_arxiv` | ✅ 已修复 |
+| GitHub 复现性（P1-14） | tools/definitions.py `t_github_search` | ✅ 已修复 |
 
 ---
 
