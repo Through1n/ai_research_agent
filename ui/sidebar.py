@@ -1,5 +1,7 @@
 """侧边栏：大模型接入（预设五家 / 自定义任意端点）、API Key、用户、导航菜单、演示数据。"""
 import os
+import json
+from pathlib import Path
 
 import streamlit as st
 
@@ -21,9 +23,28 @@ MENU = [
 ]
 
 
+def _desktop_version_caption() -> str:
+    """桌面模式下读 launcher_state.json 返回业务版本号字符串；失败返回空串。"""
+    if not DESKTOP_MODE:
+        return ""
+    try:
+        state_file = Path(os.environ.get("APPDATA", "")) / "AI4SResearchAgent" / "launcher_state.json"
+        if state_file.exists():
+            data = json.loads(state_file.read_text(encoding="utf-8"))
+            v = data.get("current_version")
+            if v:
+                return f"桌面版 业务 v{v}"
+    except Exception:
+        pass
+    return "桌面版"
+
+
 def render(ctx):
     with st.sidebar:
         st.title("🔬 AI4S 科研助手")
+        _ver = _desktop_version_caption()
+        if _ver:
+            st.caption(f"🕹️ {_ver}")
 
         # 桌面版首次启动提示：无 API Key 时引导在下方「接入方式」配置（不弹窗、不跳转）
         if DESKTOP_MODE and not os.getenv("ZHIPU_API_KEY") and not os.getenv("LLM_API_KEY") \
@@ -118,5 +139,4 @@ def render(ctx):
                 library.remove_paper(ctx, fn)
             st.success("已清空"); st.rerun()
         st.caption(f"💾 内存 {memory_mb()}")
-        st.caption("桌面版 v1.0")
     return menu

@@ -28,3 +28,11 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+
+# PyInstaller
+build/
+dist/
+dist-release/
+*.pyc
+version_info.txt
+build_log.txt

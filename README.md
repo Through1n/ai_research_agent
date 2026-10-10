@@ -221,6 +221,18 @@ ai_research_agent/
 
 ---
 
+## 🖥️ 桌面版（Windows 一键运行）
+
+无需安装 Python，双击 `AI4SResearchAgent.exe` 即在原生窗口（WebView2 / Edge Chromium）中运行。
+
+- **数据目录**：`%APPDATA%\AI4SResearchAgent\`（含 `app/` 业务代码、`storage/` 文献库、`logs/` 日志）
+- **热更新**：业务代码（`app.py`、`ui/`、`services/` 等）通过 GitHub Release 静默下发，下次启动生效；壳层 exe 不参与热更新
+- **打包**：在项目根目录执行 `build_desktop.bat`（产物 `dist\AI4SResearchAgent\`）
+- **发版**：`python scripts/release.py --version 1.0.1 --notes "修复说明"`，自动打 tag 并（如装了 gh CLI）创建 Release
+- **详细文档**：[`docs/desktop_guide.md`](docs/desktop_guide.md)（系统要求、首次启动、回滚、常见问题）
+
+---
+
 ## 👥 团队信息
 
 - 参赛队伍：__________

@@ -27,13 +27,13 @@ MB_ICONINFORMATION = 0x40
 _CREATE_NO_WINDOW = 0x08000000
 
 # Streamlit 命令行参数（显式传递，不依赖 config.toml 兜底）
+# 注意：streamlit 1.63 已移除 --browser.openInExternalBrowser；headless=true 已阻止开浏览器。
 STREAMLIT_CLI_ARGS = [
     "--server.address=127.0.0.1",
     "--server.headless=true",
     "--server.runOnSave=false",
     "--global.developmentMode=false",
     "--browser.gatherUsageStats=false",
-    "--browser.openInExternalBrowser=false",
     "--client.toolbarMode=minimal",
 ]
 
@@ -142,18 +142,24 @@ def write_lock(port: int) -> None:
 # ---------------------------------------------------------------- 启动 Streamlit
 
 def launch_streamlit(port: int) -> subprocess.Popen:
-    """以 subprocess.Popen 启动 Streamlit 服务子进程，返回 Popen 对象。"""
+    """以 subprocess.Popen 启动 Streamlit 服务子进程，返回 Popen 对象。
+
+    - 冻结态：exe 重新执行自己 --st-server <port>，cwd = data_root/app（热更新业务代码目录）；
+    - 开发态：当前解释器跑 -m streamlit run <project_root>/app.py，cwd = project_root。
+    """
     global _STREAMLIT_LOG
 
-    resource_root = paths.resource_root()
     cli_args = [f"--server.port={port}"] + STREAMLIT_CLI_ARGS
 
     if paths.FROZEN:
-        # 冻结态：exe 重新执行自己，由 __main__.py 识别 --st-server 进入服务模式
+        # 冻结态：exe 重新执行自己，由 __main__.py 识别 --st-server 进入服务模式；
+        # cwd 指向热更新业务目录 app_dir()，使 .streamlit/config.toml、lib/、demo_data/ 相对解析。
+        work_dir = paths.app_dir()
         argv = [sys.executable, "--st-server", str(port)]
     else:
-        # 开发态：当前解释器跑 -m streamlit run <project_root>/app.py
-        argv = [sys.executable, "-m", "streamlit", "run", str(resource_root / "app.py")] + cli_args
+        # 开发态：直接跑项目根 app.py（app_bundle_dir 返回 project_root）
+        work_dir = paths.project_root()
+        argv = [sys.executable, "-m", "streamlit", "run", str(paths.project_root() / "app.py")] + cli_args
 
     env = os.environ.copy()
     env["AI4S_DESKTOP"] = "1"
@@ -168,7 +174,7 @@ def launch_streamlit(port: int) -> subprocess.Popen:
 
     proc = subprocess.Popen(
         argv,
-        cwd=str(resource_root),
+        cwd=str(work_dir),
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=_STREAMLIT_LOG,
@@ -176,7 +182,7 @@ def launch_streamlit(port: int) -> subprocess.Popen:
         creationflags=_CREATE_NO_WINDOW,
         startupinfo=startupinfo,
     )
-    _log(f"streamlit child started: pid={proc.pid} port={port} frozen={paths.FROZEN}")
+    _log(f"streamlit child started: pid={proc.pid} port={port} frozen={paths.FROZEN} cwd={work_dir}")
     return proc
 
 

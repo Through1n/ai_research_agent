@@ -13,10 +13,13 @@ DESKTOP_MODE = FROZEN or os.environ.get("AI4S_DESKTOP") == "1"
 ROOT = Path(__file__).resolve().parent
 
 if FROZEN:
-    # 冻结打包态：只读资源来自 sys._MEIPASS，可写数据放 %APPDATA%
-    RESOURCE_ROOT = Path(sys._MEIPASS)
+    # 冻结打包态：业务代码已由 desktop/paths.ensure_app_copy 从 app_bundle 复制到
+    # %APPDATA%/AI4SResearchAgent/app/，config.py 即位于该目录；以自身位置作为资源根，
+    # 使 demo_data/、.streamlit/、lib/ 等业务静态资源随热更新目录一起解析。
+    # 可写数据始终放在 %APPDATA%/AI4SResearchAgent 下（与桌面壳共享同一 data_root）。
+    RESOURCE_ROOT = Path(__file__).resolve().parent
     DATA_ROOT = Path(os.environ["APPDATA"]) / "AI4SResearchAgent"
-    ROOT = RESOURCE_ROOT                      # 保证 ROOT/lib、ROOT/.streamlit 等静态资源可读
+    ROOT = RESOURCE_ROOT
 else:
     # 开发态：资源与数据都在项目根，行为与历史完全一致
     RESOURCE_ROOT = ROOT

@@ -32,6 +32,87 @@ def _about() -> None:
     ctypes.windll.user32.MessageBoxW(None, ABOUT_TEXT, "关于 AI4S 科研助手", 0x40)
 
 
+def _check_update() -> None:
+    """帮助菜单“检查更新”：短超时查询 GitHub Release，弹窗反馈结果。"""
+    import ctypes
+    from desktop import updater
+
+    MB_ICONINFORMATION = 0x40
+    MB_ICONERROR = 0x10
+    MB_ICONWARNING = 0x30
+
+    try:
+        meta, reason = updater.needs_update()
+    except Exception as e:
+        ctypes.windll.user32.MessageBoxW(
+            None, f"检查更新时出错：{e}", "AI4S 科研助手", MB_ICONERROR
+        )
+        return
+
+    if reason == "network_error":
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "无法连接到更新服务器。\n\n请检查网络后重试，或访问：\n"
+            f"{updater.GITHUB_RELEASE_PAGE}",
+            "AI4S 科研助手", MB_ICONWARNING,
+        )
+        return
+
+    if reason == "up_to_date":
+        cur = updater.current_business_version()
+        ctypes.windll.user32.MessageBoxW(
+            None, f"当前已是最新版本（业务版本 {cur}）。",
+            "AI4S 科研助手", MB_ICONINFORMATION,
+        )
+        return
+
+    if reason == "runtime_too_old":
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            f"发现新业务版本 {meta.get('version')}，但需要运行时 "
+            f">= {meta.get('min_runtime_version')}（当前壳层 {updater.RUNTIME_VERSION}）。\n\n"
+            f"请下载完整安装包升级：\n{updater.GITHUB_RELEASE_PAGE}",
+            "AI4S 科研助手", MB_ICONWARNING,
+        )
+        return
+
+    # update_available：直接下载+应用（下次启动生效）
+    url = meta.get("zip_download_url")
+    if not url:
+        ctypes.windll.user32.MessageBoxW(
+            None, f"发现新版本 {meta.get('version')}，但下载地址缺失。\n"
+                  f"请手动前往 {updater.GITHUB_RELEASE_PAGE} 下载。",
+            "AI4S 科研助手", MB_ICONWARNING,
+        )
+        return
+
+    updates_dir = paths.data_root() / "updates"
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    zip_name = meta.get("zip_asset_name") or f"app-{meta.get('version')}.zip"
+    dst = updates_dir / zip_name
+
+    ctypes.windll.user32.MessageBoxW(
+        None,
+        f"发现新版本 {meta.get('version')}，正在下载…\n"
+        f"下载与校验完成后将弹出结果，下次启动生效。",
+        "AI4S 科研助手", MB_ICONINFORMATION,
+    )
+
+    if not updater.download_package(url, dst, timeout=120.0):
+        ctypes.windll.user32.MessageBoxW(
+            None, "下载失败，请稍后重试。", "AI4S 科研助手", MB_ICONERROR
+        )
+        return
+
+    ok, msg = updater.apply_update(
+        dst,
+        expected_sha256=meta.get("zip_sha256", ""),
+        min_runtime_version=meta.get("min_runtime_version", "0.0.0"),
+    )
+    flags = MB_ICONINFORMATION if ok else MB_ICONERROR
+    ctypes.windll.user32.MessageBoxW(None, msg, "AI4S 科研助手", flags)
+
+
 def open_window(port: int) -> None:
     """创建 1440x900（最小 1200x720）原生窗口并进入 WebView2 消息循环。"""
     url = f"http://127.0.0.1:{port}"
@@ -57,6 +138,7 @@ def open_window(port: int) -> None:
         "帮助",
         [
             webview.MenuAction("项目主页", lambda: webbrowser.open(HOMEPAGE_URL)),
+            webview.MenuAction("检查更新", _check_update),
             webview.MenuAction("关于", _about),
         ],
     )

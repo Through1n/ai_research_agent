@@ -1,0 +1,173 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""PyInstaller spec for AI4S 科研助手（桌面壳 + 初始业务 bundle）。
+
+布局（PyInstaller 解包后 _MEIPASS 内）：
+    AI4SResearchAgent.exe
+    desktop/                壳层（路径/启动器/窗口/updater/about/version）
+    assets/icon.ico         窗口图标
+    app_bundle/             初始业务代码（首次启动复制到 %APPDATA%/.../app/ 后热更新）
+        app.py
+        config.py
+        .env.example
+        requirements.txt
+        ui/ services/ core/ tools/ lib/ demo_data/ .streamlit/
+"""
+
+from pathlib import Path
+
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_submodules,
+)
+
+block_cipher = None
+
+PROJECT = Path(SPECPATH)  # noqa: F821  (PyInstaller 注入 SPECPATH)
+
+# ---------------------------------------------------------------- 业务代码 datas（热更新 bundle）
+
+BUNDLE_ITEMS = [
+    ("app.py", "app_bundle"),
+    ("config.py", "app_bundle"),
+    (".env.example", "app_bundle"),
+    ("requirements.txt", "app_bundle"),
+    ("ui", "app_bundle/ui"),
+    ("services", "app_bundle/services"),
+    ("core", "app_bundle/core"),
+    ("tools", "app_bundle/tools"),
+    ("lib", "app_bundle/lib"),
+    ("demo_data", "app_bundle/demo_data"),
+    (".streamlit", "app_bundle/.streamlit"),
+]
+
+datas = []
+for src, dest in BUNDLE_ITEMS:
+    src_path = PROJECT / src
+    if not src_path.exists():
+        print(f"[spec] WARN: bundle item missing, skip: {src}")
+        continue
+    datas.append((str(src_path), dest))
+
+# 窗口图标打到根目录
+datas.append((str(PROJECT / "assets" / "icon.ico"), "."))
+
+# ---------------------------------------------------------------- streamlit / chromadb 数据文件
+
+# streamlit 静态资源、frontend 等必须全部收集
+_streamlit_datas, _streamlit_bin, _streamlit_hidden = collect_all("streamlit")
+datas += _streamlit_datas
+
+# chromadb 默认 embedding 模型/Tokenizers 等数据
+datas += collect_data_files("chromadb")
+
+# webview 后端子模块（edgechromium / winforms 等）
+webview_hidden = collect_submodules("webview")
+
+# ---------------------------------------------------------------- hiddenimports
+
+hiddenimports = (
+    _streamlit_hidden
+    + _streamlit_hidden  # 防重复，去重在 Analysis 内部处理
+    + webview_hidden
+    + [
+        # 业务代码直接 import 的第三方
+        "fitz",  # pymupdf
+        "pymupdf",
+        "PIL",
+        "PIL.Image",
+        "numpy",
+        "pandas",
+        "plotly",
+        "plotly.express",
+        "plotly.graph_objects",
+        "plotly.io",
+        "networkx",
+        "openai",
+        "dotenv",
+        "psutil",
+        "chromadb",
+        "chromadb.utils",
+        "chromadb.utils.embedding_functions",
+        # updater / launcher 用到的
+        "webview.platforms.edgechromium",
+        "webview.platforms.winforms",
+        "clr",            # pythonnet
+        "pythonnet",
+        # 业务代码可能 lazy import 的
+        "arxiv",
+        "rank_bm25",
+        # streamlit 运行时需要
+        "streamlit.web.cli",
+        "streamlit.runtime.scriptrunner.magic_funcs",
+    ]
+)
+
+# ---------------------------------------------------------------- excludes
+
+excludes = [
+    "tkinter",
+    "matplotlib",
+    "PyQt5",
+    "PyQt6",
+    "PySide2",
+    "PySide6",
+    "wx",
+    "IPython",
+    "notebook",
+    "jupyter",
+    "IPython.core",
+    "pytest",
+    "sphinx",
+]
+
+# ---------------------------------------------------------------- Analysis
+
+a = Analysis(
+    ["desktop/__main__.py"],
+    pathex=[str(PROJECT)],
+    binaries=_streamlit_bin,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=excludes,
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="AI4SResearchAgent",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,           # windowed，无控制台
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=str(PROJECT / "assets" / "icon.ico"),
+    version="version_info.txt",
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="AI4SResearchAgent",
+)
