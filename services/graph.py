@@ -245,15 +245,107 @@ new vis.Network(document.getElementById('net'),{{nodes:nodes,edges:edges}},{{
 </script></body></html>"""
 
 
+def _node_year(ctx, n):
+    """从 ctx.papers[n] 取年份并转 int；失败返回 None。"""
+    raw = ctx.papers[n].get("year", "")
+    try:
+        return int(str(raw)[:4])
+    except (TypeError, ValueError):
+        return None
+
+
 def generate_review(ctx, G, metrics, cornerstone):
+    """基于图谱分层（基石/高介面/普通）与年份三段（早/中/近）驱动综述。"""
+    # ---- 备份原 prompt（fallback） ----
     abstracts = "\n".join(
         f"《{ctx.papers[n].get('title', n)}》({ctx.papers[n].get('year','')}): {ctx.papers[n].get('abstract','')[:500]}"
         for n in ctx.paper_order)
-    corner = "、".join(ctx.papers[n].get("title", n) for n in cornerstone)
-    prompt = f"""基于以下局域文献库与引用分析，用中文撰写一篇结构完整的简短领域综述（含：领域背景、主要技术脉络、
-基石工作（{corner}）的贡献、当前进展与局限）。客观、连贯、800字内。
+    corner_simple = "、".join(ctx.papers[n].get("title", n) for n in cornerstone)
+    fallback_prompt = f"""基于以下局域文献库与引用分析，用中文撰写一篇结构完整的简短领域综述（含：领域背景、主要技术脉络、
+基石工作（{corner_simple}）的贡献、当前进展与局限）。客观、连贯、800字内。
 文献信息：
 {abstracts[:6000]}"""
+
+    try:
+        if G is None or len(G.nodes) == 0 or not metrics or "pagerank" not in metrics:
+            raise RuntimeError("G 空或 metrics 缺失")
+
+        corner_set = set(cornerstone or [])
+        bet = metrics.get("betweenness", {})
+
+        # ---- 1) 高介面层：betweenness top 20% 且不在 cornerstone ----
+        all_nodes = list(G.nodes)
+        bet_sorted = sorted(((bet.get(n, 0.0), n) for n in all_nodes), reverse=True)
+        n_bridge = max(1, int(len(all_nodes) * 0.2))
+        bridge_set = set()
+        for _, n in bet_sorted[:n_bridge]:
+            if n not in corner_set:
+                bridge_set.add(n)
+
+        def _fmt(n, with_abstract=False):
+            info = ctx.papers.get(n, {})
+            title = info.get("title", n)
+            year = info.get("year", "")
+            if with_abstract:
+                return f"《{title}》({year}) {info.get('abstract','')[:200]}"
+            return f"《{title}》({year})"
+
+        corner_block = "\n".join(f"- {_fmt(n, with_abstract=True)}" for n in (cornerstone or []))
+        bridge_block = "\n".join(f"- {_fmt(n)}" for n in bridge_set) if bridge_set else "（无）"
+        normal_set = [n for n in all_nodes if n not in corner_set and n not in bridge_set]
+        normal_block = "\n".join(f"- {_fmt(n)}" for n in normal_set) if normal_set else "（无）"
+
+        # ---- 2) 年份三段：按中位数 ±3 切 ----
+        years = []
+        year_of = {}
+        for n in all_nodes:
+            y = _node_year(ctx, n)
+            if y is not None:
+                year_of[n] = y
+                years.append(y)
+        early_block = mid_block = recent_block = "（无）"
+        if years:
+            y_mid = statistics.median(years)
+            early = [n for n, y in year_of.items() if y < y_mid - 3]
+            mid = [n for n, y in year_of.items() if y_mid - 3 <= y <= y_mid + 3]
+            recent = [n for n, y in year_of.items() if y > y_mid + 3]
+
+            def _tl(lst):
+                return "\n".join(f"- {_fmt(n)}" for n in sorted(lst, key=lambda x: year_of.get(x, 0)))
+
+            early_block = _tl(early) if early else "（无）"
+            mid_block = _tl(mid) if mid else "（无）"
+            recent_block = _tl(recent) if recent else "（无）"
+
+        corner_names = "、".join(ctx.papers[n].get("title", n) for n in (cornerstone or []))
+        bridge_names = "、".join(ctx.papers[n].get("title", n) for n in list(bridge_set)[:5])
+
+        prompt = f"""你在为本领域撰写一篇基于引用图谱的中文简短综述（800字内）。请严格按以下结构展开：
+
+1) **基石论文奠定的方向**：围绕以下基石论文（按 PageRank/被引筛出）说明它们各自奠定了哪条技术路线：
+{corner_block}
+
+2) **高介面论文如何串联子方向**：以下论文不在基石层但 betweenness 高，它们常被多个子方向同时引用，请说明它们扮演了什么桥梁/衔接角色（{bridge_names} 等）：
+{bridge_block}
+
+3) **按时间线的演化**：
+- 早期（问题提出阶段）：
+{early_block}
+- 中期（改进/扩展阶段）：
+{mid_block}
+- 近期（当前趋势）：
+{recent_block}
+请按"早期问题→中期改进→近期趋势"的顺序讲清楚演化脉络。
+
+4) **其余普通节点**（仅作背景，不必逐一点名）：
+{normal_block}
+
+5) **开放问题**：在结尾用 1-2 句点出当前仍然未解决或值得继续做的方向。
+
+要求：客观、连贯、不要堆砌摘要；明确使用上面给出的基石/桥梁/时间分层信息，而不是把所有摘要平铺。"""
+    except Exception:
+        prompt = fallback_prompt
+
     return ctx.llm.chat([{"role": "user", "content": prompt}], temperature=0.4).content
 
 
