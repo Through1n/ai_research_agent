@@ -17,8 +17,8 @@ def norm(s):
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", (s or "").lower())).strip()
 
 
-_REF_HEAD = re.compile(r"(?:^|\n)\s*(?:[A-Z]\s*)?(references|bibliography|literature cited|works cited|参考文献)\b",
-                       re.IGNORECASE)
+_REF_HEAD = re.compile(r"(?:^|\n|(?<=[.!?] ))\s*(?:[A-Z]\s*)?(references|bibliography|literature cited|works cited|参考文献)\b",
+                      re.IGNORECASE)
 
 
 def ref_section(full_text):

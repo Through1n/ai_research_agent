@@ -5,6 +5,14 @@ import streamlit as st
 from services import extern
 from tools import definitions as df
 
+# 用户画像（中文领域标签）→ 英文论文关键词映射，用于个性化加权
+_DOMAIN_EN = {
+    "NLP / 大模型": ["language model", "transformer", "bert", "attention", "llm", "nlp", "pretrain"],
+    "计算机视觉": ["image", "vision", "detection", "segmentation", "cnn"],
+    "生物医学": ["protein", "clinical", "medical", "biomedical", "drug"],
+    "图神经网络": ["graph neural", "gnn", "citation network"],
+}
+
 
 def _arxiv(ctx):
     st.subheader("📚 arXiv 检索 / 下载")
@@ -69,28 +77,96 @@ def _quality(ctx):
         st.markdown(ctx.llm.chat([{"role": "user", "content": prompt}], temperature=0.2).content)
 
 
+def _likes_of(ctx, aid):
+    """取某篇论文的反馈聚合值（跨用户求和）。"""
+    return sum(ctx.likes.get(aid, {}).values())
+
+
+def _set_like(ctx, aid, user, v):
+    ctx.likes.setdefault(aid, {})
+    prev = ctx.likes[aid].get(user, 0)
+    ctx.likes[aid][user] = v if prev != v else 0
+    ctx.save_library()
+
+
 def _recommend(ctx):
-    st.subheader("⭐ 个性化推荐（结合本地库 + 开源代码）")
+    st.subheader("⭐ 个性化推荐（本地库兴趣 + 开源代码 + 点赞/踩反馈）")
     cat = st.text_input("arXiv 分类 / 关键词", value="cs.AI", key="rc")
+    uid = ctx.memory.user
     if st.button("✨ 刷新并推荐"):
-        cand = extern.latest_arxiv(cat, 12) if cat.startswith("cs.") else extern.search_arxiv(cat, 12, "submitted")
-        # 本地兴趣中心
+        try:
+            cand = extern.latest_arxiv(cat, 12) if cat.startswith("cs.") else extern.search_arxiv(cat, 12, "submitted")
+        except Exception as e:
+            st.warning(f"抓取 arXiv 失败（网络受限）：{str(e)[:80]}")
+            return
         embs = [np.asarray(ctx.papers[n]["embedding"]) for n in ctx.files if ctx.papers[n].get("embedding")]
         centroid = np.mean(np.stack(embs), axis=0) if embs else None
-        rows = []
+        prof = ctx.memory.profile()
         qvecs = ctx.embed([p["summary"][:1500] for p in cand])
+        rows = []
         for p, v in zip(cand, qvecs):
             rel = float(np.dot(centroid, np.asarray(v))) if centroid is not None else 0.0
-            rows.append((rel + (0.15 if p["github"] else 0.0), p))
-        for score, p in sorted(rows, key=lambda x: x[0], reverse=True)[:6]:
-            tag = "💻 有开源代码" if p["github"] else ""
-            st.markdown(f"**{p['title']}**（相关度 {score:.2f}）{tag}")
-            st.caption(p["summary"][:200])
+            gh = 0.15 if p["github"] else 0.0
+            lk = 0.20 * _likes_of(ctx, p["arxiv_id"])
+            hay = (p["title"] + " " + p["summary"]).lower()
+            interest = 0.10 * sum(cnt for dom, cnt in prof.items()
+                                  for w in _DOMAIN_EN.get(dom, []) if w in hay)
+            score = rel + gh + lk + interest
+            why = []
+            if rel > 0.3: why.append(f"与你本地文献库主题相近(余弦 {rel:.2f})")
+            if interest > 0: why.append(f"命中你的研究画像({uid})")
+            if gh: why.append("附 GitHub 开源代码，便于复现")
+            if lk: why.append(f"社区反馈净点赞 {_likes_of(ctx, p['arxiv_id']):+.0f}")
+            rows.append((score, p, why or ["该领域最新提交，值得关注"]))
+        st.session_state["rec_rows"] = sorted(rows, key=lambda x: x[0], reverse=True)
+
+    for score, p, why in st.session_state.get("rec_rows", [])[:6]:
+        c1, c2 = st.columns([5, 1])
+        with c1:
+            st.markdown(f"**{p['title']}**  ·  {p['arxiv_id']}  ·  相关度 {score:.2f}")
+            st.caption("推荐理由：" + "；".join(why))
+            st.caption(p["summary"][:160])
+        with c2:
+            st.write("")
+            b1, b2 = st.columns(2)
+            if b1.button("👍", key=f"up_{p['arxiv_id']}"):
+                _set_like(ctx, p["arxiv_id"], uid, 1); st.rerun()
+            if b2.button("👎", key=f"dn_{p['arxiv_id']}"):
+                _set_like(ctx, p["arxiv_id"], uid, -1); st.rerun()
+    if st.session_state.get("rec_rows"):
+        st.caption(f"🧑‍🤝‍🧑 当前用户 `{uid}`（切换侧边栏用户 ID 可演示多用户差异化推荐）；"
+                   f"已记录反馈 {len([v for v in ctx.likes.values() if any(v.values())])} 篇")
+
+
+def _track(ctx):
+    st.subheader("⏰ arXiv 动态追踪（订阅 + 增量新论文检测）")
+    st.caption("按话题订阅领域，系统记住检查点，每次只推送「上次以来新增」的论文，可配合 scripts/watch_daemon.py 定时运行。")
+    from services import track
+    cur = track.get_subscriptions(ctx)
+    topics = st.text_input("订阅话题（逗号分隔）", value=", ".join(cur), key="trk_topics")
+    c1, c2 = st.columns([3, 1])
+    if c1.button("🔄 运行一次追踪") and topics:
+        track.set_subscriptions(ctx, topics.split(","))
+        with st.spinner("抓取中…"):
+            st.session_state["trk_report"] = track.fetch_track(ctx, max_results=6)
+    if c2.button("♻️ 重置检查点"):
+        track.reset_checkpoints(ctx); st.session_state.pop("trk_report", None)
+        st.caption("检查点已清空，下次追踪将把当前论文视为全新。")
+    for r in st.session_state.get("trk_report", []):
+        if r.get("error"):
+            st.warning(f"{r['topic']} 抓取失败（网络受限）：{r['error']}")
+            continue
+        st.markdown(f"**{r['topic']}** · 本轮扫描 {r.get('count', 0)} 篇，新增 **{len(r['new'])}** 篇")
+        for p in r["new"]:
+            tag = " 💻开源" if p["github"] else ""
+            st.markdown(f"- `{p['arxiv_id']}` {p['title'][:80]}（{p['published']}）{tag}")
+            st.caption(p["summary"][:140])
 
 
 def render(ctx):
     st.header("🔍 论文自动检索、追踪与推荐")
-    _recommend(ctx)
+    _track(ctx)
+    st.markdown("---"); _recommend(ctx)
     st.markdown("---"); _arxiv(ctx)
     st.markdown("---"); _batch(ctx)
     st.markdown("---"); _others(ctx)

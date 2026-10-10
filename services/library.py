@@ -156,6 +156,7 @@ def commit(ctx, prepared, title=None, authors=None, arxiv_id=None, version=None,
     if filename not in ctx.paper_order:
         ctx.paper_order.append(filename)
     ctx.papers[filename] = paper
+    ctx.memory.update_profile(f"{paper['title']} {arxiv_id or ''}")
     ctx.rebuild_bm25()
     ctx.save_library()
     return paper
