@@ -148,4 +148,15 @@ def open_window(port: int) -> None:
     # winforms 后端遍历 window.menu 列表逐项建顶层菜单
     window.menu = [file_menu, help_menu]
 
+    # 强制前台显示：某些启动方式（如 SW_HIDE 的 vbs、后台进程）会让宿主窗口
+    # 创建后保持 invisible；页面加载后主动 restore + show 把它拉到前台。
+    def _bring_to_front() -> None:
+        try:
+            window.restore()
+            window.show()
+        except Exception:
+            pass
+
+    window.events.loaded += _bring_to_front
+
     webview.start(gui="edgechromium")
