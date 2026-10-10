@@ -2,11 +2,14 @@
 import os
 import sys
 import json
+import re
 import tempfile
 import subprocess
+from datetime import datetime, timezone
 
 from tools.registry import Registry
 from services import extern, library, rag, graph as gsvc, writing
+from services.citation_quality import score_references
 
 
 def trunc(t, n=600):
@@ -52,6 +55,125 @@ def t_pubmed(ctx, query, max_results=5):
 
 def t_web(ctx, query):
     return {"results": extern.web_search(query, 6)}
+
+
+# ---------------- 追踪 / 复现性 / 引用质量 ----------------
+def t_track_arxiv(ctx, arxiv_id, since_days=7):
+    """定时追踪单篇 arXiv 论文：返回最新版本信息，并判断近 N 天是否有更新。"""
+    try:
+        import arxiv
+        base = str(arxiv_id).split("v")[0].strip()
+        if not base:
+            return {"error": "arxiv_id 为空"}
+        search = arxiv.Search(id_list=[base], max_results=1)
+        p = next(search.results())
+        updated = p.updated or p.published
+        now = datetime.now(timezone.utc)
+        has_update = False
+        delta_days = None
+        try:
+            delta_days = (now - updated).total_seconds() / 86400.0
+            has_update = 0 <= delta_days <= float(since_days)
+        except Exception:
+            has_update = False
+        latest = {
+            "id": p.get_short_id(),
+            "title": p.title,
+            "published": str(p.published.date()) if p.published else "",
+            "updated": updated.isoformat() if updated else "",
+        }
+        if has_update:
+            msg = f"近 {since_days} 天内该论文有更新（距今约 {delta_days:.1f} 天）"
+        else:
+            msg = f"已检查，近 {since_days} 天无新版本" if delta_days is not None else "已检查，无新版本"
+        return {
+            "arxiv_id": base,
+            "checked_at": now.isoformat(timespec="seconds"),
+            "has_update": has_update,
+            "latest": latest,
+            "message": msg,
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+
+
+def t_github_search(ctx, repo_url):
+    """查询 GitHub 仓库复现性指标（stars / license / 最近推送 / 开放 issue）。"""
+    try:
+        m = re.search(r"github\.com[:/](?P<owner>[A-Za-z0-9_\-\.]+)/(?P<repo>[A-Za-z0-9_\-\.]+)",
+                      str(repo_url))
+        if not m:
+            return {"error": f"无法从 repo_url 解析 owner/repo: {repo_url}"}
+        owner = m.group("owner")
+        repo = m.group("repo").rstrip(".git")
+        api = f"https://api.github.com/repos/{owner}/{repo}"
+        req = extern.urllib.request.Request(
+            api, headers={"User-Agent": "ai-research-agent",
+                           "Accept": "application/vnd.github+json"})
+        with extern.urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        stars = data.get("stargazers_count", 0)
+        pushed_at = data.get("pushed_at", "") or ""
+        lic = (data.get("license") or {}).get("spdx_id") or "unknown"
+        open_issues = data.get("open_issues_count", 0)
+        desc = data.get("description") or ""
+        age_years = 999.0
+        try:
+            pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+            age_years = (datetime.now(timezone.utc) - pushed_dt).total_seconds() / 86400.0 / 365.0
+        except Exception:
+            age_years = 999.0
+        if stars >= 500 and lic != "unknown" and age_years < 1:
+            score = "A"
+        elif stars >= 50 and lic != "unknown":
+            score = "B"
+        else:
+            score = "C"
+        return {
+            "repo": f"{owner}/{repo}",
+            "stars": stars,
+            "pushed_at": pushed_at,
+            "license": lic,
+            "open_issues": open_issues,
+            "description": desc,
+            "repro_score": score,
+        }
+    except Exception:
+        return {
+            "repo_url": repo_url,
+            "stars": "unknown",
+            "license": "unknown",
+            "pushed_at": "unknown",
+            "note": "GitHub API 不可达",
+        }
+
+
+def t_citation_quality(ctx, references):
+    """对参考文献列表做含金量打分，返回均分、等级分布与头尾样本。"""
+    try:
+        refs = [r for r in (references or []) if isinstance(r, str) and r.strip()]
+        if not refs:
+            return {"error": "references 为空或无有效字符串条目"}
+        results = score_references(refs)
+        scores = [r["score"] for r in results]
+        avg = round(sum(scores) / len(scores), 1)
+        dist = {"A": 0, "B": 0, "C": 0}
+        for r in results:
+            dist[r["grade"]] = dist.get(r["grade"], 0) + 1
+        paired = sorted(zip(refs, results), key=lambda x: x[1]["score"], reverse=True)
+        top = [{"ref": ref, "score": res["score"], "grade": res["grade"]}
+               for ref, res in paired[:3]]
+        bottom = [{"ref": ref, "score": res["score"], "grade": res["grade"]}
+                  for ref, res in paired[-3:][::-1]]
+        return {
+            "scored_count": len(results),
+            "avg_score": avg,
+            "grade_distribution": dist,
+            "top_refs": top,
+            "bottom_refs": bottom,
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
 
 
 def _ingest_arxiv_paper(ctx, p):
@@ -183,6 +305,20 @@ def build_registry():
     r.register("web_search", "使用 DuckDuckGo 进行网页搜索（无需 API Key）。",
                {"type": "object", "properties": {"query": {"type": "string"}},
                 "required": ["query"]}, t_web)
+    r.register("track_arxiv", "定时追踪单篇 arXiv 论文，返回最新版本信息并判断近 N 天是否有更新。",
+               {"type": "object", "properties": {
+                   "arxiv_id": {"type": "string", "description": "arXiv 编号，如 2301.00001 或 2301.00001v2"},
+                   "since_days": {"type": "integer", "description": "判定更新的时间窗口（天）", "default": 7}},
+                "required": ["arxiv_id"]}, t_track_arxiv)
+    r.register("github_search", "查询 GitHub 仓库复现性指标（stars/license/最近推送），并给出复现性评级 A/B/C。",
+               {"type": "object", "properties": {
+                   "repo_url": {"type": "string", "description": "形如 https://github.com/owner/repo"}},
+                "required": ["repo_url"]}, t_github_search)
+    r.register("citation_quality", "对参考文献列表做含金量打分（arXiv/DOI/年份/顶会顶刊），返回均分与等级分布。",
+               {"type": "object", "properties": {
+                   "references": {"type": "array", "items": {"type": "string"},
+                                  "description": "参考文献原文或 title|year|venue 格式字符串列表"}},
+                "required": ["references"]}, t_citation_quality)
     r.register("download_paper", "按论文标题在 arXiv 检索并自动下载、语义查重、入库。",
                {"type": "object", "properties": {"title": {"type": "string"}},
                 "required": ["title"]}, t_download)
