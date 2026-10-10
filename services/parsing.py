@@ -23,9 +23,22 @@ def native_page_texts(doc):
 
 
 def ocr_document(doc, llm, pages=None, progress_cb=None, zoom=2.0):
-    """对无文本层页面逐页渲染并调用多模态模型 OCR。"""
+    """对无文本层页面逐页渲染并调用多模态模型 OCR。
+
+    所选 Provider 无视觉模型时（DeepSeek/Ollama），优雅降级：
+    返回占位文本并附说明，不抛出异常、不中断入库流程。
+    """
     idxs = pages if pages is not None else range(doc.page_count)
     texts = [""] * doc.page_count
+    if not getattr(llm, "vl_model", ""):
+        degrade = ("[扫描件 OCR 降级提示] 当前 Provider（%s）不支持多模态视觉模型，"
+                   "无法执行 OCR。请在侧边栏切换到智谱 GLM / 通义千问 / OpenAI 等"
+                   "支持视觉的 Provider 后重新入库本页。" % (llm.model,))
+        for i in idxs:
+            texts[i] = degrade
+        if progress_cb:
+            progress_cb(1.0, doc.page_count)
+        return texts
     mat = fitz.Matrix(zoom, zoom)
     prompt = ("识别这页学术论文的全部文字，按原始阅读顺序输出，保留标题层级；"
               "数学公式用 LaTeX；表格用 Markdown；只输出识别内容，不要解释。")
@@ -152,6 +165,10 @@ def extract_figures(doc, out_dir):
 
 
 def describe_figures(figures, llm, progress_cb=None):
+    if not getattr(llm, "vl_model", ""):
+        for fig in figures:
+            fig["desc"] = "（当前 Provider 无视觉模型，已跳过图表理解；切换多模态 Provider 后重新提取可补全）"
+        return figures
     for i, fig in enumerate(figures):
         try:
             with open(fig["path"], "rb") as f:

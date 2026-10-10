@@ -1,7 +1,8 @@
-"""侧边栏：API Key、用户、导航菜单、演示数据加载、清空文献库。"""
+"""侧边栏：模型 Provider、API Key、用户、导航菜单、演示数据加载、清空文献库。"""
 import streamlit as st
 
 from config import DEMO_PAPERS
+from core.providers import list_providers, get_provider
 from services import library
 from ui.common import memory_mb
 
@@ -21,15 +22,37 @@ MENU = [
 def render(ctx):
     with st.sidebar:
         st.title("🔬 AI4S 科研助手")
+
+        # ---- 大模型 Provider 切换（OpenAI 兼容协议，一套代码多家模型） ----
+        provs = list_providers()
+        labels = [f"{p.label}" for p in provs]
+        sel = st.selectbox(
+            "大模型 Provider", labels,
+            index=max(0, [p.id for p in provs].index(ctx.provider_id)
+                      if ctx.provider_id in [p.id for p in provs] else 0),
+            help="全部走 OpenAI 兼容协议；DeepSeek/Ollama 无视觉模型，扫描件 OCR 自动降级"
+        )
+        pid = provs[labels.index(sel)].id
+        p = get_provider(pid)
+        st.caption(("🖼️ 支持多模态 OCR：" + p.models_hint) if p.has_vision
+                   else "📵 无多模态：扫描件 OCR 自动降级为离线解析")
+        if pid != ctx.provider_id:
+            ctx.set_provider(pid, st.session_state.get("saved_api_key", ""))
+
         if "saved_api_key" not in st.session_state:
             st.session_state.saved_api_key = ""
-        key = st.text_input("智谱 API Key（GLM）", type="password",
-                            value=st.session_state.saved_api_key).strip()
+        key = st.text_input(f"{p.label.split('（')[0]} API Key",
+                            type="password", value=st.session_state.saved_api_key,
+                            key="key_input").strip()
         st.session_state.saved_api_key = key
-        if ctx.set_api_key(key):
-            st.success("✅ API Key 已加载")
+        if ctx.set_provider(pid, key):
+            st.success("✅ 模型已就绪")
+        elif not p.needs_key:
+            st.caption("本地 Ollama 需先运行 `ollama serve` 并拉取模型")
         else:
             st.caption("未填 Key：可使用内置离线演示数据")
+        if p.hint:
+            st.caption("💡 " + p.hint)
 
         st.markdown("---")
         ctx.memory.user = st.text_input("当前用户 ID", value=ctx.memory.user)

@@ -76,7 +76,7 @@ python scripts/watch_daemon.py 30          # （可选）arXiv 定期追踪守�
 - **文档处理**：PyMuPDF、多模态 LLM（OCR / 图表 / 公式）
 - **图谱**：NetworkX（PageRank、入度、中介、特征向量中心性）、IDF 加权倒排候选
 - **外部集成**：arXiv、PubMed、DuckDuckGo、GitHub 链接识别、订阅式增量追踪
-- **大模型**：默认智谱 GLM（glm-4-flash / glm-4v，OpenAI 兼容协议），可经环境变量切换任意兼容端点（DeepSeek / Qwen / GPT）
+- **大模型 Provider 抽象层**：一套 OpenAI 兼容协议接入多家模型，侧边栏随时切换（智谱 GLM / DeepSeek / 通义千问 / OpenAI / 本地 Ollama），无视觉能力的 Provider 自动降级；`LLM_PROVIDERS_EXTRA` 可追加内网自定义网关
 - **工程**：Conda、pip、Docker、一键启动脚本、三层测试体系
 
 ---
@@ -109,13 +109,17 @@ docker compose up -d       # 访问 http://localhost:8501
 
 ## 🔑 配置
 
-复制 `.env.example` 为 `.env` 并填入智谱 API Key（也可直接在应用侧边栏填入）：
+复制 `.env.example` 为 `.env`，按需填一个 Provider 的 Key（也可直接在应用侧边栏下拉切换 + 填入）：
 
 ```env
-ZHIPU_API_KEY=你的Key
-LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
-LLM_MODEL=glm-4-flash
-VL_MODEL=glm-4v
+LLM_PROVIDER=zhipu            # zhipu | deepseek | qwen | openai | ollama
+ZHIPU_API_KEY=你的Key         # 智谱免费 Key：open.bigmodel.cn
+# DEEPSEEK_API_KEY=xxx        # deepseek-chat（无多模态，OCR 自动降级）
+# DASHSCOPE_API_KEY=xxx       # 通义千问 qwen-turbo + qwen-vl-plus ✅
+# OPENAI_API_KEY=xxx          # gpt-4o-mini ✅
+# LLM_PROVIDER=ollama         # 本地 qwen2.5:7b，完全离线、无需真实 Key
+# 内网自定义网关：
+# LLM_PROVIDERS_EXTRA=[{"id":"mycloud","label":"公司内网","base_url":"http://10.0.0.8/v1","model":"qwen2.5-14b"}]
 ```
 
 > ⚠️ 安全设计：API Key 仅经环境变量 / 侧边栏会话注入，**绝不**写入代码、前端页面或公开仓库；

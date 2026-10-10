@@ -1,15 +1,16 @@
 """服务容器：在 Streamlit 会话中集中持有 LLM、记忆、向量库、文献库、BM25 等组件与持久化状态。"""
 import json
+import os
 import re
 import numpy as np
 import streamlit as st
 import chromadb
 from chromadb.utils import embedding_functions as chroma_ef
 
-from config import (CHROMA_DIR, LIBRARY_JSON, MEMORY_JSON, PROFILE_JSON,
-                    LLM_BASE_URL, LLM_MODEL, VL_MODEL, LLM_TIMEOUT)
+from config import CHROMA_DIR, LIBRARY_JSON, MEMORY_JSON, PROFILE_JSON, LLM_TIMEOUT
 from core.llm import LLMClient
 from core.memory import Memory
+from core.providers import get_provider, resolve_key
 
 
 def _stem(word):
@@ -52,8 +53,9 @@ class Container:
         self.chunks = lib.get("chunks", [])
         self.likes = lib.get("likes", {})
 
-        # LLM 与记忆（Key 在侧边栏设置后生效）
-        self.llm = LLMClient("", LLM_BASE_URL, LLM_MODEL, VL_MODEL, LLM_TIMEOUT)
+        # LLM 与记忆（Provider/Key 在侧边栏设置后生效；默认取 LLM_PROVIDER 环境变量）
+        self.provider_id = os.getenv("LLM_PROVIDER", "zhipu")
+        self.llm = self._build_llm(self.provider_id, "")
         self.memory = Memory(MEMORY_JSON, PROFILE_JSON)
         self.bm25 = self._build_bm25()
 
@@ -87,9 +89,21 @@ class Container:
         corpus = [tokenize(c["text"]) for c in self.chunks]
         return BM25Plus(corpus)
 
+    def _build_llm(self, pid, manual_key=""):
+        p = get_provider(pid)
+        key = resolve_key(pid, manual_key)
+        return LLMClient(key, p.base_url, p.model, p.vl_model, LLM_TIMEOUT)
+
+    def set_provider(self, pid, manual_key=""):
+        """切换大模型 Provider（智谱/DeepSeek/通义/OpenAI/Ollama）。"""
+        if pid != self.provider_id or manual_key != self.llm.api_key:
+            self.provider_id = pid
+            self.llm = self._build_llm(pid, manual_key)
+        return self.llm.available
+
     def set_api_key(self, key):
         if key and key != self.llm.api_key:
-            self.llm = LLMClient(key, LLM_BASE_URL, LLM_MODEL, VL_MODEL, LLM_TIMEOUT)
+            self.llm = self._build_llm(self.provider_id, key)
         return self.llm.available
 
     # ---------- 便捷访问 ----------
