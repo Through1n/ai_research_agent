@@ -1,0 +1,30 @@
+# ---------- 密钥 / 环境变量（严禁入库）----------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# ---------- 运行时存储（向量库、上传、缓存、日志）----------
+storage/
+chroma/
+*.log
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# ---------- 演示过程产物（运行生成，非源码）----------
+docs/shots/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- 系统 / 编辑器 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

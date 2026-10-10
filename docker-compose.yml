@@ -1,0 +1,11 @@
+services:
+  ai4s-agent:
+    build: .
+    container_name: ai4s_research_agent
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+    restart: unless-stopped
