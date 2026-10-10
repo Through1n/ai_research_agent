@@ -29,6 +29,7 @@ ul,ol{margin:7px 0 7px 4px;padding-left:22px;}
 li{margin:4px 0;}
 .box{background:var(--light);border:1px solid var(--line);border-left:5px solid var(--blue);border-radius:5px;padding:10px 14px;margin:12px 0;page-break-inside:avoid;}
 .ok{border-left-color:var(--accent);background:#ecf8f4;}
+.warn{border-left-color:#b7791f;background:#fdf6e7;}
 .toc{page-break-after:always;padding-top:10px;}
 .toc h1{font-size:22px;color:var(--dark);}
 .toc ol{list-style:none;padding-left:0;font-size:14px;line-height:2.4;}
@@ -43,6 +44,9 @@ li{margin:4px 0;}
 .chip b{display:block;color:var(--blue);font-size:11.5px;}
 .tag{display:inline-block;background:var(--blue);color:#fff;border-radius:4px;padding:1px 8px;font-size:11px;margin-right:6px;}
 .small{font-size:11.5px;color:#566575;}
+figure{margin:14px 0;page-break-inside:avoid;}
+figure img{width:100%;border:1px solid var(--line);border-radius:6px;}
+figcaption{font-size:11.5px;color:#566575;text-align:center;margin-top:5px;}
 </style>
 </head>
 <body>
@@ -54,7 +58,7 @@ li{margin:4px 0;}
   <div class="sub">智领科研 · 意图驱动：基于大模型与 Agent 架构的全流程科研助手构建</div>
   <div class="meta">
     赛项：大模型驱动，Agent 自主进化<br>
-    文档版本：V1.0<br>
+    文档版本：V2.0<br>
     参赛组别：____________<br>
     参赛队伍：____________<br>
     日期：2026 年 11 月
@@ -66,13 +70,13 @@ li{margin:4px 0;}
   <h1>目 录</h1>
   <ol>
     <li><span class="n">1</span>项目概述</li>
-    <li><span class="n">2</span>需求分析</li>
+    <li><span class="n">2</span>需求分析与赛题覆盖矩阵</li>
     <li><span class="n">3</span>系统架构设计</li>
     <li><span class="n">4</span>AI 技术方案</li>
     <li><span class="n">5</span>核心功能实现</li>
-    <li><span class="n">6</span>测试与部署</li>
+    <li><span class="n">6</span>测试与部署（含官方数据集实测）</li>
     <li><span class="n">7</span>技术创新点</li>
-    <li><span class="n">8</span>总结与展望</li>
+    <li><span class="n">8</span>总结、局限与展望</li>
   </ol>
 </div>
 
@@ -84,183 +88,274 @@ li{margin:4px 0;}
 使通用 Chatbot 远无法满足需求。</p>
 <p>本项目面向真实科研全流程，从 0 到 1 设计并实现一款全栈式、具备自主规划与协同能力的
 <b>科研助手 Agent</b>。系统以现代 Web 应用为形态，后端 Agent 通过任务规划、多专家路由与函数调用闭环，
-自主调度文档解析、混合检索、学术 API、图谱计算与代码执行等工具，覆盖赛题要求的六大功能模块，
-实现「文献导入 → 解析 → 问答 → 阅读翻译 → 检索推荐 → 图谱综述 → 写作输出」的完整闭环。</p>
-<div class="box ok"><b>设计目标：</b>高可靠（抗幻觉、可溯源）、自主化（Agent 规划与工具闭环）、
-全流程（六大模块贯通）、可复现（容器化、一键部署）。</div>
+自主调度文档解析、混合检索、学术 API、图谱计算与代码执行等 16 个工具，覆盖赛题要求的六大功能模块，
+实现「文献导入 → 解析 → 问答 → 阅读翻译 → 检索追踪推荐 → 图谱综述 → 写作输出」的完整闭环。</p>
+<div class="box ok"><b>设计目标：</b>高可靠（抗幻觉、可溯源、执行护栏）、自主化（Agent 规划与工具闭环）、
+全流程（六大模块贯通）、可验证（官方 PDF 数据集实测通过）、可复现（容器化、一键部署）。</div>
+<h2>1.1 项目速览</h2>
+<table>
+<tr><th>维度</th><th>数据</th></tr>
+<tr><td>功能模块</td><td>赛题六大模块全覆盖，9 个功能页面 + 1 个 Agent 统一入口</td></tr>
+<tr><td>Agent 内核</td><td>Guardrails → Task Planning → Multi-Agent Router → Function Calling 闭环 → Trace 可视化</td></tr>
+<tr><td>工具链</td><td>16 个注册工具（OpenAI Function Schema），原生调用 + ReAct 双保险</td></tr>
+<tr><td>抗幻觉机制</td><td>跨语言混合检索（BM25Plus + 向量 + RRF + LLM 重排）+ 内联角标 + 页码锚点 + 角标校验自动修复</td></tr>
+<tr><td>官方数据集实测</td><td>v1/v7 语义去重命中 98%、改名场景 100% 命中、541 页正版教材 26.3s 入库、15 页扫描件自动识别</td></tr>
+<tr><td>质量保障</td><td>18 项单元测试、离线自测、AppTest 全页面渲染检查、官方 PDF 验证脚本，全部通过</td></tr>
+</table>
 
 <!-- 2 需求分析 -->
-<h1 class="sec">2 需求分析</h1>
+<h1 class="sec">2 需求分析与赛题覆盖矩阵</h1>
 <h2>2.1 科研痛点</h2>
 <table>
 <tr><th>痛点</th><th>具体表现</th><th>对应能力</th></tr>
-<tr><td>信息过载与时效</td><td>arXiv 日均更新数百篇，人工检索、过滤、去重、搭建图谱效率低</td><td>自动检索、语义去重、动态追踪</td></tr>
-<tr><td>读写效率与严谨</td><td>跨语言阅读、细粒度数据提取耗时；模型幻觉在学术场景不可接受</td><td>混合 RAG、内联溯源、联动翻译</td></tr>
-<tr><td>复杂版式解析</td><td>扫描件、双栏排版、公式、图表、参考文献难以结构化</td><td>多模态 OCR、细粒度解析</td></tr>
-<tr><td>创意落地与复现</td><td>数据可视化、架构图、Idea 验证缺乏整合代码与 API 的工具</td><td>代码执行、绘图、复现推荐</td></tr>
+<tr><td>信息过载与时效</td><td>arXiv 日均更新数百篇，人工检索、过滤、去重、搭建图谱效率低</td><td>自动检索、订阅式动态追踪、内容级语义去重</td></tr>
+<tr><td>读写效率与严谨</td><td>跨语言阅读、细粒度数据提取耗时；模型幻觉在学术场景不可接受</td><td>混合 RAG、内联溯源、联动翻译、中译英</td></tr>
+<tr><td>复杂版式解析</td><td>扫描件、双栏排版、公式、图表、参考文献难以结构化</td><td>多模态 OCR、细粒度解析、标题锚点定位</td></tr>
+<tr><td>创意落地与复现</td><td>数据可视化、架构图、Idea 验证缺乏整合代码与 API 的工具</td><td>沙箱代码执行、自动绘图、复现导向推荐</td></tr>
 </table>
-<h2>2.2 功能需求</h2>
-<p>系统须满足：<b>输入素材可审查</b>（稳定处理标准 PDF 与扫描件）；<b>输出成果可验证</b>
-（解析、问答溯源、图谱节点、脚本与综述具备确定性与高复现性）；<b>系统运行闭环</b>
-（完整前后端，可演示全流程）。功能上全面覆盖六大命题模块（详见第 5 章）。</p>
+<h2>2.2 赛题六大模块覆盖矩阵</h2>
+<table>
+<tr><th>赛题模块</th><th>要求要点</th><th>本系统实现</th><th>验证方式</th></tr>
+<tr><td rowspan="3">模块一<br>PDF 管理与细粒度解析</td>
+<td>批量上传 + 语义级去重（非仅凭文件名）</td><td>正文分段指纹（5 段 × 1200 字）交叉匹配 + 整篇向量双通道，v1/v7 实测 98%、改名实测 100%</td><td>verify_official.py 官方 PDF 实测</td></tr>
+<td>扫描件 OCR</td><td>文本层自动检测，缺失判定 scanned 并逐页多模态 OCR，带进度条</td><td>1706.03762v1_img.pdf 检测通过</td></tr>
+<td>百页长文档工程鲁棒性</td><td>541 页正版《Understanding Deep Learning》1523 分块 26.3s 入库，进程内存约 292MB</td><td>verify_official.py 实测</td></tr>
+<tr><td rowspan="2">模块二<br>抗幻觉问答</td><td>细粒度单篇问答 + 出处锚点</td><td>混合检索 + 【n】内联角标 + 论文/页码锚点 + 点击展开原文</td><td>问答页检索调试面板</td></tr>
+<td>跨多篇演进对比</td><td>BERT vs Transformer、GPT-1/2/3 演化等多文聚合推理</td><td>跨文献对比快捷按钮实测</td></tr>
+<tr><td rowspan="2">模块三<br>版式阅读与翻译</td><td>标题树导航 + 引用双向跳转</td><td>标题锚点定位 References（兼容 IEEE/Nature 排版），[11]→[38] 编号区间实测命中</td><td>官方 v1 实测 41 条条目</td></tr>
+<td>中英对比 + 同步滚动</td><td>JS 按比例 + 段落对齐双机制同步滚动，悬停联动高亮，划词经后端代理（无密钥暴露）</td><td>阅读页实测</td></tr>
+<tr><td rowspan="2">模块四<br>检索追踪推荐</td><td>标题下钻下载 + 含金量筛选 + GitHub 复现检测</td><td>arXiv/PubMed/Web 三源检索，正则剔除应付式引用，GitHub 链接自动识别加权</td><td>检索页实测</td></tr>
+<td>定期追踪 + 点赞/踩 + 多用户推荐</td><td>订阅式增量追踪（last-seen 检查点）+ 常驻守护脚本 + 多用户点赞/踩持久化 + 画像加权排序 + 推荐理由</td><td>单元测试 + 守护脚本</td></tr>
+<tr><td rowspan="2">模块五<br>引用图谱与综述</td><td>20+ 篇图谱 + 基石节点挖掘</td><td>标题锚点参考文献区 + 倒排索引候选（IDF 稀有度加权）+ 语义兜底；PageRank/中介/特征向量中心性；n=20 建图 7.9s、n=40 建图 25.0s</td><td>bench_graph.py 压测</td></tr>
+<td>自动综述 + Future Work 过滤</td><td>图谱驱动综述生成；Future Work 按时间线比对后续摘要，自动标注已解决 idea</td><td>图谱页实测</td></tr>
+<tr><td rowspan="3">模块六<br>写作与可视化</td><td>无幻觉论文框架</td><td>References 仅引用本地真实文献，不足处显式占位</td><td>写作页实测</td></tr>
+<td>Mermaid/TikZ 拓扑图 + 沙箱执行</td><td>四类脚本生成；run_python 经 AST 白名单护栏校验后隔离执行</td><td>单元测试拦截用例</td></tr>
+<td>CSV 可视化 + Figure Caption + 中译英</td><td>六类图表（含三维雷达）自动生成，学术图注提炼，中英双向翻译</td><td>demo_data/data.csv 实测</td></tr>
+</table>
 <h2>2.3 非功能需求</h2>
 <ul>
-<li><b>鲁棒性：</b>支持扫描件、双栏、百页以上长文档，多文档并发分析不崩溃；</li>
-<li><b>性能：</b>长 PDF 与 20+ 节点图谱渲染流畅，内存 / 显存可控；</li>
-<li><b>可复现：</b>提供依赖清单、环境变量模板与 Docker 镜像，一键部署；</li>
-<li><b>安全性：</b>API 密钥经环境变量隔离，具备提示注入防护与学术安全 Guardrails。</li>
+<li><b>鲁棒性：</b>支持扫描件、双栏、500+ 页长文档与 40 节点图谱；全页面 try/except 错误边界，异常优雅降级不白屏；</li>
+<li><b>性能：</b>长 PDF 解析带进度反馈，大图谱建图带进度条，渲染秒级；内存可控（541 页约 292MB）；</li>
+<li><b>可复现：</b>依赖版本锁定（requirements.txt + Docker），环境变量模板，一键部署；</li>
+<li><b>安全性：</b>API 密钥仅经环境变量注入、绝不进前端页面与仓库；提示注入防护、输出脱敏、代码执行沙箱三层 Guardrails。</li>
 </ul>
 
 <!-- 3 架构 -->
 <h1 class="sec">3 系统架构设计</h1>
 <h2>3.1 分层架构</h2>
 <div class="arch">
-  <div class="layer">交互层 · Streamlit（PDF 原生阅读 / 中英同步滚动 / 图谱 / 对话 / 可视化）</div>
+  <div class="layer">交互层 · Streamlit（PDF 原生阅读 / 中英同步滚动 / 图谱可视化 / 对话 / 数据看板）</div>
   <div class="arrow">▼</div>
   <div class="layer">Agent 内核 · Guardrails → Task Planning → Multi-Agent Router → Function Calling 闭环<br>
-    <span class="small">Memory：短期对话 / 长期笔记 / 用户画像　|　Trace：思考过程可视化 / 流式</span></div>
+    <span class="small">Memory：短期对话 / 长期笔记 / 用户画像　|　Trace：思考过程可视化 / 流式输出</span></div>
   <div class="arrow">▼</div>
-  <div class="layer">工具 / 服务层 · PDF解析·OCR ｜ 混合RAG ｜ arXiv·PubMed·Web ｜ 图谱·图论 ｜ 写作·绘图·代码执行</div>
+  <div class="layer">工具 / 服务层 · PDF解析·OCR ｜ 混合RAG ｜ arXiv·PubMed·Web ｜ 图谱·图论 ｜ 写作·绘图·沙箱执行</div>
   <div class="arrow">▼</div>
-  <div class="layer">存储层 · Chroma 向量库 ｜ BM25 索引 ｜ library.json 元数据 ｜ 原始 PDF / 图片</div>
+  <div class="layer">存储层 · Chroma 向量库 ｜ BM25 索引 ｜ library.json 元数据 ｜ 追踪检查点 ｜ 点赞账本 ｜ 原始 PDF</div>
 </div>
+<figure><img src="shots/p0.png"><figcaption>图 3-1 系统主界面（文献库管理页）</figcaption></figure>
 <h2>3.2 Agent 运行数据流</h2>
 <div class="flow">
   <div class="chip"><b>① 输入</b>自然语言意图</div>
   <div class="chip"><b>② 防护</b>注入/密钥校验</div>
-  <div class="chip"><b>③ 规划</b>动态拆解 3–6 步</div>
+  <div class="chip"><b>③ 规划</b>动态拆解步骤</div>
   <div class="chip"><b>④ 路由</b>6 类专家分流</div>
   <div class="chip"><b>⑤ 闭环</b>函数调用执行</div>
   <div class="chip"><b>⑥ 溯源</b>内联引用生成</div>
 </div>
 <p>Agent 内核采用「LLM 优先、规则兜底」策略：路由与规划优先由 LLM 以 JSON 输出，失败时退化为关键词路由与
 固定步骤模板；工具执行采用<b>原生 Function Calling + ReAct 文本解析双保险</b>，最大迭代 8 轮，
-超限则在无新增工具时强制总结，保证闭环可终止。</p>
+超限则在无新增工具时强制总结，保证闭环可终止。每步记录 Trace（工具名、参数、结果摘要），前端可视化呈现「AI 思考过程」。</p>
 <h2>3.3 模块解耦</h2>
-<p>系统按 <code>core / services / tools / ui / config</code> 分包：core 仅负责推理与编排，services 封装
-业务能力，tools 将 Python 函数统一注册为 OpenAI Function Schema，ui 仅负责渲染，依赖单向向下、便于测试与扩展。</p>
+<p>系统按 <code>core / services / tools / ui / config</code> 分包：core 仅负责推理与编排（agent / router / planner /
+memory / guardrails / llm / sandbox），services 封装业务能力（parsing / rag / library / graph / track / translate /
+writing / state），tools 将 Python 函数统一注册为 OpenAI Function Schema，ui 仅负责渲染。依赖单向向下，
+便于测试与扩展；全部离线逻辑可在无 API Key 环境下自测运行。</p>
+<figure><img src="shots/p7.png"><figcaption>图 3-2 系统架构设计页（内置架构总览与数据流）</figcaption></figure>
 
 <!-- 4 AI 方案 -->
-<h1 class="sec">4 AI 技术方案</h1>
+<h1 class="sec page-break">4 AI 技术方案</h1>
 <h2>4.1 模型选型与理由</h2>
 <table>
 <tr><th>类型</th><th>选型</th><th>选型理由</th></tr>
-<tr><td>文本 LLM</td><td>智谱 GLM-4-Flash（默认），可切换 DeepSeek / Qwen / GPT 等</td><td>OpenAI 兼容协议、成本低、中文与工具调用稳定；免费额度友好，端点可经环境变量替换</td></tr>
-<tr><td>多模态 / OCR</td><td>GLM-4V，可扩展 Qwen2-VL / PaddleOCR / Marker</td><td>处理扫描件与复杂版式，完成图文、公式、表格识别</td></tr>
-<tr><td>Embedding</td><td>Chroma 内置 ONNX 向量模型（384 维）</td><td>本地离线、免额外部署；支持 HF 镜像加速</td></tr>
-<tr><td>Rerank</td><td>可选 LLM 重排（编号排序）</td><td>无需额外重排服务即可提升 top-k 精度</td></tr>
+<tr><td>文本 LLM</td><td>智谱 GLM-4-Flash（默认），可经环境变量切换 DeepSeek / Qwen / GPT 等任意 OpenAI 兼容端点</td><td>OpenAI 兼容协议、成本低、中文与工具调用稳定；免费额度友好，符合赛题「合理规划 API 费用、鼓励开源模型」的导向</td></tr>
+<tr><td>多模态 / OCR</td><td>GLM-4V，可扩展 Qwen2-VL / PaddleOCR / Marker</td><td>处理扫描件与复杂版式，完成图文、公式、表格识别；无 Key 时自动降级为原生文本层提示</td></tr>
+<tr><td>Embedding</td><td>Chroma 内置 ONNX 向量模型（all-MiniLM-L6-v2，384 维）</td><td>本地离线推理、免额外部署费用，天然满足「离线可复现」；支持 HF 镜像加速下载</td></tr>
+<tr><td>Rerank</td><td>可选 LLM 重排（编号排序法）</td><td>无需额外重排服务即可提升 top-k 精度，开关可控成本</td></tr>
 </table>
-<h2>4.2 抗幻觉混合 RAG 与溯源</h2>
-<p>检索层同时维护<b>稠密</b>（Chroma 向量）与<b>稀疏</b>（BM25）两路召回，采用
-<b>RRF（Reciprocal Rank Fusion）</b>融合排名：</p>
-<pre><code>RRF(d) = Σ 1 / (c + rank_i(d))      # c = 60，对稠密/稀疏两路排名求和后取 top-k</code></pre>
-<p>融合后可选 LLM 重排。生成阶段仅以编号资料构建上下文，系统提示强制使用 <code>【n】</code> 内联角标、
-资料不足须明说、禁止编造；生成后校验角标范围，越界则触发一次自动修复。每条资料附带论文 ID 与页码锚点，
-实现 Source Tracing。</p>
-<h2>4.3 多智能体路由与规划</h2>
-<p>Router 将意图分流至 6 类专家（问答 / 检索 / 图谱 / 写作 / 阅读 / 解析），各专家仅持有完成任务所需的
-工具子集，降低误调用；Planner 将复杂任务动态拆解为有序步骤并交由执行闭环。</p>
-<h2>4.4 记忆与防护</h2>
+<h2>4.2 跨语言混合检索（Dense + Sparse + RRF + 重排）</h2>
+<p>学术场景的典型矛盾是：<b>文献是英文、提问是中文</b>，单一向量检索对「超参数、GPU 型号、BLEU 分数」这类
+精确词面反而不如关键词检索。系统为此构建了四段式检索管线：</p>
+<pre><code>查询 → ① 查询扩展（LLM 在线生成英文检索词，离线术语映射表兜底）
+     → ② 双路召回：Dense（Chroma 向量 top-k）‖ Sparse（BM25Plus × 多扩展查询取最大）
+     → ③ RRF 融合：RRF(d) = Σ 1/(60 + rank_i(d))
+     → ④ 可选 LLM 重排 → 注入带【n】编号的编号化上下文</code></pre>
+<p><b>分词设计</b>是稀疏路生效的关键：文档与查询统一经「英文 Porter 词干归一 + 中文二元组切分」，
+并将 BM25 的 IDF 下界设为 0.05（标准 BM25 对「全部文档都含查询词」的小语料库会把 IDF 压成 0，导致中文查询零召回——
+本系统实测修复后同查询 BM25 召回 7 条 / Dense 召回 11 条，融合后重排精确定位）。扩展词与两路召回数量在
+问答页「检索调试」面板透明展示，检索行为可审计。</p>
+<h2>4.3 抗幻觉生成与源头溯源</h2>
 <ul>
-<li><b>Memory：</b>短期对话历史、长期笔记 / 键值、基于领域计数的用户画像，为规划与个性化推荐提供上下文；</li>
-<li><b>Guardrails：</b>提示注入特征检测、输出密钥脱敏、引用角标校验、统一学术系统提示（学术安全与规范）。</li>
+<li>生成仅以编号资料为事实来源，系统提示强制 <code>【n】</code> 内联角标、资料不足必须明说、禁止编造；</li>
+<li>生成后校验角标范围，越界自动触发一次修复重写（validate_citations）；</li>
+<li>每条资料附论文 ID + 页码锚点，前端点击即展开对应原文片段（Source Tracing）；</li>
+<li>写作框架的 References 只允许引用本地真实文献，缺失显式占位，杜绝幻觉引用。</li>
 </ul>
-<h2>4.5 函数调用与工具链</h2>
-<p>注册中心将 16 个 Python 工具封装为标准 Function Schema 并按名执行，涵盖文献检索、多文推理、
-arXiv/PubMed/网页、下载入库、图谱构建、综述与前沿、写作框架、绘图、翻译、隔离 Python 执行与记忆读写。</p>
+<h2>4.4 内容级语义去重（不依赖文件名）</h2>
+<p>去重采用「<b>整篇向量 + 正文分段指纹</b>」双通道：入库时均匀抽取 5 个 1200 字内容段生成指纹向量，
+查重时与库内论文指纹逐段交叉匹配、按来源聚合取平均相似度；同时保留整篇向量相似度作为第二信号，
+两通道分别给出可解释证据（「分段指纹内容匹配 98%」或「整篇语义相似度 100%」）。
+判定规则：通用阈值 0.90；同一 arXiv 号且相似度 ≥ 0.7 判为版本演进（仍以语义为依据，非仅凭文件名），
+并触发「保留最新版」建议与版本差异总结。</p>
+<div class="box ok"><b>官方用例实测：</b>先传 v7 再传 v1 → 命中 98%（最佳段 100%，附 arXiv 同号证据）；
+把 v1 改名为 <code>attention_v1.pdf</code> 再传 → 仍 100% 命中，证明判定完全基于内容。</div>
+<h2>4.5 多智能体路由与规划</h2>
+<p>Router 将意图分流至 6 类专家（问答 / 检索 / 图谱 / 写作 / 阅读 / 解析），各专家仅持有完成任务所需的
+工具子集，降低误调用面；Planner 将复杂任务动态拆解为有序步骤并交由 Function Calling 闭环执行。</p>
+<h2>4.6 三层 Guardrails</h2>
+<table>
+<tr><th>层</th><th>机制</th><th>实测</th></tr>
+<tr><td>输入层</td><td>提示注入特征检测（忽略指令 / 系统提示词提取 / 角色劫持等模式）</td><td>拦截用例通过</td></tr>
+<tr><td>输出层</td><td>响应密钥正则脱敏、引用角标校验与自动修复</td><td>单元测试通过</td></tr>
+<tr><td>执行层</td><td>run_python 先经 AST 静态检查：import 白名单（numpy/pandas/matplotlib/plotly/sklearn 等）、
+危险名黑名单（os / sys / subprocess / eval / open 等）、dunder 属性链（<code>__globals__</code> /
+<code>__subclasses__</code>）与 <code>__import__</code> 拦截；违规直接拒绝并返回可读原因</td><td>4 类绕过手法全部拦截，正常绘图代码放行</td></tr>
+</table>
+<h2>4.7 函数调用与工具链</h2>
+<p>注册中心将 16 个 Python 工具封装为标准 Function Schema 并按名执行，涵盖：文献检索、多文推理问答、
+arXiv / PubMed / 网页搜索、下载入库、引用图谱构建、综述与前沿提炼、写作框架、Mermaid/TikZ 绘图脚本、
+数据可视化、翻译、沙箱 Python 执行、记忆读写。所有调用在 Trace 面板可回放。</p>
+<figure><img src="shots/p1.png"><figcaption>图 4-1 Agent 统一入口页：自然语言意图 → 工具闭环 → Trace 可视化</figcaption></figure>
 
 <!-- 5 核心功能 -->
-<h1 class="sec">5 核心功能实现</h1>
+<h1 class="sec page-break">5 核心功能实现</h1>
 <h2>5.1 模块一：PDF 管理与细粒度解析</h2>
 <ul>
-<li><b>语义去重：</b>取正文前 4000 字生成论文级向量，通用查重阈值 0.90；并设版本规则——同一 arXiv 号且
-相似度 ≥ 0.7 即判为不同版本（仍以语义为依据，非仅凭文件名），支持覆盖 / 保留 / 取消与版本差异总结；</li>
-<li><b>细粒度解析：</b>结构化抽取标题、作者机构、摘要、三级标题树、表格、图表、LaTeX 公式、参考文献与附录；</li>
-<li><b>扫描件：</b>自动检测文本层，缺失时判定 scanned 并逐页调用多模态 OCR。</li>
+<li><b>语义去重：</b>见 4.4，附证据链与「覆盖 / 保留 / 取消」三分支交互、v1 vs v7 版本差异自动总结；</li>
+<li><b>细粒度解析：</b>结构化抽取标题、作者机构、摘要、三级标题树、表格、图表、LaTeX 公式、参考文献与附录；
+扫描件页自动走多模态 OCR 通道；</li>
+<li><b>长文档工程：</b>逐页解析 + 分页分块 + 进度条反馈，541 页正版教材实测 1523 分块 / 26.3s / 292MB。</li>
 </ul>
 <h2>5.2 模块二：抗幻觉问答与多文推理</h2>
 <p>单篇问答可定位超参数、GPU 型号数量、BLEU 分数、完整引用等细粒度信息并给原文锚点；多篇推理通过跨文档
 Chunk 聚合，支持 BERT 与 Transformer 的承袭 / 抛弃、GPT-1/2/3 参数量演化、LayerNorm 位置与上下文窗口
-递增等对比分析，答案内联 <code>【n】</code>。</p>
+递增等对比分析，答案内联 <code>【n】</code>。检索调试面板显示 Dense / Sparse 两路各自召回数与查询扩展词。</p>
+<figure><img src="shots/p2.png"><figcaption>图 5-1 跨文献问答与溯源：内联角标 + 页码锚点 + 检索调试</figcaption></figure>
 <h2>5.3 模块三：版式阅读与双向联动翻译</h2>
 <ul>
 <li>坐标级原生还原单 / 双栏版面（文字可选中），提取标题树导航；</li>
-<li>正文引用标记（如 [11]）与 References 条目双向无损跳转；</li>
-<li>中英对比采用 JS <b>按比例 + 段落对齐双机制</b>实现真正同步滚动与悬停联动高亮，代码与公式保留英文；
-支持划词 / 悬停翻译与整篇翻译。</li>
+<li><b>引用双向跳转：</b>以 References / Bibliography 标题锚点定位参考文献区（兼容正文末尾与独立页起始等
+IEEE / Springer 排版变体），输入或点击正文 [11] 即返回规范化编号与完整条目原文，官方 v1 实测覆盖 [1]–[38] 区间 41 条；</li>
+<li>中英对比采用 JS <b>按比例 + 段落对齐双机制</b>实现同步滚动与悬停联动高亮，代码与公式保留英文；
+划词 / 悬停翻译经<b>后端代理</b>调用模型，前端页面不含任何密钥；支持整篇翻译与中译英学术输出。</li>
 </ul>
-<h2>5.4 模块四：检索、追踪与推荐</h2>
+<figure><img src="shots/p3.png"><figcaption>图 5-2 版式阅读与中英联动翻译</figcaption></figure>
+<h2>5.4 模块四：检索、动态追踪与个性化推荐</h2>
 <ul>
-<li>给定标题 / 参考文献列表，经 arXiv / PubMed / 搜索引擎自动抓取并入库，支持批量下钻；</li>
-<li>引用含金量筛选，自动识别并建议剔除应付式引用；</li>
-<li>定期刷新追踪最新论文，结合本地库兴趣中心计算相关度，<b>优先推荐附带 GitHub 开源代码</b>（易复现）的论文，
-提供推荐理由与点赞 / 踩互动。</li>
+<li>给定标题 / 参考文献列表，经 arXiv / PubMed / 搜索引擎自动抓取并入库，支持批量下钻；
+引用含金量正则筛选自动剔除应付式引用；GitHub 开源代码链接自动识别并在推荐中加权；</li>
+<li><b>订阅式动态追踪：</b>用户按话题订阅，系统持久化 last-seen 检查点，每次「检查新论文」只返回上次以来
+新增条目并推送提示；另提供 <code>scripts/watch_daemon.py</code> 常驻守护脚本实现真·定期抓取，
+与 Streamlit 会话解耦；</li>
+<li><b>多用户个性化推荐：</b>推荐排序融合「点赞/踩反馈 + 用户画像领域匹配 + 开源代码可得性 + arXiv 分类命中」
+四因子，逐条生成推荐理由；多用户 ID 隔离反馈账本（JSON 持久化），切换用户可见不同排序。</li>
 </ul>
-<h2>5.5 模块五：引用图谱与综述</h2>
-<p>通过<b>标题 token 滑动窗口重叠（≥0.8）+ arXiv 号出现</b>判定论文间真实引用；在「逻辑著作」层建图
-（同一 arXiv 号取最新版本为唯一代表节点，旧版本不产生孤立节点）。运用 PageRank、入度、中介与特征向量
-中心性挖掘基石 / 边缘论文；基于图谱自动生成综述；提取各文 Future Work，按时间线比对后续论文摘要，
-自动标注并排除已被解决的旧 idea，提炼真正开放的方向。</p>
+<figure><img src="shots/p6.png"><figcaption>图 5-3 论文检索、动态追踪与个性化推荐</figcaption></figure>
+<h2>5.5 模块五：引用图谱与学术综述</h2>
+<p><b>引用关系判定</b>三层递进：① 标题锚点定位每篇的参考文献区并切分条目；② 标题 token 倒排索引 +
+<b>IDF 稀有度加权</b>生成候选（词面巧合的泛词如 transformer 得 0 分，稀有词组合才计分），
+将 O(n²) 全文比对降为稀疏候选比对；③ 候选内以「条目↔标题」双向包含判定，另以<b>复用库内向量的语义兜底</b>
+捕获缩写标题（如 BERT 论文标题被 Attention 论文引用）。</p>
+<p>在「逻辑著作」层建图（同一 arXiv 号取最新版本为唯一节点，旧版本不产生孤立节点），运用 PageRank、入度、
+中介与特征向量中心性挖掘基石 / 边缘论文；基于图谱自动生成领域综述；提取各文 Future Work，按时间线比对
+后续论文摘要，自动标注并排除已被解决的旧 idea，提炼真正开放的方向。官方 PDF 实测：BERT → Attention 真实引用边，
+证据为参考文献条目 100% 匹配，基石论文正确识别为《Attention Is All You Need》。</p>
+<figure><img src="shots/p4.png"><figcaption>图 5-4 局域引用图谱：基石节点高亮与交互渲染</figcaption></figure>
 <h2>5.6 模块六：写作与可视化 Copilot</h2>
 <ul>
-<li>依据 Idea 生成含 Abstract / Introduction / Related Work 的框架，References <b>仅引用本地真实文献</b>，
-不足处占位，杜绝幻觉引用；</li>
-<li>生成 Mermaid / TikZ / Graphviz / Matplotlib 架构拓扑图脚本；</li>
-<li>读取 CSV 自动生成折线 / 柱状 / 散点 / 三维雷达 / 热力 / 平行坐标图，并提炼符合学术规范的 Figure Caption；</li>
+<li>依据 Idea 生成含 Abstract / Introduction / Related Work 的框架，References 仅引用本地真实文献；</li>
+<li>生成 Mermaid / TikZ / Graphviz / Matplotlib 架构拓扑图脚本，可经沙箱护栏后直接执行出图；</li>
+<li>读取 CSV 自动生成折线 / 柱状 / 散点 / 三维雷达 / 热力 / 平行坐标图，并提炼符合学术规范、说明核心趋势的
+Figure Caption；</li>
 <li>中文摘要 / 全文一键精准翻译为学术英文。</li>
 </ul>
+<figure><img src="shots/p5.png"><figcaption>图 5-5 写作辅助与 CSV 数据可视化 Copilot</figcaption></figure>
 
 <!-- 6 测试部署 -->
-<h1 class="sec">6 测试与部署</h1>
-<h2>6.1 功能与用例验证</h2>
+<h1 class="sec page-break">6 测试与部署</h1>
+<h2>6.1 官方数据集实测（无 API Key 依赖，可复现）</h2>
 <table>
-<tr><th>用例</th><th>输入</th><th>实测结果</th></tr>
-<tr><td>语义去重 / 版本</td><td>真实 v7 入库后再传 v1</td><td>语义相似度 0.891，经同 arXiv 版本规则命中，提示保留最新版 ✅</td></tr>
-<tr><td>标准矢量 PDF</td><td>1706.03762v1.pdf</td><td>双栏文本 / 标题树 / 公式 / 表格正常解析，42 分块 ✅</td></tr>
-<tr><td>图像扫描件</td><td>1706.03762v1_img.pdf（15 页无文本层）</td><td>正确检测 scanned=True；填入 Key 后逐页 OCR ✅</td></tr>
-<tr><td>超长文档</td><td>540 页 / 876,474 字夹具</td><td>1080 分块，入库 22.6s，进程内存约 251MB ✅</td></tr>
-<tr><td>真实引用图谱</td><td>v7 / v1 / BERT</td><td>BERT→Transformer 1 条边，基石=Attention，边缘=BERT ✅</td></tr>
-<tr><td>Agent 闭环</td><td>Mock LLM 脚本化工具调用</td><td>成功调用检索工具并产出带【1】的最终答案 ✅</td></tr>
-<tr><td>全页面渲染</td><td>Streamlit AppTest</td><td>9 个页面与离线流程全部无异常 ✅</td></tr>
+<tr><th>用例（赛题指定）</th><th>输入</th><th>实测结果</th></tr>
+<tr><td>语义去重 v7→v1</td><td>真实官方 PDF</td><td>分段指纹内容匹配 <b>98.0%</b>（最佳段 100.0%）+ arXiv 同号证据，提示「库中已有版本较更新，建议保留」✅</td></tr>
+<tr><td>去重不依赖文件名</td><td>v1 改名 attention_v1.pdf</td><td>整篇语义相似度 <b>100%</b> 命中，文件名为干扰项 ✅</td></tr>
+<tr><td>非同篇不误报</td><td>BERT 论文入库</td><td>相似度 0.652 &lt; 0.90，正确判定为不同论文 ✅</td></tr>
+<tr><td>图像扫描件</td><td>1706.03762v1_img.pdf</td><td>15 页原生文本 0 字符，自动判定 scanned=True，进入 OCR 通道 ✅</td></tr>
+<tr><td>超长文档</td><td>正版《Understanding Deep Learning》541 页 / 131.4 万字</td><td><b>1523 分块、入库 26.3s、进程内存约 292MB</b>，全程进度反馈 ✅</td></tr>
+<tr><td>真实引用图谱</td><td>v7 + BERT 官方 PDF</td><td>1 条真实引用边（BERT→Attention），参考文献条目 100% 匹配证据，基石论文正确 ✅</td></tr>
+<tr><td>大图谱性能</td><td>20 / 40 篇合成文献</td><td>建图 <b>7.9s / 25.0s</b>（优化前 49s / 222s），HTML 渲染 0.1–0.2s，边数与精度不变 ✅</td></tr>
+<tr><td>跨语言混合检索</td><td>中文查询 vs 英文文献</td><td>查询扩展生效，BM25 召回 7 条 / Dense 召回 11 条，RRF 融合重排 ✅</td></tr>
 </table>
-<h2>6.2 工程质量</h2>
-<p>全部 Python 文件通过编译检查；模块化单向依赖；提供 <code>requirements.txt</code>、<code>.env.example</code>、
-<code>.gitignore</code>、<code>Dockerfile</code> 与 <code>docker-compose.yml</code>；密钥仅经环境变量注入。</p>
-<h2>6.3 部署方式</h2>
-<pre><code># 本地
+<h2>6.2 质量保障体系</h2>
+<table>
+<tr><th>层级</th><th>内容</th><th>结果</th></tr>
+<tr><td>单元测试</td><td><code>tests/test_core.py</code>：分词、跨语言检索、内容去重、引用定位与建图、执行沙箱拦截、Guardrails、追踪增量、点赞推荐、Agent 闭环（Mock LLM），共 18 项</td><td>全部通过</td></tr>
+<tr><td>离线自测</td><td><code>scripts/selftest.py</code>：不依赖网络与 Key 的端到端冒烟（检索链路、去重、图谱、沙箱、追踪）</td><td>全部通过</td></tr>
+<tr><td>页面渲染</td><td><code>scripts/apptest_check.py</code>：Streamlit AppTest 驱动全部页面与核心交互</td><td>9/9 页面通过</td></tr>
+<tr><td>官方数据验证</td><td><code>scripts/verify_official.py</code> / <code>bench_graph.py</code>：可一键复跑本文全部实测数字</td><td>数据可复现</td></tr>
+</table>
+<h2>6.3 错误边界与降级策略</h2>
+<p>入口统一 try/except 渲染错误卡片（可折叠堆栈）而非白屏；网络失败（arXiv 超时）给出降级提示与重试入口；
+无 API Key 时功能页显示「请填入 Key」与可演示路径；空文献库时问答 / 图谱 / 阅读 / 写作页给出引导提示。
+评审环境多文档并发场景以进度条 + 分页入库控制内存峰值。</p>
+<h2>6.4 部署方式</h2>
+<pre><code># 本地（conda）
 conda activate ai_research && pip install -r requirements.txt && streamlit run app.py
-# Docker（在线演示）
-cp .env.example .env   # 填入 Key
-docker compose up -d   # 公网开放 8501，评审期间保持可用并提供测试账号</code></pre>
-<div class="box small">说明：官方《Understanding Deep Learning》站点含 JS 反爬，无法直接命令行下载；
-本项目以本地生成的 540 页夹具完成长文档鲁棒性验证，真机教材可经浏览器下载后直接导入。</div>
+# Docker（在线演示，端口 8501）
+cp .env.example .env   # 填入 API Key（仅环境变量，不入库）
+docker compose up -d   # 评审期间保持公网可用，提供评审测试账号</code></pre>
+<p><b>依赖版本锁定：</b>requirements.txt 固定 <code>streamlit>=1.63,&lt;1.64</code> 等经实测验证的版本区间，
+保证评审机与开发机行为一致；前端 HTML 渲染另设兼容层，自动适配新旧组件 API。</p>
+<figure><img src="shots/p8.png"><figcaption>图 6-1 技术创新亮点页（与第 7 章呼应）</figcaption></figure>
 
 <!-- 7 创新 -->
 <h1 class="sec">7 技术创新点</h1>
 <h2>7.1 技术创新</h2>
 <ol>
-<li><b>真正的 Agent 架构：</b>任务规划 + 多专家路由 + Function Calling 闭环，替代按钮式脚本，全程 Trace 可视化；</li>
-<li><b>混合检索抗幻觉：</b>BM25 + 向量 RRF 融合、可选 LLM 重排、内联角标 + 页码锚点 + 自动修复；</li>
-<li><b>内容语义去重：</b>论文级向量识别 arXiv v1/v7，同号版本规则 + 版本差异对比；</li>
-<li><b>真实引用解析与图论挖掘：</b>标题窗口匹配 + arXiv 号识别真实引用，PageRank/中心性定位基石论文；</li>
-<li><b>Future Work 前沿过滤：</b>时间线比对后续论文，自动排除已解决的旧 idea；</li>
-<li><b>双机制同步滚动：</b>JS 按比例 + 段落对齐，悬停联动高亮，双栏坐标级还原。</li>
+<li><b>真 Agent 架构而非按钮脚本：</b>Guardrails → 规划 → 6 专家路由 → Function Calling 闭环 → Trace 全程可视化，LLM 优先 + 规则兜底双保险；</li>
+<li><b>跨语言混合检索：</b>查询扩展弥合中英词表鸿沟，BM25Plus + 向量双路召回、RRF 融合、LLM 重排，检索过程可审计（调试面板展示两路召回与扩展词）；</li>
+<li><b>内容级去重实证化：</b>分段指纹交叉匹配 + 整篇向量双通道，各附可解释证据；改名场景 100% 命中，从机制上满足「非仅凭文件名」；</li>
+<li><b>三层引用判定 + IDF 加权候选：</b>标题锚点参考文献区 → 倒排索引稀有度候选 → 向量复用兜底，兼顾 IEEE/Nature 排版泛化与 40 篇规模 25s 性能；</li>
+<li><b>订阅式增量追踪 + 多用户反馈推荐：</b>last-seen 检查点只推「上次以来新增」，点赞账本 + 画像 + 开源可得性四因子排序，逐条给推荐理由；</li>
+<li><b>执行级 Guardrails：</b>AST 白名单沙箱先于执行拦截 4 类绕过手法，密钥永不进前端；</li>
+<li><b>双机制同步滚动阅读：</b>JS 按比例 + 段落对齐双通道同步、悬停联动高亮、划词后端代理翻译。</li>
 </ol>
 <h2>7.2 应用创新</h2>
 <ol>
 <li>贯通科研全流程的单一 Agent 入口，自然语言意图驱动、零脚本操作；</li>
-<li>复现导向推荐：优先带 GitHub 开源代码的论文，结合本地画像与点赞 / 踩反馈；</li>
-<li>无幻觉写作：框架 References 只引用本地真实文献，显著提升学术产出可靠性。</li>
+<li>复现导向推荐：优先带 GitHub 开源代码的论文，回应「创意落地与实践复现」痛点；</li>
+<li>无幻觉写作：框架 References 只引用本地真实文献，显著提升学术产出可靠性；</li>
+<li>离线可复现设计：无 Key 环境下解析 / 检索 / 图谱 / 推荐核心链路全部可演示，规避现场网络风险。</li>
 </ol>
 
 <!-- 8 总结 -->
-<h1 class="sec">8 总结与展望</h1>
-<p>本项目围绕真实科研痛点，完成了具备 Agent 内核、混合抗幻觉 RAG、多模态解析、真实引用图谱与学术写作
-可视化能力的全栈科研助手，六大模块闭环贯通，并通过了语义去重、扫描件检测、长文档压测、真实图谱与全页面
-渲染验证。</p>
-<p><b>后续展望：</b>① 接入更多开源 / 本地推理模型与专用 OCR 管线，降低成本与网络依赖；② 深化 Multi-Agent
-协同与自我进化（基于反馈自动优化工具策略）；③ 扩展多用户协同推荐与云端部署；④ 增强实验代码自动生成与
-结果复现，向端到端「AI 科学家」演进。</p>
+<h1 class="sec">8 总结、局限与展望</h1>
+<p>本项目围绕真实科研痛点，完成了具备 Agent 内核、跨语言抗幻觉 RAG、内容级语义去重、多模态解析、
+真实引用图谱挖掘、订阅式追踪与学术写作可视化能力的全栈科研助手；六大模块闭环贯通，全部关键指标以
+<b>官方赛题 PDF 数据集实测</b>背书（去重 98%/100%、541 页 26.3s、n=40 建图 25s、真实引用边与基石识别），
+并以三层测试体系保证可复现与稳定。</p>
+<h2>8.1 当前局限（诚实声明）</h2>
+<ul>
+<li>参考文献区定位依赖标题锚点 + 启发式兜底，对极少数无「References」标题的异形排版仍需人工指定；</li>
+<li>语义兜底匹配存在缩写标题的边界情形，置信阈值在 precision/recall 间取折中；</li>
+<li>多用户推荐画像基于领域计数，尚无协同过滤；个性化深度受个人赛数据规模限制；</li>
+<li>OCR 依赖多模态 API，离线场景以原生文本层功能为准。</li>
+</ul>
+<h2>8.2 后续展望</h2>
+<p>① 接入更多开源 / 本地推理模型与专用 OCR 管线（PaddleOCR / Marker），进一步降低成本与网络依赖；
+② 深化 Multi-Agent 协同与自我进化（基于点赞反馈自动优化工具策略与检索权重）；
+③ 扩展真正的多用户协同与云端部署；④ 增强实验代码自动生成与结果复现，向端到端「AI 科学家」演进。</p>
+<div class="box small">附：本文档全部实测数字可由 <code>python scripts/verify_official.py</code>、
+<code>python scripts/bench_graph.py</code>、<code>python -m unittest discover -s tests</code> 一键复跑验证。</div>
 
 </body>
 </html>

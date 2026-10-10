@@ -3,8 +3,8 @@
 > 智领科研 · 意图驱动 —— 基于大模型与 Agent 架构的全流程科研助手
 
 全国高校 AI 大模型挑战赛参赛作品。系统深度融合大语言模型（LLM）的通用推理能力与 Agent 架构的自主交互能力，
-从 0 到 1 构建覆盖**文献智能解析、抗幻觉问答、沉浸式对比翻译、自动检索推荐、引用图谱分析与学术写作辅助**的
-全流程「科研助手 Agent」。
+从 0 到 1 构建覆盖**文献智能解析、抗幻觉问答、沉浸式对比翻译、自动检索追踪推荐、引用图谱分析与学术写作辅助**的
+全流程「科研助手 Agent」。六大命题模块全部闭环，关键指标均以**官方赛题 PDF 数据集实测**背书。
 
 ---
 
@@ -12,15 +12,43 @@
 
 | 模块 | 能力 | 关键技术 |
 |---|---|---|
-| ① PDF 管理与细粒度解析 | 单/批量上传、语义去重、版本管理、扫描件 OCR、标题树/公式/表格/图表/参考文献抽取 | PyMuPDF、多模态 LLM、论文级 Embedding |
-| ② 抗幻觉知识问答 | 单篇细粒度问答（超参数/硬件/BLEU）、多篇跨文献对比推理、原文出处锚点 | BM25+向量混合检索(RRF)、LLM 重排、内联【n】溯源 |
-| ③ 版式阅读与双向翻译 | 双栏原生渲染、标题树导航、引用↔参考文献双向跳转、中英同步滚动、划词翻译 | 坐标级版面还原、JS 比例+段落对齐联动 |
-| ④ 检索追踪与推荐 | arXiv/PubMed/网页检索、自动下载入库、批量抓取、引用含金量筛选、个性化推荐、动态追踪 | arXiv API、Function Calling、GitHub 复现加权 |
-| ⑤ 引用图谱与综述 | 真实引用关系建图、PageRank/中心性挖掘基石/边缘、自动综述、Future Work 前沿过滤 | NetworkX、vis-network、时间线比对 |
-| ⑥ 写作与可视化 Copilot | 无幻觉论文框架、Mermaid/TikZ/Graphviz/Matplotlib 拓扑图、CSV→图表+Figure Caption、中英学术翻译 | 真实文献约束生成、Plotly |
+| ① PDF 管理与细粒度解析 | 单/批量上传、**内容级语义去重（不依赖文件名）**、版本差异总结、扫描件 OCR、标题树/公式/表格/参考文献抽取 | PyMuPDF、多模态 LLM、分段指纹 Embedding |
+| ② 抗幻觉知识问答 | 单篇细粒度问答（超参数/硬件/BLEU）、多篇跨文献对比推理、原文出处锚点 | **跨语言混合检索（查询扩展+BM25Plus+向量+RRF）**、LLM 重排、内联【n】溯源 |
+| ③ 版式阅读与双向翻译 | 双栏原生渲染、标题树导航、引用↔参考文献双向跳转、中英同步滚动、划词翻译（**后端代理，零密钥暴露**） | 坐标级版面还原、标题锚点定位、JS 比例+段落对齐联动 |
+| ④ 检索追踪与推荐 | arXiv/PubMed/网页检索、自动下钻入库、引用含金量筛选、**订阅式增量动态追踪**、**多用户点赞/踩+画像个性化推荐** | arXiv API、Function Calling、last-seen 检查点、GitHub 复现加权 |
+| ⑤ 引用图谱与综述 | 真实引用关系建图、PageRank/中心性挖掘基石/边缘、自动综述、Future Work 前沿过滤 | NetworkX、vis-network、**IDF 稀有度倒排候选+语义兜底**、时间线比对 |
+| ⑥ 写作与可视化 Copilot | 无幻觉论文框架、Mermaid/TikZ/Graphviz/Matplotlib 拓扑图、CSV→六类图表+Figure Caption、中英学术翻译 | 真实文献约束生成、**AST 沙箱执行护栏**、Plotly |
 
-**Agent 能力**：任务规划（Task Planning）、多专家路由（Multi-Agent Router）、Function Calling 闭环、
-短期/长期记忆与用户画像、Guardrails 安全防护、全程思考过程（Trace）可视化与流式输出。
+**Agent 内核**：任务规划（Task Planning）、多专家路由（Multi-Agent Router）、Function Calling 闭环、
+短期/长期记忆与用户画像、三层 Guardrails（输入注入检测 / 输出脱敏与角标校验 / 执行沙箱）、
+全程思考过程（Trace）可视化与流式输出。
+
+---
+
+## 📊 官方数据集实测数字（全部可一键复跑）
+
+| 用例 | 结果 |
+|---|---|
+| v7→v1 语义去重（官方 PDF） | 分段指纹内容匹配 **98.0%**，附版本演进证据与建议 |
+| v1 改名为 `attention_v1.pdf` 再入库 | **100%** 命中（证明不依赖文件名） |
+| BERT 论文入库（非同篇） | 相似度 0.652 < 0.90，正确不误报 |
+| 扫描件 1706.03762v1_img.pdf | 15 页零文本层自动判定 scanned，走 OCR 通道 |
+| 正版《Understanding Deep Learning》541 页 | **1523 分块 / 26.3s 入库 / 约 292MB** |
+| BERT→Attention 真实引用边 | 参考文献条目 100% 匹配证据，基石论文识别正确 |
+| 图谱规模压测 | n=20 建图 **7.9s**，n=40 建图 **25.0s**（渲染 0.2s） |
+| 中文查询英文文献 | 查询扩展生效：BM25 召回 7 条 / Dense 召回 11 条融合重排 |
+| 质量保障 | 18 项单元测试 + 离线自测 + AppTest 9 页面全部通过 |
+
+复跑命令：
+
+```bash
+python scripts/verify_official.py          # 官方 PDF 去重/扫描件/长文档/图谱实测
+python scripts/bench_graph.py              # 20/40 篇图谱规模压测
+python scripts/selftest.py                 # 离线端到端自检（无需 Key）
+python -m unittest discover -s tests -v    # 单元测试
+python scripts/apptest_check.py            # Streamlit 全页面渲染检查
+python scripts/watch_daemon.py 30          # （可选）arXiv 定期追踪守护进程
+```
 
 ---
 
@@ -29,27 +57,27 @@
 ```
 用户自然语言意图
         │
- Streamlit 交互层（PDF阅读 / 图谱 / 对话 / 可视化）
+ Streamlit 交互层（PDF阅读 / 图谱 / 对话 / 可视化 / Agent 统一入口）
         │
  Agent 内核：Guardrails → Task Planning → Multi-Agent Router → Function Calling 闭环
-        │            └── Memory（短期对话 / 长期笔记 / 用户画像）
+        │            └── Memory（短期对话 / 长期笔记 / 用户画像）｜ Trace（思考可视化）
         │
- 工具/服务层：PDF解析·OCR │ 混合RAG │ arXiv·PubMed·Web │ 引用图谱·图论 │ 写作·绘图·代码执行
+ 工具/服务层：PDF解析·OCR │ 混合RAG │ arXiv·PubMed·Web │ 引用图谱·图论 │ 写作·绘图·沙箱执行
         │
- 存储层：Chroma 向量库 │ BM25 索引 │ 文献库元数据 │ 原始 PDF/图片
+ 存储层：Chroma 向量库 │ BM25 索引 │ library.json 元数据 │ 追踪检查点 │ 点赞账本 │ 原始 PDF
 ```
 
 ---
 
 ## 🧰 技术栈
 
-- **前端/可视化**：Streamlit、Plotly、vis-network（本地离线）、KaTeX
-- **Agent / RAG**：自研 Agent 内核（规划/路由/记忆/防护）、ChromaDB、rank-bm25、RRF 融合
+- **前端/可视化**：Streamlit（锁定 1.63.x 保证可复现）、Plotly、vis-network（本地离线）、KaTeX
+- **Agent / RAG**：自研 Agent 内核（规划/路由/记忆/防护/沙箱）、ChromaDB、rank-bm25（BM25Plus）、RRF 融合、查询扩展
 - **文档处理**：PyMuPDF、多模态 LLM（OCR / 图表 / 公式）
-- **图谱**：NetworkX（PageRank、入度、中介、特征向量中心性）
-- **外部集成**：arXiv、PubMed、DuckDuckGo、GitHub 链接识别
-- **大模型**：默认智谱 GLM（glm-4-flash / glm-4v，OpenAI 兼容协议），可通过环境变量切换任意兼容端点
-- **工程**：Conda、uv/pip、Docker、一键启动脚本
+- **图谱**：NetworkX（PageRank、入度、中介、特征向量中心性）、IDF 加权倒排候选
+- **外部集成**：arXiv、PubMed、DuckDuckGo、GitHub 链接识别、订阅式增量追踪
+- **大模型**：默认智谱 GLM（glm-4-flash / glm-4v，OpenAI 兼容协议），可经环境变量切换任意兼容端点（DeepSeek / Qwen / GPT）
+- **工程**：Conda、pip、Docker、一键启动脚本、三层测试体系
 
 ---
 
@@ -57,14 +85,15 @@
 
 ### 方式一：一键启动（Windows）
 
-双击项目根目录的 **`启动科研助手.bat`**，浏览器自动打开 `http://localhost:8501`。
+双击项目根目录的 **`启动科研助手.bat`**，浏览器自动打开 `http://localhost:8501`，
+点击侧边栏 **🚀 一键加载演示数据（v1/v7/BERT）** 即可开始全流程体验。
 
 ### 方式二：手动启动（Conda）
 
 ```bash
 conda create -n ai_research python=3.11 -y
 conda activate ai_research
-cd C:\Users\Administrator\ai_research_agent
+cd ai_research_agent
 pip install -r requirements.txt
 streamlit run app.py
 ```
@@ -89,26 +118,23 @@ LLM_MODEL=glm-4-flash
 VL_MODEL=glm-4v
 ```
 
-> ⚠️ API Key 仅通过环境变量 / 侧边栏注入，**不会**写入公开仓库或代码。
-> 无 Key 时，PDF 原生解析、混合检索、引用图谱等离线功能仍可运行；OCR、问答、翻译、综述等需联网调用模型。
+> ⚠️ 安全设计：API Key 仅经环境变量 / 侧边栏会话注入，**绝不**写入代码、前端页面或公开仓库；
+> 划词翻译等所有模型调用均走后端代理，浏览器控制台可见内容无任何凭据。
+> 无 Key 时，PDF 原生解析、混合检索、引用图谱、去重、追踪增量比对等离线链路仍可运行与自测。
 
 ---
 
-## 🧪 测试数据集与验证用例
+## 🧪 测试数据集
 
 | 用例 | 文件 | 预期 |
 |---|---|---|
-| 内容去重 / 版本演进 | `demo_data/1706.03762v7.pdf`、`pdf/1706.03762v1.pdf` | 基于语义（非文件名）检测 v1/v7，提示保留最新版本 |
+| 内容去重 / 版本演进 | `demo_data/1706.03762v7.pdf`、`pdf/1706.03762v1.pdf` | 语义（非文件名）检测 v1/v7，建议保留最新版 |
 | 标准矢量 PDF | `pdf/1706.03762v1.pdf` | 双栏文本、标题树、公式、表格精细解析 |
 | 图像扫描版 | `pdf/1706.03762v1_img.pdf` | 检测为扫描件，多模态 OCR 还原 |
-| 超长篇文档 | 官方《Understanding Deep Learning》或 `pdf/LongBook_540p_fixture.pdf` | 切块/索引/分级加载，内存可控（540 页实测约 251MB） |
-| 多篇推理 / 图谱 | `demo_data/1810.04805v2.pdf`（BERT）等 | BERT→Transformer 引用边，Transformer 为基石论文 |
+| 超长篇文档 | `pdf/UnderstandingDeepLearning_02_09_26_C.pdf`（官方正版 541 页） | 1523 分块 26.3s 入库，内存约 292MB |
+| 多篇推理 / 图谱 | `demo_data/1810.04805v2.pdf`（BERT） | BERT→Transformer 引用边，Transformer 为基石 |
 
-一键离线自检（含 Mock LLM 驱动 Agent）：
-
-```bash
-python scripts/selftest.py
-```
+> 注：`pdf/LongBook_540p_fixture.pdf` 为本地生成的补充压测夹具，非官方教材。
 
 ---
 
@@ -116,28 +142,31 @@ python scripts/selftest.py
 
 ```
 ai_research_agent/
-├── app.py                 # Streamlit 入口（精简分发）
-├── config.py              # 路径 / 模型 / 参数配置
+├── app.py                     # Streamlit 入口（统一错误边界）
+├── config.py                  # 路径 / 模型 / 检索参数配置
 ├── 启动科研助手.bat
-├── requirements.txt / Dockerfile / docker-compose.yml / .env.example
-├── core/                  # Agent 内核：llm / agent / planner / router / memory / guardrails / trace
-├── services/              # 业务服务：parsing / library / rag / graph / writing / translate / extern / state
-├── tools/                 # 工具注册中心 + 16 个工具定义（Function Calling）
-├── ui/                    # 各页面与公共组件
-├── scripts/               # 自检 / 压测 / 数据准备脚本
-├── pdf/                   # 测试 PDF（v1、扫描件、长文档夹具）
-├── demo_data/             # 演示数据（v7、BERT、CSV）
-├── lib/                   # 本地离线 vis-network 等前端库
-└── storage/               # 运行时：Chroma、library.json、uploads（git 忽略）
+├── requirements.txt / Dockerfile / docker-compose.yml / .env.example / LICENSE
+├── core/                      # Agent 内核：llm / agent / planner / router / memory / guardrails / sandbox / trace
+├── services/                  # 业务服务：parsing / library / rag / query_expansion / graph / track / writing / translate / extern / state
+├── tools/                     # 工具注册中心 + 16 个 Function Schema 工具
+├── ui/                        # 9 个页面 + 公共组件（错误边界 / 空库守卫 / HTML 兼容层）
+├── tests/                     # 单元测试（18 项）
+├── scripts/                   # selftest / apptest_check / verify_official / bench_graph / watch_daemon / setup_real_library
+├── pdf/ 与 demo_data/         # 官方赛题测试 PDF 与演示数据
+├── docs/                      # 技术文档（PDF）、演示视频脚本、界面截图
+├── lib/                       # 本地离线 vis-network 等前端库
+├── version_history/           # v1 单体原型历史存档
+└── storage/                   # 运行时：Chroma、library.json、uploads、点赞与追踪账本（git 忽略）
 ```
 
 ---
 
 ## 🎬 演示与文档
 
-- 技术文档：`docs/技术文档.pdf`（≤30 页）
-- 演示视频脚本：`docs/演示视频脚本.md`
-- 在线演示：部署后填入评审地址（Docker 一键部署，见技术文档「测试与部署」）
+- 技术文档：`docs/技术文档.pdf`（21 页，全部实测数据可复跑）
+- 演示视频脚本：`docs/演示视频脚本.md`（5–8 分钟逐段台词 + 录制检查清单）
+- 界面截图：`docs/shots/`
+- 在线演示：部署后填入评审地址（Docker 一键部署，见技术文档第 6 章）
 
 ---
 
@@ -150,7 +179,13 @@ ai_research_agent/
 
 ---
 
-## 📌 说明
+## 🤝 AI 协同声明与局限
 
-- 本项目允许并使用 AI 辅助编程，核心架构与关键逻辑由参赛成员设计、理解与掌控。
-- `pdf/LongBook_540p_fixture.pdf` 为本地生成的长文档鲁棒性测试夹具，非官方教材。
+- 本项目允许并使用 AI 辅助编程（符合赛规）：核心架构（Agent 内核、检索管线、图谱算法、Guardrails）
+  与关键取舍由参赛成员设计与掌控，AI 协同贡献与 Prompt 策略详见技术文档第 4 章。
+- 诚实声明的当前局限（详见技术文档 8.1）：异形排版的参考文献定位仍需启发式兜底；个性化推荐基于领域计数
+  而非协同过滤；OCR 依赖多模态 API，离线以原生文本层功能为准。
+
+## 📄 License
+
+MIT（见 `LICENSE`）
