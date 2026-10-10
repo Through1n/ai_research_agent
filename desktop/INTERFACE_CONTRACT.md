@@ -162,21 +162,19 @@ else:
 
 - `assets/make_icon.py`：Pillow 脚本，可重复执行；设计 = #1f5fae 圆角方形底 + 白色简洁图形（学术帽优先；画不好就纯色底白色粗体字母 "A"，简洁 > 复杂丑陋）
 - 产物：`assets/icon.png`（1024x1024）、`assets/icon.ico`（内嵌 16/32/48/64/128/256）
-- `desktop/about.py`：纯字符串常量（APP_NAME、APP_VERSION="v1.0"、TEAM、HOMEPAGE_URL、LICENSE、ABOUT_TEXT），Worker 1 import
-- `installer.iss`（Inno Setup，完整可用但不要求实际编译）：装到 Program Files、开始菜单+桌面快捷方式、卸载器，源 = dist/AI4SResearchAgent/，图标 assets/icon.ico
+- `desktop/about.py`：**由 Worker 1 自己创建**（纯字符串常量 APP_NAME、APP_VERSION="v1.0"、TEAM、HOMEPAGE_URL、LICENSE、ABOUT_TEXT），Worker 4 不进入 desktop/
+- `installer.iss`（Inno Setup，完整可用但不要求实际编译）：装到 {autopf}\AI4SResearchAgent、开始菜单+桌面快捷方式、卸载器，源 = dist/AI4SResearchAgent/，图标 assets/icon.ico，AppId 用固定 GUID
 - `启动桌面版.vbs`（新增，不动旧 vbs）：静默调 anaconda env 的 pythonw.exe `-m desktop`，cwd=项目根
-- sidebar 版本标识：在 `ui/sidebar.py` 最底部（`st.caption(f"💾 内存...")` 之后）加 `st.caption("桌面版 v1.0")`（开发/桌面都显示）
+- sidebar 版本标识：**由 Worker 2 完成**（sidebar.py 归 Worker 2），在 `st.caption(f"💾 内存...")` 之后加 `st.caption("桌面版 v1.0")`（开发/桌面都显示）
 
 ## 9. 文件所有权（防冲突，越界必须停下报告）
 
 | 文件/目录 | 所有者 |
 |---|---|
-| desktop/__main__.py, desktop/launcher.py, desktop/window.py, desktop/paths.py（如需要） | Worker 1 |
-| desktop/about.py | Worker 4（Worker 1 可先建占位，Worker 4 最终覆盖；双方都不得改对方的 launcher/window） |
-| .streamlit/config.toml、ui/desktop_chrome.py、app.py、config.py | Worker 2 |
-| ui/sidebar.py | **Worker 4 只加最底部一行版本 caption；Worker 2 只在 st.title 之后加无 Key 警告卡片。两处插入点相距很远，各自用 Edit 精确锚定；若 git 拉取发现对方已改，rebase 自己的改动，不得整体重写** |
+| desktop/__main__.py、desktop/launcher.py、desktop/window.py、desktop/paths.py（如需要）、desktop/about.py、desktop/__init__.py | Worker 1（about.py 常量也由 Worker 1 一并落地，Worker 4 不得进入 desktop/ 目录） |
+| .streamlit/config.toml、ui/desktop_chrome.py、app.py、config.py、ui/sidebar.py | Worker 2（sidebar 两处改动都归 Worker 2：st.title 之后的无 Key 警告卡片 + 最底部"桌面版 v1.0"版本 caption；Worker 4 不得改 sidebar.py） |
 | AI4SResearchAgent.spec、build_desktop.bat、.gitignore | Worker 3（Worker 3 可在打包报错时微调 config.py / desktop/*.py 修 hiddenimports，但必须在 commit message 写明改了什么、为什么） |
-| assets/、installer.iss、启动桌面版.vbs、docs/、README.md | Worker 4 产资产；docs/desktop_guide.md、docs/desktop_test_report.md、README 桌面章节归 Worker 5 |
+| assets/（make_icon.py、icon.png、icon.ico）、installer.iss、启动桌面版.vbs | Worker 4（Worker 4 不修改任何业务 .py；docs/desktop_guide.md、docs/desktop_test_report.md、README 桌面章节归 Worker 5） |
 
 ## 10. 测试与取证契约
 
