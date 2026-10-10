@@ -91,13 +91,22 @@ def render(ctx):
     with tabs[2]:
         p3 = st.number_input("页码", 1, tps, 1, key="pp")
         if st.button("⚡ 翻译并生成原位 PDF", key="pp_go") and ctx.llm.available:
-            raw = doc[p3 - 1].get_text()[:3000]
-            zh = writing.translate_to_chinese(ctx, raw)
-            out = os.path.join(tempfile.mkdtemp(), f"translated_p{p3}.pdf")
-            in_place_pdf(doc, p3, zh, out)
-            data = open(out, "rb").read()
-            st.success(f"✅ 已生成（{len(data)/1024:.0f} KB）")
-            st.download_button("📥 下载", data, file_name=f"translated_p{p3}.pdf")
+            try:
+                p3 = min(max(1, int(p3)), tps)
+                raw = doc[p3 - 1].get_text()[:3000]
+                with st.spinner("⚡ 正在翻译并生成原位 PDF…"):
+                    zh = writing.translate_to_chinese(ctx, raw)
+                    out = os.path.join(tempfile.mkdtemp(), f"translated_p{p3}.pdf")
+                    in_place_pdf(doc, p3, zh, out)
+                if not os.path.exists(out):
+                    st.error("PDF 生成失败：输出文件不存在。")
+                else:
+                    with open(out, "rb") as fh:
+                        data = fh.read()
+                    st.success(f"✅ 已生成（{len(data)/1024:.0f} KB）")
+                    st.download_button("📥 下载", data, file_name=f"translated_p{p3}.pdf")
+            except Exception as e:
+                st.error(f"原位 PDF 生成失败：{str(e)[:160]}")
 
     # 4 引用跳转
     with tabs[3]:

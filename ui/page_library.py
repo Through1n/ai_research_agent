@@ -32,16 +32,20 @@ def render(ctx):
         def cb(r, page):
             bar.progress(min(r, 1.0)); note.text(f"OCR/解析第 {page} 页…")
 
-        prepared = library.prepare_pdf(ctx, data=data, filename=f.name, progress_cb=cb)
-        bar.empty(); note.empty()
-        if prepared["scanned"]:
-            st.info("🧾 检测为扫描件，已通过多模态 OCR 提取文本。")
-        if prepared["dup_name"]:
-            st.session_state.pending = prepared
-        else:
-            p = library.commit(ctx, prepared)
-            st.success(f"✅ 已入库：{p['title']}（{p['page_count']} 页，{len([c for c in ctx.chunks if c['source']==p['filename']])} 个分块）")
-            st.rerun()
+        try:
+            prepared = library.prepare_pdf(ctx, data=data, filename=f.name, progress_cb=cb)
+            bar.empty(); note.empty()
+            if prepared.get("scanned"):
+                st.info("🧾 检测为扫描件，已通过多模态 OCR 提取文本。")
+            if prepared.get("dup_name"):
+                st.session_state.pending = prepared
+            else:
+                p = library.commit(ctx, prepared)
+                st.success(f"✅ 已入库：{p['title']}（{p['page_count']} 页，{len([c for c in ctx.chunks if c['source']==p['filename']])} 个分块）")
+                st.rerun()
+        except Exception as e:
+            bar.empty(); note.empty()
+            st.error(f"PDF 解析失败：{str(e)[:200]}")
 
     pend = st.session_state.pending
     if pend:

@@ -100,10 +100,14 @@ def _translate_section(ctx):
     direction = st.radio("方向", ["中→英", "英→中"], horizontal=True)
     text = st.text_area("粘贴文本", key="trtext", height=160)
     if st.button("🔁 一键翻译") and text and ctx.llm.available:
-        if direction == "中→英":
-            st.session_state.trres = writing.translate_to_english(ctx, text)
-        else:
-            st.session_state.trres = writing.translate_to_chinese(ctx, text)
+        try:
+            with st.spinner("🌐 正在翻译…"):
+                if direction == "中→英":
+                    st.session_state.trres = writing.translate_to_english(ctx, text)
+                else:
+                    st.session_state.trres = writing.translate_to_chinese(ctx, text)
+        except Exception as e:
+            st.error(f"翻译失败：{str(e)[:160]}")
     if st.session_state.get("trres"):
         st.markdown(st.session_state["trres"])
 

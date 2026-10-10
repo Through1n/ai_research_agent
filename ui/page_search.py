@@ -19,8 +19,12 @@ def _arxiv(ctx):
     st.subheader("📚 arXiv 检索 / 下载")
     q = st.text_input("标题 / 关键词 / ID", key="aq")
     if st.button("🔍 搜索 arXiv") and q:
-        with st.spinner("🔍 正在检索 arXiv…"):
-            st.session_state.arxiv_res = extern.search_arxiv(q, 5)
+        try:
+            with st.spinner("🔍 正在检索 arXiv…"):
+                st.session_state.arxiv_res = extern.search_arxiv(q, 5)
+        except Exception as e:
+            st.error(f"arXiv 检索失败（网络受限？）：{str(e)[:160]}")
+            st.session_state.arxiv_res = []
     for i, p in enumerate(st.session_state.get("arxiv_res", [])):
         st.markdown(f"**{p['title']}**（{p['published']}，{p['arxiv_id']}")
         st.caption(p["summary"][:260])
@@ -40,12 +44,16 @@ def _batch(ctx):
     st.subheader("📋 参考文献批量抓取")
     titles = st.text_area("标题列表（每行一条）", height=130, key="bt")
     if st.button("🚀 批量下载入库") and titles:
-        r = df.t_batch_download(ctx, titles)
-        for s in r["statuses"]:
-            if s.get("ok"):
-                st.success(f"✅ {s['query'][:50]} → {s.get('title','')[:60]}")
-            else:
-                st.caption(f"❌ {s['query'][:50]}：{s.get('error') or s.get('note')}")
+        try:
+            with st.spinner("🚀 正在批量抓取…"):
+                r = df.t_batch_download(ctx, titles)
+            for s in r.get("statuses", []):
+                if s.get("ok"):
+                    st.success(f"✅ {s['query'][:50]} → {s.get('title','')[:60]}")
+                else:
+                    st.caption(f"❌ {s['query'][:50]}：{s.get('error') or s.get('note')}")
+        except Exception as e:
+            st.error(f"批量抓取失败：{str(e)[:160]}")
 
 
 def _others(ctx):
@@ -54,7 +62,12 @@ def _others(ctx):
         st.subheader("🧬 PubMed")
         pq = st.text_input("关键词", key="pq")
         if st.button("🔍 PubMed") and pq:
-            st.session_state.pm = extern.search_pubmed(pq, 5)
+            try:
+                with st.spinner("🧬 正在检索 PubMed…"):
+                    st.session_state.pm = extern.search_pubmed(pq, 5)
+            except Exception as e:
+                st.error(f"PubMed 检索失败：{str(e)[:160]}")
+                st.session_state.pm = []
         for r in st.session_state.get("pm", []):
             st.markdown(f"**{r['title']}**"); st.caption(f"{r['authors']} · {r['journal']} ({r['pubdate']})")
             st.markdown(f"[PubMed]({r['url']})")
@@ -62,7 +75,12 @@ def _others(ctx):
         st.subheader("🌐 网页搜索")
         wq = st.text_input("关键词", key="wq")
         if st.button("🔍 DuckDuckGo") and wq:
-            st.session_state.web = extern.web_search(wq, 6)
+            try:
+                with st.spinner("🌐 正在网页搜索…"):
+                    st.session_state.web = extern.web_search(wq, 6)
+            except Exception as e:
+                st.error(f"网页搜索失败：{str(e)[:160]}")
+                st.session_state.web = []
         for r in st.session_state.get("web", []):
             if r.get("error"):
                 st.error(r["error"])
@@ -101,7 +119,8 @@ def _recommend(ctx):
         except Exception as e:
             st.warning(f"抓取 arXiv 失败（网络受限）：{str(e)[:80]}")
             return
-        embs = [np.asarray(ctx.papers[n]["embedding"]) for n in ctx.files if ctx.papers[n].get("embedding")]
+        embs = [np.asarray(ctx.papers[n]["embedding"]) for n in ctx.files
+                if n in ctx.papers and ctx.papers[n].get("embedding")]
         centroid = np.mean(np.stack(embs), axis=0) if embs else None
         prof = ctx.memory.profile()
         qvecs = ctx.embed([p["summary"][:1500] for p in cand])
