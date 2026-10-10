@@ -22,13 +22,18 @@ def html_table(df):
 
 
 def source_card(source, page, text, n=None, snippet_len=520):
+    """溯源卡片：页码徽章可点击跳转阅读页（?p=3&jump_page=N&paper=文件名）。"""
     tag = f"【{n}】 " if n else ""
     t = text[:snippet_len].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # 阅读页在 MENU 中的索引为 3（📖 版式阅读与智能翻译）
+    safe_src = str(source).replace('"', "%22")
+    badge = (f'<a href="?p=3&jump_page={page}&paper={safe_src}" target="_self" '
+             f'style="text-decoration:none;color:#fff;display:inline-block;">第 {page} 页</a>')
     return f"""<div style="background:#f7faff;border-left:4px solid #3b6fb6;border-radius:8px;
 padding:12px 16px;margin:8px 0;box-shadow:0 1px 2px rgba(0,0,0,.05);">
 <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
 <strong style="color:#27518a;font-size:13.5px;">{tag}📄 {source}</strong>
-<span style="background:#3b6fb6;color:#fff;padding:1px 10px;border-radius:12px;font-size:11.5px;">第 {page} 页</span></div>
+<span style="background:#3b6fb6;color:#fff;padding:1px 10px;border-radius:12px;font-size:11.5px;">{badge}</span></div>
 <div style="color:#333;font-size:12.5px;line-height:1.75;white-space:pre-wrap;">{t}…</div></div>"""
 
 

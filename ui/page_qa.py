@@ -1,7 +1,6 @@
-"""页面 2：抗幻觉跨文献问答。混合检索 + 重排，答案内联【n】引用，下方给出编号溯源锚点，支持流式。"""
+"""页面 2：抗幻觉跨文献问答。混合检索 + 重排，答案内联【n】引用，下方给出编号溯源锚点。"""
 import streamlit as st
 from services import rag
-from core.guardrails import validate_citations
 from ui.common import source_card, require_library
 
 
@@ -22,9 +21,7 @@ def render(ctx):
         if cols[i % 3].button(e, key=f"ex{i}"):
             st.session_state.qa_q = e; st.rerun()
 
-    opt1, opt2 = st.columns(2)
-    use_rerank = opt1.checkbox("启用 LLM 重排（更精准，耗额度）")
-    use_stream = opt2.checkbox("Token 级流式输出")
+    use_rerank = st.checkbox("启用 LLM 重排（更精准，耗额度）")
 
     with st.form("qa_form", clear_on_submit=True):
         q = st.text_input("请输入问题", value=st.session_state.qa_q)
@@ -33,19 +30,16 @@ def render(ctx):
     if go and q.strip():
         if not ctx.llm.available:
             st.warning("请先在左侧填入 API Key。"); return
-        sources, debug = rag.retrieve(ctx, q.strip(), use_rerank=use_rerank)
-        if not sources:
-            st.warning("未检索到相关内容，请先导入论文。"); return
-        context = rag.build_context(sources)
-        msgs = rag.qa_messages(q.strip(), context)
-        if use_stream:
-            text = st.write_stream(ctx.llm.stream(msgs))
-        else:
-            m = ctx.llm.chat(msgs, temperature=0.1)
-            text = m.content or ""
-        issues = validate_citations(text, len(sources))
-        st.session_state.qa_runs.append({"q": q.strip(), "a": text, "sources": sources,
-                                         "issues": issues, "debug": debug})
+        # 统一走 rag.answer：内部已完成检索→生成→引用校验→一次自动修复
+        with st.spinner("正在检索、生成并校验答案…"):
+            result = rag.answer(ctx, q.strip(), use_rerank=use_rerank)
+        st.session_state.qa_runs.append({
+            "q": q.strip(),
+            "a": result["answer"],          # 修复后的答案（若无需修复即原答案）
+            "sources": result["sources"],
+            "issues": result["issues"],
+            "debug": result["debug"],
+        })
         st.session_state.qa_q = ""
         st.rerun()
 
@@ -54,6 +48,8 @@ def render(ctx):
         st.markdown(run["a"])
         if run["issues"]:
             st.caption("⚠️ 引用校验：" + "；".join(run["issues"]))
+        else:
+            st.success("✅ 引用校验通过：所有【n】角标均在有效来源范围内")
         with st.expander(f"🔍 溯源（{len(run['sources'])} 条来源）"):
             for i, c in enumerate(run["sources"], 1):
                 st.markdown(source_card(c["source"], c["page"], c["text"], n=i), unsafe_allow_html=True)

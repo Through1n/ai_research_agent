@@ -39,12 +39,27 @@ def _page_paragraphs(doc, page):
 
 def render(ctx):
     st.header("📖 版式阅读与智能翻译")
+    # 溯源卡片点击跳转：从 query_params 读取 paper 预下拉选中
+    qp = st.query_params
+    if "paper" in qp and ctx.files:
+        cand = qp["paper"]
+        if cand in ctx.files and "read_sel" not in st.session_state:
+            st.session_state["read_sel"] = cand
     path = _resolve_doc(ctx)
     if not path:
         st.info("请先在文献库导入论文，或临时上传。"); return
     doc = parsing.open_doc(path)
     tps = doc.page_count
     st.caption(f"📄 {os.path.basename(path)}（{tps} 页）")
+    # 跳转页码预填：边界钳制到 [1, tps]
+    if "jump_page" in qp:
+        try:
+            jp = min(max(1, int(qp["jump_page"])), tps)
+            for _k in ("np", "sp", "pp", "hp"):
+                st.session_state.setdefault(_k, jp)
+            st.caption(f"🎯 已从问答页跳转到第 {jp} 页（切换上方标签查看）")
+        except (TypeError, ValueError):
+            pass
     tabs = st.tabs(["📄 原生渲染", "🌐 中英同步滚动", "📑 原位 PDF", "🔗 引用跳转", "🖱️ 划词翻译", "📚 标题树"])
 
     # 1 原生
