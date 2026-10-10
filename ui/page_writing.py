@@ -32,11 +32,11 @@ def _csv_section(ctx):
     ct = c3.selectbox("图表", ["折线图", "柱状图", "散点图", "三维雷达图", "相关性热力图", "平行坐标图"])
     tpl = "plotly_white"
     if ct == "折线图":
-        st.plotly_chart(px.line(df, x=x, y=y, template=tpl), use_container_width=True)
+        st.plotly_chart(px.line(df, x=x, y=y, template=tpl), width="stretch")
     elif ct == "柱状图":
-        st.plotly_chart(px.bar(df, x=x, y=y, template=tpl), use_container_width=True)
+        st.plotly_chart(px.bar(df, x=x, y=y, template=tpl), width="stretch")
     elif ct == "散点图":
-        st.plotly_chart(px.scatter(df, x=x, y=y, template=tpl), use_container_width=True)
+        st.plotly_chart(px.scatter(df, x=x, y=y, template=tpl), width="stretch")
     elif ct == "三维雷达图":
         nums = df.select_dtypes(include="number").columns.tolist()
         label_col = x if x not in nums else (cols[0] if cols[0] not in nums else None)
@@ -47,19 +47,19 @@ def _csv_section(ctx):
             for i, row in norm.iterrows():
                 fg.add_trace(go.Scatterpolar(r=list(row), theta=nums[:6], fill="toself",
                                              name=str(df.iloc[i][label_col])[:22] if label_col else f"#{i}"))
-            st.plotly_chart(fg, use_container_width=True)
+            st.plotly_chart(fg, width="stretch")
         else:
             st.info("三维雷达图需要至少 3 个数值列。")
     elif ct == "相关性热力图":
         nums = df.select_dtypes(include="number")
         if len(nums.columns) >= 2:
             st.plotly_chart(px.imshow(nums.corr(), text_auto=True, aspect="auto", template=tpl),
-                            use_container_width=True)
+                            width="stretch")
     elif ct == "平行坐标图":
         nums = df.select_dtypes(include="number").columns.tolist()
         if len(nums) >= 3:
             st.plotly_chart(px.parallel_coordinates(df, dimensions=nums, template=tpl),
-                            use_container_width=True)
+                            width="stretch")
     if st.button("🤖 自动提炼 Figure Caption") and ctx.llm.available:
         st.session_state.caption = writing.figure_caption(ctx, df, ct)
     if st.session_state.get("caption"):

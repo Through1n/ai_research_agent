@@ -105,3 +105,14 @@ def require_library(ctx):
         st.info("📭 文献库为空。请先在左侧点击「🚀 一键加载演示数据」，或到「📁 文献库管理」上传 PDF。")
         return False
     return True
+
+
+def resolve_pdf(filename):
+    """按 上传目录 → 官方测试 pdf 目录 顺序解析论文原始文件；找不到返回 None。"""
+    import os
+    from config import UPLOAD_DIR, PDF_DIR
+    for base in (UPLOAD_DIR, PDF_DIR):
+        p = str(base / filename)
+        if os.path.exists(p):
+            return p
+    return None

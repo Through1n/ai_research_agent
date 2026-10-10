@@ -1,7 +1,7 @@
 """PDF 解析引擎：扫描件检测/OCR、版面文本、语义切块、标题树/表格/图表/公式/参考文献抽取。"""
 import io
 import re
-import fitz
+import pymupdf as fitz
 from PIL import Image
 
 from config import CHUNK_SIZE, CHUNK_OVERLAP

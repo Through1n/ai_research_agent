@@ -1,5 +1,5 @@
 """版式阅读与翻译呈现：原生坐标渲染、中英同步滚动（JS 联动）、原位排版 PDF、引用双向跳转 HTML。"""
-import fitz
+import pymupdf as fitz
 
 
 def native_page_html(doc, page_num):

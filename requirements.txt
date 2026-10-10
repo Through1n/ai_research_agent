@@ -1,5 +1,5 @@
 streamlit>=1.63,<1.64
-PyMuPDF>=1.24
+PyMuPDF>=1.24.3
 chromadb>=0.5
 openai>=1.40
 pandas>=2.0

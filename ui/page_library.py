@@ -6,7 +6,7 @@ import streamlit as st
 
 from config import UPLOAD_DIR
 from services import library, parsing
-from ui.common import html_table
+from ui.common import html_table, resolve_pdf
 
 
 def _init():
@@ -68,15 +68,19 @@ def render(ctx):
     else:
         mf = st.selectbox("选择论文", ctx.files, key="meta_sel")
         if st.button("🤖 抽取标题/作者/机构/摘要 + 判断排版") and ctx.llm.available:
-            doc = parsing.open_doc((UPLOAD_DIR / mf).read_bytes())
-            first = doc[0].get_text()[:3000]
-            pw, ph = doc[0].rect.width, doc[0].rect.height
-            blocks = doc[0].get_text("blocks")
-            lb = sum(1 for b in blocks if b[0] < pw / 2); rb = sum(1 for b in blocks if b[0] > pw / 2)
-            layout = "双栏" if lb and rb else "单栏"
-            prompt = f"从首页抽取 标题/作者/机构/摘要，输出纯净 JSON。页面 {pw:.0f}×{ph:.0f}，{layout}。\n文本：{first}"
-            st.session_state.meta_view = ctx.llm.json_chat([{"role": "user", "content": prompt}])
-            doc.close()
+            _p = resolve_pdf(mf)
+            if not _p:
+                st.info("该论文为内置演示语料（无原始 PDF），元数据已在入库时抽取完成，见下方文献库列表。")
+            else:
+                doc = parsing.open_doc(_p)
+                first = doc[0].get_text()[:3000]
+                pw, ph = doc[0].rect.width, doc[0].rect.height
+                blocks = doc[0].get_text("blocks")
+                lb = sum(1 for b in blocks if b[0] < pw / 2); rb = sum(1 for b in blocks if b[0] > pw / 2)
+                layout = "双栏" if lb and rb else "单栏"
+                prompt = f"从首页抽取 标题/作者/机构/摘要，输出纯净 JSON。页面 {pw:.0f}×{ph:.0f}，{layout}。\n文本：{first}"
+                st.session_state.meta_view = ctx.llm.json_chat([{"role": "user", "content": prompt}])
+                doc.close()
         if st.session_state.meta_view:
             st.json(st.session_state.meta_view)
 
@@ -87,17 +91,21 @@ def render(ctx):
         sf = st.selectbox("选择论文", ctx.files, key="struct_sel")
         with_vision = st.checkbox("用多模态模型逐图理解（较慢/耗额度）")
         if st.button("🧩 全方位解析（标题树/表格/图表）"):
-            doc = parsing.open_doc((UPLOAD_DIR / sf).read_bytes())
-            toc = parsing.extract_toc(doc)
-            tables = parsing.extract_tables(doc)
-            fig_dir = os.path.join(str(UPLOAD_DIR), "figs", sf.replace(".pdf", ""))
-            figs = parsing.extract_figures(doc, fig_dir)
-            if with_vision and ctx.llm.available and figs:
-                pb = st.progress(0.0)
-                parsing.describe_figures(figs, ctx.llm, lambda r: pb.progress(min(r, 1.0)))
-                pb.empty()
-            doc.close()
-            st.session_state.struct = {"file": sf, "toc": toc, "tables": tables, "figs": figs}
+            _p = resolve_pdf(sf)
+            if not _p:
+                st.info("该论文为内置演示语料（无原始 PDF），版式级解析不适用；问答与图谱功能不受影响。")
+            else:
+                doc = parsing.open_doc(_p)
+                toc = parsing.extract_toc(doc)
+                tables = parsing.extract_tables(doc)
+                fig_dir = os.path.join(str(UPLOAD_DIR), "figs", sf.replace(".pdf", ""))
+                figs = parsing.extract_figures(doc, fig_dir)
+                if with_vision and ctx.llm.available and figs:
+                    pb = st.progress(0.0)
+                    parsing.describe_figures(figs, ctx.llm, lambda r: pb.progress(min(r, 1.0)))
+                    pb.empty()
+                doc.close()
+                st.session_state.struct = {"file": sf, "toc": toc, "tables": tables, "figs": figs}
 
         stobj = st.session_state.struct
         if stobj:
@@ -114,7 +122,7 @@ def render(ctx):
             if stobj["figs"]:
                 st.markdown(f"##### 🖼️ 图表（{len(stobj['figs'])}）")
                 for fig in stobj["figs"]:
-                    st.image(fig["path"], caption=fig.get("desc", f"p{fig['page']}"), use_container_width=True)
+                    st.image(fig["path"], caption=fig.get("desc", f"p{fig['page']}"), width="stretch")
 
         c1, c2 = st.columns(2)
         if c1.button("🧮 提取 LaTeX 公式") and ctx.llm.available:
@@ -122,10 +130,14 @@ def render(ctx):
             st.session_state.formula_view = ctx.llm.json_chat([{"role": "user",
                 "content": f"提取数学公式，输出JSON数组，每条 {{name,latex(不含$)}}。\n{text}"}])
         if c2.button("📚 结构化参考文献") and ctx.llm.available:
-            doc = parsing.open_doc((UPLOAD_DIR / sf).read_bytes())
-            raw = parsing.extract_references_raw(doc)[:8000]; doc.close()
-            st.session_state.ref_view = ctx.llm.json_chat([{"role": "user",
-                "content": "提取参考文献，输出JSON数组，每条 {id,authors,title,year,venue}；无法识别填'未识别'。\n"+raw}])
+            _p = resolve_pdf(sf)
+            if not _p:
+                st.info("该论文为内置演示语料（无原始 PDF）。")
+            else:
+                doc = parsing.open_doc(_p)
+                raw = parsing.extract_references_raw(doc)[:8000]; doc.close()
+                st.session_state.ref_view = ctx.llm.json_chat([{"role": "user",
+                    "content": "提取参考文献，输出JSON数组，每条 {id,authors,title,year,venue}；无法识别填'未识别'。\n"+raw}])
         if st.session_state.formula_view:
             for f in st.session_state.formula_view:
                 st.caption(f.get("name", "公式"))

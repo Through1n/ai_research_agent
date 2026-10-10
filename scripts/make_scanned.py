@@ -1,5 +1,5 @@
 """将矢量版 v1 逐页渲染为图片，再拼装成无文本层的"扫描件"PDF（模拟 1706.03762v1_img.pdf）。"""
-import fitz
+import pymupdf as fitz
 
 SRC = r"C:\Users\Administrator\ai_research_agent\pdf\1706.03762v1.pdf"
 DST = r"C:\Users\Administrator\ai_research_agent\pdf\1706.03762v1_img.pdf"

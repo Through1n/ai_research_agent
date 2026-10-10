@@ -39,7 +39,7 @@ def render(ctx):
             "中介中心性": [round(m["betweenness"][n], 3) for n in pack["nodes"]],
             "特征向量": [round(m["eigenvector"][n], 4) for n in pack["nodes"]],
         }).sort_values("PageRank", ascending=False)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
 
         if pack["corner"]:
             st.success("🏆 基石论文：" + "、".join(f"《{ctx.papers[n]['title']}》" for n in pack["corner"]))

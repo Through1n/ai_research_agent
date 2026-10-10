@@ -1,5 +1,5 @@
 """生成 540 页的长文档压测 PDF（用于验证切块/索引/内存控制；非官方教材，属鲁棒性测试夹具）。"""
-import fitz
+import pymupdf as fitz
 
 DST = r"C:\Users\Administrator\ai_research_agent\pdf\LongBook_540p_fixture.pdf"
 PAGES = 540

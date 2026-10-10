@@ -5,7 +5,7 @@ import tempfile
 import streamlit as st
 from ui.common import embed_html
 
-from config import UPLOAD_DIR
+from config import UPLOAD_DIR, PDF_DIR
 from services import parsing, writing
 from services.translate import (native_page_html, bilingual_html, in_place_pdf, citation_jump_html)
 
@@ -18,7 +18,15 @@ def _resolve_doc(ctx):
         tmp.write(up.read()); path = tmp.name
     sel = st.selectbox("从文献库选择", [""] + ctx.files, key="read_sel")
     if not path and sel:
-        path = str(UPLOAD_DIR / sel)
+        # 依次查找：上传目录 → 官方测试 pdf 目录（演示语料常有同名原卷）
+        for base in (UPLOAD_DIR, PDF_DIR):
+            candidate = str(base / sel)
+            if os.path.exists(candidate):
+                path = candidate
+                break
+        if not path:
+            st.warning("该论文为内置演示语料（纯文本入库），无原始 PDF 文件，不支持版式渲染。"
+                       "如需体验阅读与翻译，请改选带 PDF 的论文或临时上传。")
     return path
 
 
@@ -55,6 +63,7 @@ def render(ctx):
                 paras = _page_paragraphs(doc, p2)
                 if not paras:
                     st.error("该页文本过少，可能是扫描件。")
+                    return
                 pairs, pb = [], st.progress(0.0)
                 for i, en in enumerate(paras):
                     zh = writing.translate_to_chinese(ctx, en[:1500])
