@@ -84,22 +84,78 @@ def check_duplicate(ctx, embedding, threshold=None, arxiv_id=None, fingerprints=
     return None, max_sim, ""
 
 
-def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=None):
-    """读取 PDF（含扫描件 OCR），不做写入。返回待提交数据 + 查重结果。"""
+def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=None,
+                timeout_per_page=30, on_page_error=None):
+    """读取 PDF（含扫描件 OCR），不做写入。返回待提交数据 + 查重结果。
+
+    长文档增强：
+    - timeout_per_page：单页解析耗时阈值（秒）。Windows 无 signal.alarm，不强制中断单页，
+      仅在 native 分支逐页用 time.monotonic() 做协作式耗时观测，超阈值时通过 on_page_error 上报；
+      OCR 分支由 parsing.ocr_document 内部逐页 try/except 容错。
+    - on_page_error(page_idx, err_str)：单页失败或超时时的回调，便于上层记录，不影响主流程。
+    - 内存监控：若环境安装了 psutil，返回 peak_mem_mb（处理完成后进程 RSS，单位 MB）；
+      psutil 不可用或采样失败时该 key 为 None，不影响主流程。
+    """
+    # --- 内存监控：开始前确认 psutil 可用（缺失则静默降级）---
+    peak_mem_mb = None
+    _proc = None
+    try:
+        import psutil
+        _proc = psutil.Process()
+        _proc.memory_info().rss  # 首次采样，确认接口可用
+    except Exception:
+        _proc = None
+
     raw = bytes(data) if data is not None else open(path, "rb").read()
     doc = parsing.open_doc(raw)
     scanned = parsing.detect_scanned(doc)
-    if scanned and ctx.llm.available:
-        def cb(r, page):
-            if progress_cb:
+
+    def _safe_progress(r, page):
+        """进度回调包一层，避免回调异常打断入库。"""
+        if progress_cb:
+            try:
                 progress_cb(r, page)
-        page_texts = parsing.ocr_document(doc, ctx.llm, progress_cb=cb)
-    elif scanned and not ctx.llm.available:
-        page_texts = parsing.native_page_texts(doc)
+            except Exception:
+                pass
+
+    if scanned and ctx.llm.available:
+        # OCR 分支：parsing.ocr_document 内部已逐页 try/except，这里直接透传进度
+        page_texts = parsing.ocr_document(doc, ctx.llm, progress_cb=_safe_progress)
     else:
-        page_texts = parsing.native_page_texts(doc)
+        # native 分支：逐页解析 + 单页错误恢复 + 每 50 页进度 + 耗时观测
+        total = doc.page_count
+        page_texts = [""] * total
+        for i, page in enumerate(doc):
+            t0 = time.monotonic()
+            try:
+                page_texts[i] = page.get_text()
+            except Exception as e:
+                # PyMuPDF 单页 get_text 一般不抛，保险起见兜底：失败页置空并上报
+                page_texts[i] = ""
+                if on_page_error:
+                    try:
+                        on_page_error(i, str(e))
+                    except Exception:
+                        pass
+            elapsed = time.monotonic() - t0
+            if elapsed > timeout_per_page and on_page_error:
+                try:
+                    on_page_error(i, f"单页解析耗时 {elapsed:.1f}s，超过阈值 {timeout_per_page}s")
+                except Exception:
+                    pass
+            # 每 50 页或最后一页回调一次进度
+            if (i + 1) % 50 == 0 or i + 1 == total:
+                _safe_progress((i + 1) / max(total, 1), i + 1)
+
     full_text = "\n\n".join(t for t in page_texts if t)
     doc.close()
+
+    # --- 处理完成后记录一次内存峰值（Python RSS 只增不减，此时近似高水位）---
+    if _proc is not None:
+        try:
+            peak_mem_mb = round(_proc.memory_info().rss / (1024 * 1024), 1)
+        except Exception:
+            peak_mem_mb = None
 
     embedding = _paper_embedding(ctx, full_text) if full_text else None
     fingerprints = _paper_fingerprints(ctx, full_text) if full_text else []
@@ -111,6 +167,7 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
         "page_texts": page_texts, "full_text": full_text, "embedding": embedding,
         "fingerprints": fingerprints,
         "dup_name": dup_name, "dup_sim": dup_sim, "dup_evidence": dup_ev, "raw": raw,
+        "peak_mem_mb": peak_mem_mb,
     }
 
 

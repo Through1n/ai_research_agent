@@ -56,11 +56,36 @@ def ocr_document(doc, llm, pages=None, progress_cb=None, zoom=2.0):
     return texts
 
 
+def _sorted_blocks_by_column(page, raw_blocks):
+    """按阅读顺序对一页内的文本块排序。
+
+    双栏判定（简化版）：取竖直中线 x_mid = page.rect.width / 2，
+    若所有 btype==0 的文本块都不跨中线（即没有 block 满足 x0 < x_mid < x1），
+    且文本块数 >= 4，则判定为双栏版面；否则按单栏处理。
+    双栏时先输出左栏（x0 < x_mid）、再输出右栏（x0 >= x_mid），各自按 y0 升序；
+    单栏时直接按 y0 升序返回，保持原有阅读顺序。
+    """
+    x_mid = page.rect.width / 2.0
+    text_blocks = [b for b in raw_blocks if b[6] == 0]
+    # 文本块过少，无法可靠判定双栏，按单栏处理
+    if len(text_blocks) < 4:
+        return sorted(text_blocks, key=lambda b: b[1])
+    # 存在文本块跨竖直中线 → 单栏排版
+    crossed = any(b[0] < x_mid < b[2] for b in text_blocks)
+    if crossed:
+        return sorted(text_blocks, key=lambda b: b[1])
+    # 双栏：左栏在前、右栏在后，各自按垂直位置升序
+    left = sorted([b for b in text_blocks if b[0] < x_mid], key=lambda b: b[1])
+    right = sorted([b for b in text_blocks if b[0] >= x_mid], key=lambda b: b[1])
+    return left + right
+
+
 def _blocks(doc):
-    """返回 [(page_idx, text)]，按阅读顺序的文本块。"""
+    """返回 [(page_idx, text)]，按阅读顺序的文本块（双栏版面自动按 x 坐标分栏）。"""
     out = []
     for pi, page in enumerate(doc):
-        for b in page.get_text("blocks"):
+        raw = page.get_text("blocks")
+        for b in _sorted_blocks_by_column(page, raw):
             x0, y0, x1, y1, text, bno, btype = b
             if btype != 0:
                 continue

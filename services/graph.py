@@ -8,6 +8,7 @@
 """
 import re
 import math
+import statistics
 import networkx as nx
 
 from services.library import cosine
