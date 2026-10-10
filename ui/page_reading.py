@@ -16,7 +16,8 @@ def _resolve_doc(ctx):
     if up:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         tmp.write(up.read()); path = tmp.name
-    sel = st.selectbox("从文献库选择", [""] + ctx.files, key="read_sel")
+    sel_opts = ([""] + ctx.files) if ctx.files else [""]
+    sel = st.selectbox("从文献库选择", sel_opts, index=(1 if ctx.files else 0), key="read_sel")
     if not path and sel:
         # 依次查找：上传目录 → 官方测试 pdf 目录（演示语料常有同名原卷）
         for base in (UPLOAD_DIR, PDF_DIR):

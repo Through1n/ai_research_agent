@@ -175,14 +175,25 @@ writing / state），tools 将 Python 函数统一注册为 OpenAI Function Sche
 
 <!-- 4 AI 方案 -->
 <h1 class="sec page-break">4 AI 技术方案</h1>
-<h2>4.1 模型选型与理由</h2>
+<h2>4.1 模型选型与 Provider 抽象层</h2>
+<p>系统不绑定单一厂商：所有大模型经 <code>core/providers.py</code> 注册表统一接入（全部走 OpenAI 兼容协议，
+LLMClient 零改动复用），用户在侧边栏下拉即可<b>热切换</b>五类 Provider，并声明各自的多模态能力标志：</p>
 <table>
-<tr><th>类型</th><th>选型</th><th>选型理由</th></tr>
-<tr><td>文本 LLM</td><td>智谱 GLM-4-Flash（默认），可经环境变量切换 DeepSeek / Qwen / GPT 等任意 OpenAI 兼容端点</td><td>OpenAI 兼容协议、成本低、中文与工具调用稳定；免费额度友好，符合赛题「合理规划 API 费用、鼓励开源模型」的导向</td></tr>
-<tr><td>多模态 / OCR</td><td>GLM-4V，可扩展 Qwen2-VL / PaddleOCR / Marker</td><td>处理扫描件与复杂版式，完成图文、公式、表格识别；无 Key 时自动降级为原生文本层提示</td></tr>
-<tr><td>Embedding</td><td>Chroma 内置 ONNX 向量模型（all-MiniLM-L6-v2，384 维）</td><td>本地离线推理、免额外部署费用，天然满足「离线可复现」；支持 HF 镜像加速下载</td></tr>
-<tr><td>Rerank</td><td>可选 LLM 重排（编号排序法）</td><td>无需额外重排服务即可提升 top-k 精度，开关可控成本</td></tr>
+<tr><th>Provider</th><th>base_url</th><th>对话模型</th><th>视觉模型</th><th>多模态</th></tr>
+<tr><td>智谱 GLM（默认）</td><td>open.bigmodel.cn/api/paas/v4</td><td>glm-4-flash</td><td>glm-4v</td><td>✅</td></tr>
+<tr><td>DeepSeek</td><td>api.deepseek.com</td><td>deepseek-chat</td><td>—</td><td>❌（OCR 自动降级）</td></tr>
+<tr><td>通义千问</td><td>dashscope.aliyuncs.com/compatible-mode/v1</td><td>qwen-turbo</td><td>qwen-vl-plus</td><td>✅</td></tr>
+<tr><td>OpenAI</td><td>api.openai.com/v1</td><td>gpt-4o-mini</td><td>gpt-4o-mini</td><td>✅</td></tr>
+<tr><td>本地 Ollama</td><td>localhost:11434/v1</td><td>qwen2.5:7b</td><td>—</td><td>❌（完全离线免费）</td></tr>
 </table>
+<ul>
+<li><b>能力路由</b>：视觉任务（扫描件 OCR、图表理解）按 Provider 的 vl_model 自动路由；无视觉能力的 Provider 优雅降级为明确提示，不抛异常、不中断入库流程；</li>
+<li><b>密钥策略</b>：Key 优先级为「界面手填 &gt; 对应环境变量（ZHIPU_API_KEY / DEEPSEEK_API_KEY / DASHSCOPE_API_KEY / OPENAI_API_KEY）」，Ollama 本地服务免密钥；密钥仅存会话与后端，绝不下发前端；</li>
+<li><b>可扩展</b>：LLM_PROVIDERS_EXTRA 环境变量以 JSON 注册自定义 Provider（内网网关 / 私有化部署），不改一行代码；</li>
+<li>Embedding 固定用 Chroma 内置 ONNX 模型（all-MiniLM-L6-v2，384 维）本地推理，与 LLM 选型解耦，保证向量库跨 Provider 可复用。</li>
+</ul>
+<p>选型理由：默认智谱 GLM-4-Flash 免费、中文与工具调用稳定，符合赛题「合理规划 API 费用、鼓励开源/本地模型」导向；
+Provider 层让评审可用任意一家 Key 复现全部功能，也验证了架构的厂商无关性。</p>
 <h2>4.2 跨语言混合检索（Dense + Sparse + RRF + 重排）</h2>
 <p>学术场景的典型矛盾是：<b>文献是英文、提问是中文</b>，单一向量检索对「超参数、GPU 型号、BLEU 分数」这类
 精确词面反而不如关键词检索。系统为此构建了四段式检索管线：</p>
