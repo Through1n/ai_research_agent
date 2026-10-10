@@ -14,6 +14,7 @@
 """
 
 from pathlib import Path
+import sys
 
 from PyInstaller.utils.hooks import (
     collect_all,
@@ -57,6 +58,21 @@ datas.append((str(PROJECT / "assets" / "icon.ico"), "."))
 # streamlit 静态资源、frontend 等必须全部收集
 _streamlit_datas, _streamlit_bin, _streamlit_hidden = collect_all("streamlit")
 datas += _streamlit_datas
+
+# 强制锁定 conda 环境自带的匹配版本 OpenSSL DLL。
+# PyInstaller 会从 PATH 上误抓其它程序（Git/ucrt64 等）自带的旧版 libssl/libcrypto，
+# 与为本环境编译的 _ssl.pyd 版本不符，运行时报
+# "DLL load failed while importing _ssl: 找不到指定的程序"。
+# 放在 binaries 列表末尾以覆盖自动收集到的错误版本（目标目录 '.' = _internal 根）。
+_conda_bin = Path(sys.base_prefix) / "Library" / "bin"
+force_binaries = []
+for _dll in ("libssl-3-x64.dll", "libcrypto-3-x64.dll"):
+    _p = _conda_bin / _dll
+    if _p.exists():
+        force_binaries.append((str(_p), "."))
+        print(f"[spec] pin OpenSSL DLL: {_p}")
+    else:
+        print(f"[spec] WARN: conda OpenSSL DLL missing: {_p}")
 
 # chromadb 默认 embedding 模型/Tokenizers 等数据
 datas += collect_data_files("chromadb")
@@ -126,7 +142,7 @@ excludes = [
 a = Analysis(
     ["desktop/__main__.py"],
     pathex=[str(PROJECT)],
-    binaries=_streamlit_bin,
+    binaries=_streamlit_bin + force_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
