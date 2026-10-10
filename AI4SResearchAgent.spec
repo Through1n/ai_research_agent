@@ -74,8 +74,21 @@ for _dll in ("libssl-3-x64.dll", "libcrypto-3-x64.dll"):
     else:
         print(f"[spec] WARN: conda OpenSSL DLL missing: {_p}")
 
-# chromadb 默认 embedding 模型/Tokenizers 等数据
-datas += collect_data_files("chromadb")
+# chromadb / 本地向量库相关：这些包大量使用 importlib 动态加载（telemetry、
+# distance_functions、embedding function、onnx/tokenizers 后端），PyInstaller 静态
+# 分析扫不到，必须 collect_all 把全部子模块 + 数据 + 原生 DLL 收进来，否则冻结态报
+# "No module named 'chromadb.telemetry.product.posthog'" 等错误。
+_extra_hidden = []
+_extra_binaries = []
+for _pkg in ("chromadb", "onnxruntime", "tokenizers", "opentelemetry", "posthog"):
+    try:
+        _d, _b, _h = collect_all(_pkg)
+        datas += _d
+        _extra_binaries += _b
+        _extra_hidden += _h
+        print(f"[spec] collect_all({_pkg}): datas={len(_d)} bin={len(_b)} hidden={len(_h)}")
+    except Exception as _e:
+        print(f"[spec] skip collect_all({_pkg}): {_e}")
 
 # webview 后端子模块（edgechromium / winforms 等）
 webview_hidden = collect_submodules("webview")
@@ -86,6 +99,7 @@ hiddenimports = (
     _streamlit_hidden
     + _streamlit_hidden  # 防重复，去重在 Analysis 内部处理
     + webview_hidden
+    + _extra_hidden
     + [
         # 业务代码直接 import 的第三方
         "fitz",  # pymupdf
@@ -142,7 +156,7 @@ excludes = [
 a = Analysis(
     ["desktop/__main__.py"],
     pathex=[str(PROJECT)],
-    binaries=_streamlit_bin + force_binaries,
+    binaries=_streamlit_bin + _extra_binaries + force_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

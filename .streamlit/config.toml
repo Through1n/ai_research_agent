@@ -17,7 +17,7 @@ runOnSave = false
 
 [browser]
 gatherUsageStats = false
-openInExternalBrowser = false
+# openInExternalBrowser 已在 streamlit 1.63 移除，保留会刷 WARNING；headless=true 本就不开浏览器
 
 [client]
 showErrorDetails = true
