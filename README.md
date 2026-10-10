@@ -83,10 +83,11 @@ python scripts/watch_daemon.py 30          # （可选）arXiv 定期追踪守�
 
 ## 🚀 快速开始
 
-### 方式一：一键启动（Windows）
+### 方式一：双击静默启动（Windows，推荐）
 
-双击项目根目录的 **`启动科研助手.bat`**，浏览器自动打开 `http://localhost:8501`，
-点击侧边栏 **🚀 一键加载演示数据（v1/v7/BERT）** 即可开始全流程体验。
+双击项目根目录的 **`启动科研助手.vbs`** —— **全程无 CMD 黑窗口**：服务在后台隐藏拉起，
+就绪后自动打开浏览器 `http://localhost:8501`，点击侧边栏 **🚀 一键加载演示数据** 即可开始全流程体验。
+（`启动科研助手.bat` 为终端备用方式，会显示运行日志窗口，便于排查问题。）
 
 ### 方式二：手动启动（Conda）
 
@@ -118,8 +119,9 @@ ZHIPU_API_KEY=你的Key         # 智谱免费 Key：open.bigmodel.cn
 # DASHSCOPE_API_KEY=xxx       # 通义千问 qwen-turbo + qwen-vl-plus ✅
 # OPENAI_API_KEY=xxx          # gpt-4o-mini ✅
 # LLM_PROVIDER=ollama         # 本地 qwen2.5:7b，完全离线、无需真实 Key
-# 内网自定义网关：
-# LLM_PROVIDERS_EXTRA=[{"id":"mycloud","label":"公司内网","base_url":"http://10.0.0.8/v1","model":"qwen2.5-14b"}]
+# —— 任意其他 OpenAI 兼容端点：侧边栏「➕ 自定义端点」直接填写 Base URL + 模型名即可接入
+#   （vLLM / LM Studio / 硅基流动 / 校内网关……；也可用 JSON 注册：）
+# LLM_PROVIDERS_EXTRA=[{"id":"mycloud","label":"公司内网","base_url":"http://10.0.0.8/v1","model":"qwen2.5-14b","multimodal":false}]
 ```
 
 > ⚠️ 安全设计：API Key 仅经环境变量 / 侧边栏会话注入，**绝不**写入代码、前端页面或公开仓库；

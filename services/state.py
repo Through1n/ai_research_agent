@@ -10,7 +10,7 @@ from chromadb.utils import embedding_functions as chroma_ef
 from config import CHROMA_DIR, LIBRARY_JSON, MEMORY_JSON, PROFILE_JSON, LLM_TIMEOUT
 from core.llm import LLMClient
 from core.memory import Memory
-from core.providers import get_provider, resolve_key
+from core.providers import get_provider, resolve_key, custom_provider, CUSTOM_ID
 
 
 def _stem(word):
@@ -89,14 +89,25 @@ class Container:
         corpus = [tokenize(c["text"]) for c in self.chunks]
         return BM25Plus(corpus)
 
+    def _cur_provider(self):
+        if self.provider_id == CUSTOM_ID and getattr(self, "_custom_spec", None):
+            return custom_provider(self._custom_spec)
+        return get_provider(self.provider_id)
+
     def _build_llm(self, pid, manual_key=""):
-        p = get_provider(pid)
-        key = resolve_key(pid, manual_key)
+        p = custom_provider(self._custom_spec) if (pid == CUSTOM_ID and getattr(self, "_custom_spec", None)) else get_provider(pid)
+        key = resolve_key(p, manual_key)
         return LLMClient(key, p.base_url, p.model, p.vl_model, LLM_TIMEOUT)
 
-    def set_provider(self, pid, manual_key=""):
-        """切换大模型 Provider（智谱/DeepSeek/通义/OpenAI/Ollama）。"""
-        if pid != self.provider_id or manual_key != self.llm.api_key:
+    def set_provider(self, pid, manual_key="", custom_spec=None):
+        """切换大模型 Provider（预设：智谱/DeepSeek/通义/OpenAI/Ollama；或 custom + custom_spec 自定义端点）。"""
+        changed = False
+        if custom_spec is not None:
+            old = getattr(self, "_custom_spec", None)
+            if custom_spec != old or pid != self.provider_id:
+                self._custom_spec = custom_spec
+                changed = True
+        if pid != self.provider_id or manual_key != self.llm.api_key or changed:
             self.provider_id = pid
             self.llm = self._build_llm(pid, manual_key)
         return self.llm.available

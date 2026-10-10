@@ -97,18 +97,33 @@ def list_providers():
     return PROVIDERS + _extra_providers()
 
 
+CUSTOM_ID = "custom"
+
+
+def custom_provider(spec):
+    """从界面填写的端点描述构建 Provider（任意 OpenAI 兼容模型均可接入）。"""
+    vl = (spec.get("vl_model") or "").strip()
+    return Provider(
+        id=CUSTOM_ID, label="自定义端点",
+        base_url=(spec.get("base_url") or "").strip(), model=(spec.get("model") or "").strip(),
+        vl_model=vl, multimodal=bool(vl),
+        needs_key=bool(spec.get("needs_key", True)), key_env="LLM_API_KEY",
+        hint="OpenAI 兼容协议：vLLM / LM Studio / 硅基流动等任意网关均可",
+        models_hint=(spec.get("model") or "") + (f" / {vl}" if vl else ""),
+    )
+
+
+def resolve_key(prov, manual=""):
+    """Key 优先级：用户在界面手动填写 > 对应 Provider 的环境变量。"""
+    if manual and manual.strip():
+        return manual.strip()
+    if not prov.needs_key:
+        return "local"  # 本地/免密端点用占位值激活客户端
+    return os.getenv(prov.key_env, "") or os.getenv("LLM_API_KEY", "")
+
+
 def get_provider(pid):
     for p in list_providers():
         if p.id == pid:
             return p
     return PROVIDERS[0]  # 默认智谱
-
-
-def resolve_key(pid, manual=""):
-    """Key 优先级：用户在界面手动填写 > 对应 Provider 的环境变量。"""
-    p = get_provider(pid)
-    if manual and manual.strip():
-        return manual.strip()
-    if not p.needs_key:
-        return "ollama"  # 本地服务不校验密钥，占位激活即可
-    return os.getenv(p.key_env, "") or os.getenv("LLM_API_KEY", "")

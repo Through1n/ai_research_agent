@@ -185,11 +185,12 @@ LLMClient 零改动复用），用户在侧边栏下拉即可<b>热切换</b>五
 <tr><td>通义千问</td><td>dashscope.aliyuncs.com/compatible-mode/v1</td><td>qwen-turbo</td><td>qwen-vl-plus</td><td>✅</td></tr>
 <tr><td>OpenAI</td><td>api.openai.com/v1</td><td>gpt-4o-mini</td><td>gpt-4o-mini</td><td>✅</td></tr>
 <tr><td>本地 Ollama</td><td>localhost:11434/v1</td><td>qwen2.5:7b</td><td>—</td><td>❌（完全离线免费）</td></tr>
+<tr><td>➕ 自定义端点</td><td>任意 OpenAI 兼容 Base URL</td><td>任意模型名</td><td>任意视觉模型名（留空则降级）</td><td>按填写</td></tr>
 </table>
 <ul>
 <li><b>能力路由</b>：视觉任务（扫描件 OCR、图表理解）按 Provider 的 vl_model 自动路由；无视觉能力的 Provider 优雅降级为明确提示，不抛异常、不中断入库流程；</li>
 <li><b>密钥策略</b>：Key 优先级为「界面手填 &gt; 对应环境变量（ZHIPU_API_KEY / DEEPSEEK_API_KEY / DASHSCOPE_API_KEY / OPENAI_API_KEY）」，Ollama 本地服务免密钥；密钥仅存会话与后端，绝不下发前端；</li>
-<li><b>可扩展</b>：LLM_PROVIDERS_EXTRA 环境变量以 JSON 注册自定义 Provider（内网网关 / 私有化部署），不改一行代码；</li>
+<li><b>任意模型即填即用</b>：侧边栏「➕ 自定义端点」直接填写 Base URL + 对话模型 +（可选）视觉模型即可接入任意 OpenAI 兼容端点（vLLM / LM Studio / 硅基流动 / 校内网关……），无需改码或重启；LLM_PROVIDERS_EXTRA 环境变量亦可以 JSON 批量注册；</li>
 <li>Embedding 固定用 Chroma 内置 ONNX 模型（all-MiniLM-L6-v2，384 维）本地推理，与 LLM 选型解耦，保证向量库跨 Provider 可复用。</li>
 </ul>
 <p>选型理由：默认智谱 GLM-4-Flash 免费、中文与工具调用稳定，符合赛题「合理规划 API 费用、鼓励开源/本地模型」导向；
