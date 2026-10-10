@@ -4,6 +4,7 @@ import os
 import webbrowser
 
 import webview
+from webview.menu import MenuAction
 
 from desktop import paths
 from desktop.about import ABOUT_TEXT, APP_NAME, HOMEPAGE_URL
@@ -117,29 +118,30 @@ def open_window(port: int) -> None:
     """创建 1440x900（最小 1200x720）原生窗口并进入 WebView2 消息循环。"""
     url = f"http://127.0.0.1:{port}"
 
+    # pywebview 5.4 create_window 不支持 icon 参数；窗口/任务栏图标由 exe 自身决定
+    # （PyInstaller spec 已设置 icon=assets/icon.ico），开发模式使用默认图标。
     window = webview.create_window(
         title=APP_NAME,
         url=url,
         width=1440,
         height=900,
         min_size=(1200, 720),
-        icon=paths.resolve_icon(),
     )
 
     file_menu = webview.Menu(
         "文件",
         [
-            webview.MenuAction("打开数据目录", _open_data_dir),
-            webview.MenuAction("查看日志", _open_logs),
-            webview.MenuAction("退出", window.destroy),
+            MenuAction("打开数据目录", _open_data_dir),
+            MenuAction("查看日志", _open_logs),
+            MenuAction("退出", window.destroy),
         ],
     )
     help_menu = webview.Menu(
         "帮助",
         [
-            webview.MenuAction("项目主页", lambda: webbrowser.open(HOMEPAGE_URL)),
-            webview.MenuAction("检查更新", _check_update),
-            webview.MenuAction("关于", _about),
+            MenuAction("项目主页", lambda: webbrowser.open(HOMEPAGE_URL)),
+            MenuAction("检查更新", _check_update),
+            MenuAction("关于", _about),
         ],
     )
 
