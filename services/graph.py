@@ -349,24 +349,94 @@ def generate_review(ctx, G, metrics, cornerstone):
     return ctx.llm.chat([{"role": "user", "content": prompt}], temperature=0.4).content
 
 
+# Future Work 关键词抽取时忽略的停用词
+_FW_STOP = {"the", "a", "an", "of", "for", "and", "or", "on", "in", "with", "to",
+            "this", "that", "we", "our", "propose", "new", "using", "approach",
+            "method", "model", "network", "deep", "learning", "paper", "also",
+            "can", "could", "would", "should", "will", "by", "as", "at", "from",
+            "which", "these", "those", "it", "its", "is", "are", "be", "been",
+            "have", "has", "had", "not", "but", "if", "then", "than", "more",
+            "most", "such", "via", "based", "toward", "towards"}
+
+
+def _extract_fw_keywords(snippet, top_k=5):
+    """从 Future Work 段抽出英文关键词：正则 [A-Za-z]{{5,}}，去停用词，返回 top_k（按出现频次）。"""
+    if not snippet:
+        return []
+    words = re.findall(r"[A-Za-z]{5,}", snippet.lower())
+    freq = {}
+    for w in words:
+        if w in _FW_STOP:
+            continue
+        freq[w] = freq.get(w, 0) + 1
+    ranked = sorted(freq.items(), key=lambda x: -x[1])
+    return [w for w, _ in ranked[:top_k]]
+
+
+def _rule_predict_followup(ctx, G, n, keywords):
+    """用 G 的入边（谁引用了 n）预判 n 的 Future Work 是否已被跟进。
+
+    G 边方向：a→b 表示 a 引用 b。所以引用 n 的后续论文 = G.predecessors(n) = {m : m→n}。
+    返回 (status_str, reason)；无法判时返回 ("", "")。
+    """
+    if G is None or n not in G or not keywords:
+        return "", ""
+    try:
+        y_n = _node_year(ctx, n) or 0
+        for m in G.predecessors(n):
+            if m == n:
+                continue
+            y_m = _node_year(ctx, m) or 0
+            if y_m < y_n:
+                continue  # 引用 n 的论文比 n 还早，不是"后续跟进"
+            info_m = ctx.papers.get(m, {})
+            hay = (info_m.get("title", "") + " " + info_m.get("abstract", "")).lower()
+            hits = [kw for kw in keywords if kw in hay]
+            if len(hits) >= 2:
+                m_title = info_m.get("title", m)
+                return ("已被跟进（规则预判）",
+                        f"被后续论文《{m_title}》({info_m.get('year','')}) 引用，命中关键词：{', '.join(hits)}")
+    except Exception:
+        return "", ""
+    return "仍开放（规则预判）", "暂未在引用图中发现命中关键词的后续跟进论文"
+
+
 def explore_future(ctx, G):
-    """提取各文 Future Work，结合时间线与后续论文，自动排除已被解决的旧 idea。"""
+    """提取各文 Future Work，先用引用图做规则预判，再让 LLM 润色为表格。"""
     items = []
     for n in sorted(ctx.paper_order, key=lambda x: ctx.papers[x].get("year", "")):
         text = "\n".join(c["text"] for c in ctx.chunks if c["source"] == n)
         m = re.search(r"(future work|limitations|conclusion|展望).{0,1200}", text, re.IGNORECASE | re.DOTALL)
         snippet = m.group(0)[:1200] if m else text[-900:]
-        items.append(f"【{ctx.papers[n].get('title', n)} · {ctx.papers[n].get('year','')}】\n{snippet}")
+
+        # ---- 规则预判（新增） ----
+        pred_status, pred_reason = "", ""
+        try:
+            kws = _extract_fw_keywords(snippet)
+            pred_status, pred_reason = _rule_predict_followup(ctx, G, n, kws)
+        except Exception:
+            kws = []
+
+        head = f"【{ctx.papers[n].get('title', n)} · {ctx.papers[n].get('year','')}】"
+        if pred_status:
+            head += f"  [规则预判：{pred_status}；{pred_reason}]"
+            if kws:
+                head += f"  [抽取关键词：{', '.join(kws)}]"
+        items.append(f"{head}\n{snippet}")
+
     later = "\n".join(
         f"《{ctx.papers[n].get('title',n)}》({ctx.papers[n].get('year','')})摘要：{ctx.papers[n].get('abstract','')[:300]}"
         for n in ctx.paper_order)
     prompt = f"""下面按时间顺序给出多篇论文的 Future Work / 局限部分，以及后续发表论文的摘要。
-请完成"前沿扫描"：1) 逐条判断早期提出的未来方向是否已被后续论文解决或部分解决；
-2) 自动排除/标注已解决的旧 idea；3) 提炼出至今仍具探索价值的开放方向。
+其中每条 Future Work 上方已经由引用图谱给出"规则预判"状态（已被跟进 / 仍开放），并附命中关键词与跟进论文标题。
+请在该规则预判的基础上润色修正，不要从零判断：
+1) 逐条判断早期提出的未来方向是否已被后续论文解决或部分解决（若规则预判与你判断不一致，以你的语义判断为准并说明理由）；
+2) 自动排除/标注已解决的旧 idea；
+3) 提炼出至今仍具探索价值的开放方向。
 用中文 Markdown 表格输出，列：提出的方向(来源) | 状态(已解决/部分解决/仍开放) | 判断依据 | 探索价值。
 随后用项目符号列出 3-5 个真正值得做的未来方向。
 
-各文 Future Work：
+各文 Future Work（含规则预判先验）：
 {chr(10).join(items)[:6000]}
 
 后续/同期进展：
