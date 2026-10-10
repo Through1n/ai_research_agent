@@ -1,6 +1,6 @@
 """页面 6：学术写作与数据可视化 Copilot。CSV→图表+Figure Caption、无幻觉框架、四类拓扑图、中英学术翻译。"""
 import streamlit as st
-import streamlit.components.v1 as components
+from ui.common import embed_html
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -73,7 +73,7 @@ def _diagram_section(ctx):
         st.code(code, language=("mermaid" if k == "mermaid" else ("latex" if k == "tikz" else
               ("dot" if k == "graphviz" else "python"))))
         if k == "mermaid":
-            components.html(f'<div class="mermaid" style="display:flex;justify-content:center;">{code}</div>'
+            embed_html(f'<div class="mermaid" style="display:flex;justify-content:center;">{code}</div>'
                             '<script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";'
                             'mermaid.initialize({startOnLoad:true,flowchart:{useMaxWidth:false}});</script>',
                             height=600, scrolling=True)

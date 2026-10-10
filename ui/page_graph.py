@@ -1,9 +1,9 @@
 """页面 5：局域引用图谱与学术综述。真实引用关系、图论基石/边缘挖掘、自动综述、Future Work 前沿过滤。"""
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from services import graph as g
+from ui.common import embed_html
 
 
 def render(ctx):
@@ -24,7 +24,7 @@ def render(ctx):
 
     pack = st.session_state.graph_pack
     if pack:
-        components.html(pack["html"], height=560)
+        embed_html(pack["html"], height=560)
         m = pack["metrics"]
         df = pd.DataFrame({
             "论文": pack["nodes"],

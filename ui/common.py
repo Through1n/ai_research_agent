@@ -3,6 +3,16 @@ import json
 import streamlit as st
 
 
+def embed_html(html, height=600, scrolling=True):
+    """HTML 嵌入兼容层：优先 components.html，移除后自动降级 st.iframe。"""
+    import streamlit as _st
+    try:
+        import streamlit.components.v1 as _c
+        _c.html(html, height=height, scrolling=scrolling)
+    except Exception:
+        _st.iframe(html, height=height)
+
+
 def html_table(df):
     css = """<style>.ptable{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0;}
 .ptable th{background:linear-gradient(135deg,#3b6fb6,#2f5a96);color:#fff;padding:9px 12px;text-align:left;}

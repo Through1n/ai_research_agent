@@ -1,6 +1,6 @@
 """系统架构设计与技术创新亮点页面。"""
 import streamlit as st
-import streamlit.components.v1 as components
+from ui.common import embed_html
 
 
 _ARCH = """flowchart TD
@@ -31,7 +31,7 @@ _ARCH = """flowchart TD
 
 def render_arch(ctx):
     st.header("🏗️ 系统架构设计")
-    components.html(
+    embed_html(
         f'<div class="mermaid">{_ARCH}</div>'
         '<script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";'
         'mermaid.initialize({startOnLoad:true});</script>', height=720, scrolling=True)

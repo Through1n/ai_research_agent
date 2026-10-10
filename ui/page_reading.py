@@ -3,7 +3,7 @@ import os
 import re
 import tempfile
 import streamlit as st
-import streamlit.components.v1 as components
+from ui.common import embed_html
 
 from config import UPLOAD_DIR
 from services import parsing, writing
@@ -43,7 +43,7 @@ def render(ctx):
         p = st.number_input("页码", 1, tps, 1, key="np")
         if st.button("🎨 渲染该页", key="np_go"):
             h, pw, ph = native_page_html(doc, p)
-            components.html(h, height=min(int(ph * 1.18) + 30, 900), scrolling=True)
+            embed_html(h, height=min(int(ph * 1.18) + 30, 900), scrolling=True)
 
     # 2 同步滚动
     with tabs[1]:
@@ -60,7 +60,7 @@ def render(ctx):
                     zh = writing.translate_to_chinese(ctx, en[:1500])
                     pairs.append((en, zh)); pb.progress((i + 1) / len(paras))
                 pb.empty()
-                components.html(bilingual_html(pairs), height=760, scrolling=False)
+                embed_html(bilingual_html(pairs), height=760, scrolling=False)
 
     # 3 原位 PDF
     with tabs[2]:
@@ -83,7 +83,7 @@ def render(ctx):
             bm = [m.strip().replace("\n", " ") for m in bp.findall(full[:30000]) if len(m.strip()) > 30]
             rp = re.compile(rf"\[{re.escape(cit.strip('[]'))}\]\s*(.*?)(?=\n\s*\[|\Z)", re.DOTALL)
             rm = [m.strip().replace("\n", " ") for m in rp.findall(full[-20000:]) if 20 < len(m.strip()) < 800]
-            components.html(citation_jump_html(bm[0] if bm else "未找到正文位置。",
+            embed_html(citation_jump_html(bm[0] if bm else "未找到正文位置。",
                                                rm[0] if rm else "未找到参考文献条目。"),
                             height=560, scrolling=True)
 

@@ -107,6 +107,7 @@ print("✅ 正常数据科学代码放行")
 
 print("\n========== 6) arXiv 追踪增量检测 ==========")
 from services import track
+track.reset_checkpoints(ctx)
 items = [{"arxiv_id": "2510.00001", "title": "A"}, {"arxiv_id": "2510.00002", "title": "B"}]
 new1 = track.diff_new(ctx, "cs.AI", items)
 new2 = track.diff_new(ctx, "cs.AI", items)
