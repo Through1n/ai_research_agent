@@ -1,7 +1,9 @@
 """侧边栏：大模型接入（预设五家 / 自定义任意端点）、API Key、用户、导航菜单、演示数据。"""
+import os
+
 import streamlit as st
 
-from config import DEMO_PAPERS
+from config import DEMO_PAPERS, DESKTOP_MODE
 from core.providers import list_providers, get_provider, custom_provider, CUSTOM_ID
 from services import library
 from ui.common import memory_mb
@@ -22,6 +24,12 @@ MENU = [
 def render(ctx):
     with st.sidebar:
         st.title("🔬 AI4S 科研助手")
+
+        # 桌面版首次启动提示：无 API Key 时引导在下方「接入方式」配置（不弹窗、不跳转）
+        if DESKTOP_MODE and not os.getenv("ZHIPU_API_KEY") and not os.getenv("LLM_API_KEY") \
+                and not st.session_state.get("saved_api_key"):
+            with st.container(border=True):
+                st.warning("📌 尚未配置 API Key：请在下方「接入方式」选择平台并填入 Key；无 Key 也可使用底部按钮一键加载离线演示数据。")
 
         # ================= 大模型接入（OpenAI 兼容协议，任意模型热切换） =================
         provs = list_providers()
@@ -110,4 +118,5 @@ def render(ctx):
                 library.remove_paper(ctx, fn)
             st.success("已清空"); st.rerun()
         st.caption(f"💾 内存 {memory_mb()}")
+        st.caption("桌面版 v1.0")
     return menu

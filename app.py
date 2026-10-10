@@ -9,8 +9,10 @@ from services.state import get_container
 from ui.sidebar import render as render_sidebar
 from ui.common import safe_render
 from ui import page_agent, page_library, page_qa, page_reading, page_search, page_graph, page_writing, page_misc
+from ui import desktop_chrome
 
 st.set_page_config(page_title="AI4S 科研助手 Agent", page_icon="🔬", layout="wide")
+desktop_chrome.apply()
 
 ctx = get_container()
 menu = render_sidebar(ctx)

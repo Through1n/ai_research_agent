@@ -1,20 +1,57 @@
 """全局配置：路径、模型、常量。所有参数均可通过 .env / 环境变量覆盖。"""
 import os
+import sys
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
+# ---------- 桌面 / 开发双模式判定（见 desktop/INTERFACE_CONTRACT.md §3） ----------
+FROZEN = getattr(sys, "frozen", False)
+DESKTOP_MODE = FROZEN or os.environ.get("AI4S_DESKTOP") == "1"
+
 # 项目根目录（本文件所在目录）
 ROOT = Path(__file__).resolve().parent
-load_dotenv(ROOT / ".env")
+
+if FROZEN:
+    # 冻结打包态：只读资源来自 sys._MEIPASS，可写数据放 %APPDATA%
+    RESOURCE_ROOT = Path(sys._MEIPASS)
+    DATA_ROOT = Path(os.environ["APPDATA"]) / "AI4SResearchAgent"
+    ROOT = RESOURCE_ROOT                      # 保证 ROOT/lib、ROOT/.streamlit 等静态资源可读
+else:
+    # 开发态：资源与数据都在项目根，行为与历史完全一致
+    RESOURCE_ROOT = ROOT
+    DATA_ROOT = ROOT
 
 # ---------- 路径 ----------
-STORAGE_DIR = ROOT / "storage"
+STORAGE_DIR = DATA_ROOT / "storage"
 UPLOAD_DIR = STORAGE_DIR / "uploads"
 CHROMA_DIR = STORAGE_DIR / "chroma"
-PDF_DIR = ROOT / "pdf"
-DEMO_DIR = ROOT / "demo_data"
-for _d in (STORAGE_DIR, UPLOAD_DIR, CHROMA_DIR, PDF_DIR):
+# PDF 与存储同生命周期：桌面态归入 storage/pdf；纯开发态保持项目根 pdf/
+PDF_DIR = (DATA_ROOT / "storage" / "pdf") if DESKTOP_MODE else ROOT / "pdf"
+DEMO_DIR = RESOURCE_ROOT / "demo_data"
+LOGS_DIR = DATA_ROOT / "logs" if DESKTOP_MODE else ROOT / "storage"
+
+_mkdirs = [STORAGE_DIR, UPLOAD_DIR, CHROMA_DIR, PDF_DIR]
+if DESKTOP_MODE:
+    _mkdirs += [LOGS_DIR, DATA_ROOT / "config"]
+for _d in _mkdirs:
     _d.mkdir(parents=True, exist_ok=True)
+
+# ---------- .env 加载 ----------
+if DESKTOP_MODE:
+    # 桌面态：优先用户数据目录 .env；不存在时尝试从资源侧 .env.example 复制一份
+    _env_user = DATA_ROOT / ".env"
+    if not _env_user.exists():
+        _env_example = RESOURCE_ROOT / ".env.example"
+        if _env_example.exists():
+            try:
+                shutil.copyfile(_env_example, _env_user)
+            except OSError:
+                pass
+    load_dotenv(_env_user)                          # load_dotenv 不覆盖已有环境变量
+    load_dotenv(RESOURCE_ROOT / ".env")             # fallback：资源侧 .env（不覆盖用户侧）
+else:
+    load_dotenv(ROOT / ".env")
 
 LIBRARY_JSON = STORAGE_DIR / "library.json"
 MEMORY_JSON = STORAGE_DIR / "memory.json"

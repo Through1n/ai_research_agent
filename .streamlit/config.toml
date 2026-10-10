@@ -6,5 +6,19 @@ secondaryBackgroundColor = "#eef4fb"
 textColor = "#1d2733"
 font = "sans-serif"
 
+# 桌面壳（pywebview）内嵌时的服务器行为；纯浏览器开发同样可用
+[server]
+headless = true
+address = "127.0.0.1"
+baseUrlPath = ""
+enableCORS = false
+enableXsrfProtection = false
+runOnSave = false
+
 [browser]
 gatherUsageStats = false
+openInExternalBrowser = false
+
+[client]
+showErrorDetails = true
+toolbarMode = "minimal"
