@@ -1,6 +1,6 @@
 """页面 6：学术写作与数据可视化 Copilot。CSV→图表+Figure Caption、无幻觉框架、四类拓扑图、中英学术翻译。"""
 import streamlit as st
-from ui.common import embed_html
+from ui.common import embed_html, page_header
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -70,7 +70,8 @@ def _outline_section(ctx):
     st.subheader("✍️ 无幻觉论文框架")
     idea = st.text_area("输入 Idea", key="idea")
     if st.button("🧱 生成框架（引用本地真实文献）") and idea and ctx.llm.available:
-        st.session_state.outline = writing.generate_outline(ctx, idea)
+        with st.spinner("🧱 正在生成论文框架…"):
+            st.session_state.outline = writing.generate_outline(ctx, idea)
     if st.session_state.get("outline"):
         st.markdown(st.session_state["outline"])
 
@@ -81,7 +82,8 @@ def _diagram_section(ctx):
     kind = c1.selectbox("类型", ["mermaid", "tikz", "graphviz", "matplotlib"])
     topic = c2.text_input("主题", key="topic")
     if st.button("🎨 生成代码") and topic and ctx.llm.available:
-        st.session_state.diagram = (kind, writing.diagram(ctx, kind, topic))
+        with st.spinner("🎨 正在生成拓扑图代码…"):
+            st.session_state.diagram = (kind, writing.diagram(ctx, kind, topic))
     if st.session_state.get("diagram"):
         k, code = st.session_state.diagram
         st.code(code, language=("mermaid" if k == "mermaid" else ("latex" if k == "tikz" else
@@ -107,7 +109,7 @@ def _translate_section(ctx):
 
 
 def render(ctx):
-    st.header("✍️ 学术写作与可视化")
+    page_header("✍️ 学术写作与可视化", "CSV→图表+Figure Caption、无幻觉论文框架、四类拓扑图、中英学术翻译。")
     _csv_section(ctx)
     st.markdown("---"); _outline_section(ctx)
     st.markdown("---"); _diagram_section(ctx)

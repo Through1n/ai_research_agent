@@ -3,12 +3,11 @@ import pandas as pd
 import streamlit as st
 
 from services import graph as g
-from ui.common import embed_html, require_library
+from ui.common import embed_html, require_library, page_header, render_styled_table
 
 
 def render(ctx):
-    st.header("🕸️ 引用图谱与综述")
-    st.caption("自动解析论文间真实引用关系，PageRank/中心性挖掘基石论文，结合时间线过滤已被解决的旧 idea。")
+    page_header("🕸️ 引用图谱与综述", "自动解析论文间真实引用关系，PageRank/中心性挖掘基石论文，结合时间线过滤已被解决的旧 idea。")
     st.session_state.setdefault("graph_pack", None)
 
     if not require_library(ctx):

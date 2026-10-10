@@ -4,6 +4,7 @@ import streamlit as st
 
 from services import extern
 from tools import definitions as df
+from ui.common import page_header
 
 # 用户画像（中文领域标签）→ 英文论文关键词映射，用于个性化加权
 _DOMAIN_EN = {
@@ -18,7 +19,8 @@ def _arxiv(ctx):
     st.subheader("📚 arXiv 检索 / 下载")
     q = st.text_input("标题 / 关键词 / ID", key="aq")
     if st.button("🔍 搜索 arXiv") and q:
-        st.session_state.arxiv_res = extern.search_arxiv(q, 5)
+        with st.spinner("🔍 正在检索 arXiv…"):
+            st.session_state.arxiv_res = extern.search_arxiv(q, 5)
     for i, p in enumerate(st.session_state.get("arxiv_res", [])):
         st.markdown(f"**{p['title']}**（{p['published']}，{p['arxiv_id']}")
         st.caption(p["summary"][:260])
@@ -164,7 +166,7 @@ def _track(ctx):
 
 
 def render(ctx):
-    st.header("🔍 论文自动检索、追踪与推荐")
+    page_header("🔍 论文自动检索、追踪与推荐", "arXiv/PubMed/网页批量检索、引用含金量筛选、个性化推荐、动态追踪订阅。")
     _track(ctx)
     st.markdown("---"); _recommend(ctx)
     st.markdown("---"); _arxiv(ctx)

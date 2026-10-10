@@ -6,7 +6,7 @@ import streamlit as st
 
 from config import UPLOAD_DIR
 from services import library, parsing
-from ui.common import html_table, resolve_pdf
+from ui.common import html_table, resolve_pdf, page_header, render_styled_table
 
 
 def _init():
@@ -20,8 +20,7 @@ def _init():
 
 def render(ctx):
     _init()
-    st.header("📁 文献库管理")
-    st.caption("基于内容 embedding 的语义去重（识别 arXiv v1/v7）、版本管理、细粒度多模态解析。")
+    page_header("📁 文献库管理", "基于内容 embedding 的语义去重（识别 arXiv v1/v7）、版本管理、细粒度多模态解析。")
 
     # ---------------- 上传 & 语义查重 ----------------
     st.subheader("⬆️ 上传 PDF（自动语义查重 / 扫描件 OCR）")
@@ -51,13 +50,13 @@ def render(ctx):
             st.caption(f"🔎 判定依据：{pend['dup_evidence']}（基于正文内容指纹，非文件名）")
         st.caption("💡 建议：若为同一论文的早期版本，优先「覆盖旧版（保留新版）」以保持文献库时效性。")
         c1, c2, c3 = st.columns(3)
-        if c1.button("覆盖旧版（保留新版）"):
+        if c1.button("♻️ 覆盖旧版（保留新版）"):
             p = library.commit(ctx, pend, replace=pend["dup_name"])
             st.success(f"✅ 已覆盖：{p['filename']}"); st.session_state.pending = None; st.rerun()
-        if c2.button("保留两个版本"):
+        if c2.button("🗂️ 保留两个版本"):
             p = library.commit(ctx, pend)
             st.success("✅ 已同时保留两版，可在下方查看版本建议。"); st.session_state.pending = None; st.rerun()
-        if c3.button("取消"):
+        if c3.button("❌ 取消"):
             st.session_state.pending = None; st.rerun()
 
     st.markdown("---")
@@ -79,7 +78,8 @@ def render(ctx):
                 lb = sum(1 for b in blocks if b[0] < pw / 2); rb = sum(1 for b in blocks if b[0] > pw / 2)
                 layout = "双栏" if lb and rb else "单栏"
                 prompt = f"从首页抽取 标题/作者/机构/摘要，输出纯净 JSON。页面 {pw:.0f}×{ph:.0f}，{layout}。\n文本：{first}"
-                st.session_state.meta_view = ctx.llm.json_chat([{"role": "user", "content": prompt}])
+                with st.spinner("🤖 正在抽取元数据…"):
+                    st.session_state.meta_view = ctx.llm.json_chat([{"role": "user", "content": prompt}])
                 doc.close()
         if st.session_state.meta_view:
             st.json(st.session_state.meta_view)
@@ -95,16 +95,17 @@ def render(ctx):
             if not _p:
                 st.info("该论文为内置演示语料（无原始 PDF），版式级解析不适用；问答与图谱功能不受影响。")
             else:
-                doc = parsing.open_doc(_p)
-                toc = parsing.extract_toc(doc)
-                tables = parsing.extract_tables(doc)
-                fig_dir = os.path.join(str(UPLOAD_DIR), "figs", sf.replace(".pdf", ""))
-                figs = parsing.extract_figures(doc, fig_dir)
-                if with_vision and ctx.llm.available and figs:
-                    pb = st.progress(0.0)
-                    parsing.describe_figures(figs, ctx.llm, lambda r: pb.progress(min(r, 1.0)))
-                    pb.empty()
-                doc.close()
+                with st.spinner("🧩 正在解析标题树/表格/图表…"):
+                    doc = parsing.open_doc(_p)
+                    toc = parsing.extract_toc(doc)
+                    tables = parsing.extract_tables(doc)
+                    fig_dir = os.path.join(str(UPLOAD_DIR), "figs", sf.replace(".pdf", ""))
+                    figs = parsing.extract_figures(doc, fig_dir)
+                    if with_vision and ctx.llm.available and figs:
+                        pb = st.progress(0.0)
+                        parsing.describe_figures(figs, ctx.llm, lambda r: pb.progress(min(r, 1.0)))
+                        pb.empty()
+                    doc.close()
                 st.session_state.struct = {"file": sf, "toc": toc, "tables": tables, "figs": figs}
 
         stobj = st.session_state.struct
@@ -153,7 +154,7 @@ def render(ctx):
         p = ctx.papers[fn]
         c1, c2 = st.columns([6, 1])
         c1.markdown(f"**{p.get('title', fn)}** `{p.get('version','')}` · {fn} · {p.get('year','')}")
-        if c2.button("删除", key=f"rm_{fn}"):
+        if c2.button("🗑️ 删除", key=f"rm_{fn}"):
             library.remove_paper(ctx, fn); st.rerun()
 
     st.markdown("---")

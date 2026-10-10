@@ -1,7 +1,7 @@
 """页面 0：Agent 总助手。对话式驱动完整 Agent（规划→路由→函数调用→溯源答案），实时渲染执行轨迹。"""
 import streamlit as st
 from core import agent
-from ui.common import render_trace
+from ui.common import render_trace, page_header
 
 
 SUGGEST = [
@@ -14,8 +14,7 @@ SUGGEST = [
 
 
 def render(ctx):
-    st.header("🤖 Agent 总助手")
-    st.caption("意图驱动：自动任务规划、多智能体路由、Function Calling 工具闭环，答案带内联引用与溯源。")
+    page_header("🤖 Agent 总助手", "意图驱动：自动任务规划、多智能体路由、Function Calling 工具闭环，答案带内联引用与溯源。")
 
     if "agent_runs" not in st.session_state:
         st.session_state.agent_runs = []

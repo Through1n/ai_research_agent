@@ -1,7 +1,7 @@
 """页面 2：抗幻觉跨文献问答。混合检索 + 重排，答案内联【n】引用，下方给出编号溯源锚点。"""
 import streamlit as st
 from services import rag
-from ui.common import source_card, require_library
+from ui.common import source_card, require_library, page_header
 
 
 EX = ["这篇论文提出了什么模型？", "训练用了什么 GPU？数量和型号？",
@@ -10,8 +10,7 @@ EX = ["这篇论文提出了什么模型？", "训练用了什么 GPU？数量�
 
 
 def render(ctx):
-    st.header("💬 跨文献问答与溯源")
-    st.caption("Dense+Sparse 混合检索 → RRF 融合 → 可选 LLM 重排；每个结论带【n】内联引用与原文锚点。")
+    page_header("💬 跨文献问答与溯源", "Dense+Sparse 混合检索 → RRF 融合 → 可选 LLM 重排；每个结论带【n】内联引用与原文锚点。")
     require_library(ctx)
     st.session_state.setdefault("qa_runs", [])
     st.session_state.setdefault("qa_q", "")

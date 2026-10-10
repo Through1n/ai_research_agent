@@ -3,6 +3,19 @@ import json
 import streamlit as st
 
 
+def page_header(title: str, caption: str):
+    """统一页面顶部：大标题 + 一句话说明。各 page.render 第一行调用。"""
+    st.header(title)
+    st.caption(caption)
+
+
+def render_styled_table(df, title: str = ""):
+    """轻量美化表格：title 可选，统一 use_container_width=True。"""
+    if title:
+        st.markdown(f"##### {title}")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+
 def embed_html(html, height=600, scrolling=True):
     """HTML 嵌入兼容层：优先 components.html，移除后自动降级 st.iframe。"""
     import streamlit as _st

@@ -3,7 +3,7 @@ import os
 import re
 import tempfile
 import streamlit as st
-from ui.common import embed_html
+from ui.common import embed_html, page_header
 
 from config import UPLOAD_DIR, PDF_DIR
 from services import parsing, writing
@@ -38,7 +38,7 @@ def _page_paragraphs(doc, page):
 
 
 def render(ctx):
-    st.header("📖 版式阅读与智能翻译")
+    page_header("📖 版式阅读与智能翻译", "原生坐标渲染、中英同步滚动、原位 PDF 叠加中文、引用双向跳转、划词翻译、标题树。")
     # 溯源卡片点击跳转：从 query_params 读取 paper 预下拉选中
     qp = st.query_params
     if "paper" in qp and ctx.files:

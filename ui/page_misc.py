@@ -1,6 +1,6 @@
 """系统架构设计与技术创新亮点页面。"""
 import streamlit as st
-from ui.common import embed_html
+from ui.common import embed_html, page_header
 
 
 # 纯 HTML/CSS 分层架构图：不依赖任何外部 CDN，评审离线环境同样可渲染
@@ -47,7 +47,7 @@ _ARCH_HTML = """
 
 
 def render_arch(ctx):
-    st.header("🏗️ 系统架构设计")
+    page_header("🏗️ 系统架构设计", "四层架构：交互层 → Agent 内核 → 工具/服务层 → 存储层，数据流与 Function Calling 闭环。")
     embed_html(_ARCH_HTML, height=620, scrolling=False)
     st.markdown("""
 **分层与数据流**
@@ -77,6 +77,6 @@ _INNOV = [
 
 
 def render_innov(ctx):
-    st.header("💡 技术创新亮点")
+    page_header("💡 技术创新亮点", "12 项工程与算法创新：Agent 闭环、多模型 Provider、混合检索抗幻觉、图论挖掘等。")
     for i, (t, d) in enumerate(_INNOV, 1):
         st.markdown(f"**{i}. {t}**\n\n{d}")
