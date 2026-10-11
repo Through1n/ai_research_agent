@@ -1,8 +1,10 @@
 """页面 6：学术写作与数据可视化 Copilot。
 
 本轮整改（对应 docs/audit_report_20261010.md 第五节 E 路）：
-- 5.1 无幻觉 References：生成后**自动**跑白名单校验，幻觉用 st.error 明确列出并提供
-  「重新生成（强化约束）」按钮；校验通过才 st.success；文献库为空时不生成占位引用；
+- 5.1 无幻觉 References： References 章节由 services.writing 用白名单**确定性拼接**
+  （不经过 LLM），UI 逐条展示条目来源何篇入库 PDF 的参考文献表；生成后**自动**跑白名单
+  校验，幻觉/章节缺失用 st.error 明确列出并提供「重新生成（强化约束）」按钮；占位串残留
+  显式告警；文献库为空时不生成占位引用；
 - 5.2 TikZ：尝试本地编译成 PNG 真实渲染，无编译器时降级为源码 + 在线编辑器链接；
 - 5.3 Graphviz：dot -Tsvg → networkx+matplotlib → 零依赖 DOT→SVG 三级降级渲染；
 - 5.4 CSV 自动出图：上传即按列类型自动渲染推荐图表（附推荐依据），手动选择收进折叠区；
@@ -38,6 +40,7 @@ _SS_DEFAULTS = {
     "ref_source": "自动（文献库首篇）",
     "outline": "",
     "outline_meta": None,
+    "outline_cache": {},
     "diagram": None,
     "dg_kind": "mermaid",
     "tikz_cache": {},
@@ -207,8 +210,50 @@ def _csv_section(ctx):
 
 
 # ---------------------------------------------------------------- 无幻觉大纲（T1）
+def _render_reference_provenance(refs, source):
+    """逐条展示 References 及其来源（R6-T4）。
+
+    赛题卖点是「真实无幻觉 References」，评委要看的不是"我们说它没幻觉"，而是
+    **每一条都能追溯到某篇入库 PDF 的参考文献表**。这里把编号/作者/标题/年份/来路
+    摊平成表格，并标注这些条目是系统确定性拼接的（不经过大模型）。
+    """
+    refs = refs or []
+    if not refs:
+        st.error("📭 本次没有可用的真实文献（文献库为空或 PDF 未抽出 References 段），"
+                 "系统**不会**生成任何占位/编造引用。请先到「📁 文献库管理」上传 PDF。")
+        return
+    src_files = sorted({str(r.get("source_pdf") or "").strip() for r in refs
+                        if str(r.get("source_pdf") or "").strip()})
+    where = "、".join(src_files) if src_files else "（未知来源）"
+    st.success(f"🔒 **References 章节共 {len(refs)} 条，全部为确定性拼接**："
+               f"编号 [1..{len(refs)}] 逐条照抄自「{where}」正文末尾的 References 段，"
+               f"未经大模型改写或生成，因此不存在编造空间。")
+    rows = []
+    for i, r in enumerate(refs, 1):
+        rows.append({
+            "#": i,
+            "作者": str(r.get("authors") or "")[:70] or "（见原文）",
+            "标题": str(r.get("title") or r.get("raw") or "")[:140],
+            "年份": str(r.get("year") or ""),
+            "出处": str(r.get("venue") or "")[:60],
+            "来路 PDF": str(r.get("source_pdf") or where)[:40],
+        })
+    try:
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    except Exception as e:                       # 不同 streamlit 版本的参数差异
+        st.table(pd.DataFrame(rows[:40]))
+        st.caption(f"（表格参数降级：{type(e).__name__}）")
+    with st.expander("📄 查看完整 References 条目文本", expanded=False):
+        st.markdown("\n\n".join("- " + writing._ref_line(i, r) for i, r in enumerate(refs, 1)))
+    label = str(source or "—")
+    if label.startswith("⚠️"):
+        st.warning("抽取质量提示：" + label)
+    else:
+        st.caption("📚 引用白名单来源：" + label)
+
+
 def _outline_section(ctx):
-    st.subheader("✍️ 无幻觉论文框架（生成后自动白名单校验）")
+    st.subheader("✍️ 无幻觉论文框架（References 确定性拼接 + 白名单校验）")
     files = list(getattr(ctx, "paper_order", []) or [])
     if not files:
         st.error("📭 **请先上传文献到「📁 文献库管理」**（或在左侧点击「🚀 一键加载演示数据」）。"
@@ -220,10 +265,21 @@ def _outline_section(ctx):
     preferred = None if str(src).startswith("自动") else str(src)
 
     def _gen(strict):
-        with st.spinner("🧱 正在生成论文框架…"):
+        cache = st.session_state.get("outline_cache") or {}
+        key = (str(idea), str(preferred), bool(strict))
+        cached = cache.get(key)
+        if cached is not None and not strict:
+            st.session_state.outline = cached.get("text", "") or ""
+            st.session_state.outline_meta = cached
+            st.caption("⚡ 相同 Idea + 相同文献来源命中缓存，直接复用上次结果（未重新调用大模型）。")
+            return
+        with st.spinner("🧱 正在生成论文框架（References 部分不占用生成时间）…"):
             res = writing.generate_outline_verified(ctx, idea, preferred=preferred, strict=strict)
         st.session_state.outline = res.get("text", "") or ""
         st.session_state.outline_meta = res
+        if res.get("text") and not res.get("empty_library"):
+            cache[key] = res
+            st.session_state.outline_cache = cache
 
     if st.button("🧱 生成框架（引用真实文献）"):
         if not idea:
@@ -235,26 +291,49 @@ def _outline_section(ctx):
 
     meta = st.session_state.get("outline_meta") or {}
     text = st.session_state.get("outline") or ""
+    refs = meta.get("refs") or []
+    if meta.get("elapsed_sec"):
+        st.caption(f"⏱️ 本次生成耗时 {meta.get('elapsed_sec')}s"
+                   + ("（References 由系统确定性拼接，未占用生成时间）"
+                      if meta.get("references_deterministic") else ""))
     if not text:
         return
     st.markdown(text)
-    refs = meta.get("refs") or []
-    st.caption("📚 引用白名单来源：" + (meta.get("source") or "—") + f"（共 {len(refs)} 条真实条目）")
+
+    # —— T4：References 溯源展示 ——
+    st.markdown("#### 🔎 References 溯源（每条都能追到入库 PDF 的参考文献表）")
     if meta.get("empty_library"):
-        st.error("📭 文献库为空，未生成任何引用。请先上传文献到「📁 文献库管理」。")
+        _render_reference_provenance([], meta.get("source"))
         return
+    _render_reference_provenance(refs, meta.get("source"))
+
+    # —— T2：占位串残留必须显式告知，不静默输出 ——
+    ph = meta.get("placeholder_issues") or []
+    if ph:
+        st.error(f"🧹 正文中仍检测到 {len(ph)} 处占位内容（已尽力清理，请人工复核或重新生成）：")
+        for h in ph[:10]:
+            st.markdown(f"- 第 {h.get('line_no')} 行 `{str(h.get('fragment', ''))[:60]}`"
+                        f"（{h.get('rule')}）：…{str(h.get('line', ''))[:120]}…")
+    elif meta.get("references_deterministic"):
+        st.info("🧹 占位串扫描：全文未发现 `[Placeholder]` / `TODO` / `[1..N]` 等占位内容。")
+
+    # —— 白名单校验：不通过必须明确列出 ——
     v = meta.get("validation")
     if not v:
         st.info("本次未执行白名单校验（可能未返回正文内容）。")
         return
     if v.get("ok"):
         st.success(f"✅ 引用白名单校验通过：{v.get('n_citations', 0)} 处 [n] 角标、"
-                   f"{v.get('n_entries', 0)} 条 References 条目，全部命中 {v.get('n_allowed', 0)} 条真实文献。")
+                   f"{v.get('n_entries', 0)} 条 References 条目，"
+                   f"全部命中 {v.get('n_allowed', 0)} 条真实文献。")
         return
     hall = v.get("hallucinated") or []
-    st.error(f"🚨 检测到 {len(hall)} 条疑似编造文献/越界角标：")
+    st.error(f"🚨 检测到 {len(hall)} 条疑似编造文献/越界角标/章节缺失：")
     for h in hall[:10]:
         st.markdown(f"- `[{h.get('kind','?')}]` {str(h.get('text',''))[:140]} —— {h.get('reason','')}")
+    if v.get("n_allowed"):
+        st.caption(f"参考：本次真实文献白名单共 {v.get('n_allowed')} 条，"
+                   f"允许的引用角标范围是 [1..{v.get('n_allowed')}]。")
     if st.button("🔁 重新生成（强化约束）"):
         if not writing.llm_available(ctx):
             st.warning("未配置 API Key，无法调用大模型。")

@@ -216,6 +216,14 @@ def group_ocr(env: dict, only: set, skip: set) -> None:
 
 # ======================================================== 用例组 2: 细粒度问答
 
+# 占位符泄漏特征串：命中即说明模型偷懒没真生成（如曾实测出现的
+# 「[1-40] (List all the references...)」和「[Placeholder]」）
+PLACEHOLDER_PATTERNS = [
+    "[placeholder]", "(list all", "list the references as per",
+    "[1-40]", "[insert", "todo", "tbd", "xxx",
+]
+
+
 # 赛题原文点名的细粒度问题——评委现场最可能问的就是这些
 FINEDRAINED_CASES = [
     {
@@ -252,8 +260,11 @@ def group_qa(env: dict, only: set, skip: set) -> None:
 
         t0 = time.time()
         ctx = ensure_papers("1706.03762v7.pdf")
-        record("qa", "v7 入库", True,
-               f"{len(getattr(ctx, 'chunks', []))} chunks / {time.time() - t0:.1f}s")
+        n_chunks = len(getattr(ctx, "chunks", []))
+        # 不能硬编码 True：入库失败会让后续所有问答退化成拒答，必须先卡住
+        record("qa", "v7 入库", n_chunks > 0,
+               f"{n_chunks} chunks / {time.time() - t0:.1f}s",
+               "" if n_chunks else "入库后 chunks 为 0，后续问答结果不可信")
 
         for c in FINEDRAINED_CASES:
             try:
@@ -262,12 +273,16 @@ def group_qa(env: dict, only: set, skip: set) -> None:
                 ans = res.get("answer", "") if isinstance(res, dict) else str(res)
                 srcs = res.get("sources", []) if isinstance(res, dict) else []
                 hit = [e for e in c["expect"] if e in ans]
-                ok = len(hit) >= 1
-                evidence = (f"{'命中' if hit else '未命中'}期望值 {c['expect']}"
-                            f"（实际命中 {hit}）/ {len(ans)}字 / {time.time() - t0:.1f}s / "
+                miss = [e for e in c["expect"] if e not in ans]
+                # 必须全部命中：只命中 1 个属于"答了一半"，对该问法不合格
+                # （β1/β2 只答一个、BLEU 只给英德不给英法，评委照样算错）
+                ok = len(hit) == len(c["expect"])
+                evidence = (f"命中 {hit}"
+                            f"{'（遗漏 ' + str(miss) + '）' if miss else ''}"
+                            f" / 期望 {c['expect']} / {len(ans)}字 / {time.time() - t0:.1f}s / "
                             f"溯源 {len(srcs)} 条")
                 record("qa", f"问答：{c['q'][:28]}…", ok, evidence,
-                       "" if ok else "答案未包含期望数值——可能是幻觉或检索未命中")
+                       "" if ok else f"遗漏期望值 {miss}——回答不完整或检索未命中")
 
                 # 溯源锚点必须存在（赛题硬性要求）
                 if srcs:
@@ -350,9 +365,18 @@ def group_compare(env: dict, only: set, skip: set) -> None:
         t0 = time.time()
         res = answer(ctx, q)
         ans = res.get("answer", "") if isinstance(res, dict) else str(res)
-        ok = ("BERT" in ans or "bert" in ans.lower()) and len(ans) > 100
+        # 只检查"提到了 BERT"太松：那可能只是顺带一提，并非真正的对比。
+        # 真正的跨文献对比必须同时论及双方的特征实体。
+        low = ans.lower()
+        need_tf = ["transformer", "attention", "encoder"]
+        need_bert = ["bert", "bidirectional", "masked", "pre-train", "pretrain"]
+        hit_tf = [k for k in need_tf if k in low]
+        hit_bert = [k for k in need_bert if k in low]
+        ok = bool(hit_tf) and bool(hit_bert) and len(ans) > 200
         record("compare", "跨文献对比问答", ok,
-               f"{len(ans)}字 / {time.time() - t0:.1f}s / 是否提及 BERT={'BERT' in ans}")
+               f"{len(ans)}字 / {time.time() - t0:.1f}s / "
+               f"Transformer侧命中{hit_tf} / BERT侧命中{hit_bert}",
+               "" if ok else f"未构成双向对比：Transformer侧{hit_tf}、BERT侧{hit_bert}")
     except Exception as e:
         record("compare", "多篇跨文献对比", False, f"异常：{type(e).__name__}: {e}")
 
@@ -390,9 +414,14 @@ def group_write(env: dict, only: set, skip: set) -> None:
         df = pd.DataFrame({"epoch": range(1, 11),
                            "acc": [0.60 + 0.03 * i for i in range(10)]})
         facts = chart_facts(df, x="epoch", y="acc")
-        has_num = bool(facts) and any(ch.isdigit() for ch in str(facts))
-        record("write", "Figure Caption 事实抽取", has_num,
-               f"facts 前150字：{str(facts)[:150]!r}")
+        fstr = str(facts)
+        # any(isdigit) 太松：随便一个页码都会命中。真正的抗幻觉要求是
+        # caption 里的数字必须能在源数据里对得上，否则就是编造。
+        real_vals = {"0.60", "0.87", "0.63", "0.60", "10"}
+        matched = [v for v in real_vals if v in fstr]
+        record("write", "Figure Caption 事实抽取", len(matched) >= 2,
+               f"源数据真值命中 {matched}（要求≥2）/ facts 前120字：{fstr[:120]!r}",
+               "" if len(matched) >= 2 else "facts 未包含可在 df 中核对的真实数值")
     except Exception as e:
         record("write", "Figure Caption 事实抽取", False, f"异常：{type(e).__name__}: {e}")
 
@@ -409,8 +438,29 @@ def group_write(env: dict, only: set, skip: set) -> None:
         t0 = time.time()
         out = generate_outline_verified(ctx, "Efficient attention for long documents")
         txt = out.get("text", "") if isinstance(out, dict) else str(out)
-        record("write", "论文框架生成", len(txt) > 200,
-               f"{len(txt)}字 / {time.time() - t0:.1f}s / 校验={out.get('ok') if isinstance(out,dict) else '?'}")
+        dt = time.time() - t0
+
+        # 只验长度会被占位符骗过：实测曾生成 4515 字但 References 是
+        # 「[1-40] (List all the references...)」，长度断言照样 PASS。
+        # 必须拆成三条实质断言：结构完整 / 无占位 / References 是真条目。
+        low = txt.lower()
+        has_ref_sec = ("references" in low) or ("参考文献" in txt)
+        placeholders = [p for p in PLACEHOLDER_PATTERNS if p.lower() in low]
+        # 真实条目形如 "[1] Jimmy Lei Ba, ... Layer normalization. arXiv..., 2016."
+        import re as _re
+        ref_items = _re.findall(r"^\s*\[\d+\]\s*\S{10,}", txt, flags=_re.M)
+
+        record("write", "论文框架·章节完整性", has_ref_sec,
+               f"{len(txt)}字 / {dt:.1f}s / 含 References 章节={has_ref_sec}",
+               "" if has_ref_sec else "未生成 References 章节——赛题模块六硬性要求")
+        record("write", "论文框架·无占位符残留", not placeholders,
+               f"检出占位串 {placeholders}" if placeholders else "零占位串",
+               "" if not placeholders else f"占位符泄漏 {placeholders}，现场会被一眼看穿")
+        record("write", "论文框架·References 为真实条目", len(ref_items) >= 3,
+               f"解析出 {len(ref_items)} 条真实文献条目（要求≥3）"
+               + (f" / 示例：{ref_items[0][:90]}" if ref_items else ""),
+               "" if len(ref_items) >= 3
+               else "References 非真实条目（可能是占位指令），核心卖点『无幻觉 References』不成立")
     except Exception as e:
         record("write", "论文框架生成", False, f"异常：{type(e).__name__}: {e}")
 
@@ -431,15 +481,34 @@ def group_graph(env: dict, only: set, skip: set) -> None:
         # 注意：build_graph 返回 (G, edges) 二元组
         G, edges = build_graph(ctx)
         m = analyze(G)
-        record("graph", "图谱构建", G.number_of_nodes() > 0,
-               f"{G.number_of_nodes()} 节点 / {G.number_of_edges()} 边")
-        rev = generate_review(ctx, G, m, None)
-        record("graph", "自动综述生成", len(str(rev)) > 200,
-               f"{len(str(rev))}字 / 前80字：{str(rev).strip()[:80]!r}")
+        n_nodes, n_edges = G.number_of_nodes(), G.number_of_edges()
+        # 只断言 nodes>0 会被 2 节点图糊弄过去，而赛题要求的是「批量文献（如 20 篇）」。
+        # 语料不足时如实标出规模，不冒充已验证大图。
+        record("graph", "图谱构建", n_nodes >= 2 and n_edges >= 1,
+               f"{n_nodes} 节点 / {n_edges} 边 / 簇数={len(m.get('communities', [])) if isinstance(m, dict) else '?'}",
+               "" if n_nodes >= 3 else
+               f"⚠️ 语料仅 {n_nodes} 个逻辑节点（pdf/ 下 v1 与 v7 会被版本合并），"
+               f"未达赛题『20 篇批量文献』规模，本条只证明链路通、不证明规模能力")
+
+        rev = str(generate_review(ctx, G, m, None))
+        import re as _re
+        # 综述必须真的用上时间线/论文名，而不是「无数据无法描述」
+        years_in_rev = _re.findall(r"(19|20)\d{2}", rev)
+        degraded = ("无法" in rev and "时间线" in rev) or "没有具体的年份" in rev
+        record("graph", "自动综述生成", len(rev) > 300 and bool(years_in_rev) and not degraded,
+               f"{len(rev)}字 / 含年份 {sorted(set(years_in_rev))[:6]} / "
+               f"退化为『无年份无法描述』={degraded} / 前60字：{rev.strip()[:60]!r}",
+               "" if not degraded else "综述时间线退化——赛题要求『结合时间线』")
+
         fw = explore_future_structured(ctx, G)
         n_fw = len(fw) if isinstance(fw, list) else 0
-        record("graph", "Future Work 结构化判定", n_fw >= 0,
-               f"抽出 {n_fw} 条 / 状态分布={[f.get('status') for f in fw[:5]] if isinstance(fw,list) else '?'}")
+        # n_fw >= 0 恒真，纯放水；改为要求真的抽出条目且带状态字段
+        statuses = [f.get("status") for f in fw] if isinstance(fw, list) else []
+        valid_status = [s for s in statuses if s in ("已解决", "开放", "存疑")]
+        record("graph", "Future Work 结构化判定", n_fw > 0 and len(valid_status) == n_fw,
+               f"抽出 {n_fw} 条 / 状态分布={statuses[:6]}"
+               + (f" / 有效状态 {len(valid_status)}/{n_fw}" if n_fw else ""),
+               "" if n_fw > 0 else "未抽出任何 Future Work 条目（可能为 0 条被判通过）")
     except Exception as e:
         record("graph", "图谱综述 + Future Work", False, f"异常：{type(e).__name__}: {e}")
 

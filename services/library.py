@@ -82,8 +82,74 @@ _BOILERPLATE_RE = re.compile(
     r"copyright|all rights reserved|permission to reproduce|abstract\b)",
     re.IGNORECASE,
 )
-# 首页样板常跨行断句：以连接词/冠词结尾的行几乎不可能是标题
-_DANGLING_RE = re.compile(r"(?:\b(or|and|the|in|for|of|to|solely|this)\s*)$", re.IGNORECASE)
+# 首页样板常跨行断句：以连接词/冠词结尾的行几乎不可能是标题。
+# 注意：这里**不能**收录 for / of / to / in 等介词——学术标题里极其常见
+# （"Transformers for Language Understanding"、"Attention for Vision"），
+# 2026-10 R7 修复前正则含 for，导致 BERT 标题首行被整行丢弃。
+_DANGLING_RE = re.compile(
+    r"(?:\b(or|and|the|a|an|in|of|to|solely|this)\s*)$", re.IGNORECASE)
+# 宽口径悬垂词：用于判断"标题是否跨行没说完、需要拼接下一行"。
+# for/of/to/in/on 等介词只作为"需要合并"的信号，不作为"整行丢弃"的判据。
+_DANGLING_LOOSE_RE = re.compile(
+    r"(?:\b(or|and|the|a|an|solely|this|for|of|to|in|on|at|by|with|from|as|via|"
+    r"using|towards?|into|over|under|per|than|through|without|within|upon)\s*)$",
+    re.IGNORECASE,
+)
+# 作者/机构/邮箱行：绝不能并进标题
+_AFFILIATION_RE = re.compile(
+    r"@|\{|\}|(?i:\barxiv\b)|(?i:\b(?:university|institute|department|laboratories|"
+    r"laboratory|inc\.|corp\.|ltd\.|college|school|center|centre|academy|research|"
+    r"google|microsoft|facebook|deepmind|amazon|apple|mit|stanford)\b)",
+    re.IGNORECASE,
+)
+
+
+def _title_case_ratio(line):
+    """首字母大写的词占比：学术标题多为 Title Case，首页样板则是普通句子。
+
+    仅用于给"悬垂行是否值得向后拼接"设一道门槛，避免把
+    "This paper is provided solely" 这类样板残片与真正的标题拼在一起。
+    """
+    words = re.findall(r"[A-Za-z][\w'’\-]*", line)
+    if not words:
+        return 0.0
+    return sum(1 for w in words if w[0].isupper()) / len(words)
+
+
+def _is_title_continuation(line):
+    """判断 line 能否作为被截断标题行的续行拼接进来。"""
+    if not line or len(line) > 80:
+        return False
+    if _BOILERPLATE_RE.match(line):
+        return False
+    if line.endswith((".", "!", "?", ";", ":")):   # 自成一体的句子，不是续行
+        return False
+    if _AFFILIATION_RE.search(line):               # 作者/机构/邮箱行
+        return False
+    if re.match(r"(?i)^abstract\b", line):
+        return False
+    return True
+
+
+def _merge_dangling_title(lines, index, max_extra=2):
+    """悬垂行与其后续续行拼接；拼不出完整标题时返回 ''。
+
+    只在**当前行确实以虚词结尾**时才向后拼接，因此不会把紧跟完整标题的
+    作者/机构行误并进来（BERT 首行 "... Transformers for" + "Language Understanding"）。
+    """
+    parts = [lines[index]]
+    for step in range(1, max_extra + 1):
+        nxt_index = index + step
+        if nxt_index >= len(lines):
+            break
+        nxt = lines[nxt_index]
+        if not _is_title_continuation(nxt):
+            break
+        parts.append(nxt)
+        merged = re.sub(r"\s+", " ", " ".join(parts)).strip(" .:;,-–—")
+        if not _DANGLING_LOOSE_RE.search(merged):
+            return merged
+    return ""
 
 
 def guess_title_from_text(full_text, fallback=""):
@@ -92,6 +158,10 @@ def guess_title_from_text(full_text, fallback=""):
     学术论文首页常有跨行标题（"BERT: Pre-training of ... / Language Understanding"）
     和版权样板（"Provided proper attribution ... / scholarly works."），因此这里
     会合并紧邻的续行并剔除样板行与以句号结尾的句子片段。
+
+    悬垂行处理（2026-10 R7）：以虚词结尾的标题行说明跨行没说完，**先尝试向后
+    拼接续行**；只有拼不出完整标题且以连词/冠词等强悬垂词结尾时，才判定为
+    首页样板断句残片并丢弃。for/of/to 等介词在学术标题中极常见，绝不整行丢弃。
     """
     try:
         lines = []
@@ -102,12 +172,21 @@ def guess_title_from_text(full_text, fallback=""):
         for index, line in enumerate(lines[:40]):
             if len(line) < 8 or len(line) > 160:
                 continue
-            if _BOILERPLATE_RE.match(line) or _DANGLING_RE.search(line):
+            if _BOILERPLATE_RE.match(line):
                 continue
             if line.endswith((".", "!", "?", ",")):   # 句子片段，不是标题
                 continue
             title = line
-            if line.endswith((":", "-", "–", "—")) and index + 1 < len(lines):
+            if _DANGLING_LOOSE_RE.search(line):
+                # 标题跨行没说完：优先拼接续行，而不是把整行丢掉。
+                # 门槛：仅 Title Case 的行才拼接（样板句子残片大小写比例很低）
+                merged = (_merge_dangling_title(lines, index)
+                          if _title_case_ratio(line) >= 0.5 else "")
+                if merged:
+                    title = merged
+                elif _DANGLING_RE.search(line):
+                    continue    # 强悬垂且拼不出完整标题 → 首页样板残片
+            elif line.endswith((":", "-", "–", "—")) and index + 1 < len(lines):
                 nxt = lines[index + 1]
                 if len(nxt) <= 80 and not nxt.endswith((".", ":")):
                     title = f"{line} {nxt}".replace(" :", ":").strip()

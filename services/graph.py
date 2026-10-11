@@ -296,6 +296,40 @@ def _mean_pairwise_distance(vecs):
     return tot / cnt if cnt else None
 
 
+def _external_citation_trust(real):
+    """判定 ``fetch_citation_count`` 的返回值能否当作「本篇论文的真实被引数」参与计分。
+
+    返回 ``(usable: bool, count: int|None, why: str)``。**只有同时满足**下列条件才判定为可用：
+      ① 无 ``title_attribution_unconfirmed``——命中的是另一篇标题近似的论文，其被引数不属于本篇；
+      ② 无 ``low_confidence`` / ``source_degraded``，且 ``error_kind`` 为空——口径不完整或由降级而来，
+         数值不可当作该论文的被引总数（Crossref 级无条件置 ``low_confidence``，即属此类）；
+      ③ ``count``/``cited_by_count`` 是**正整数**——None 或 0 只代表「没有可用证据」，
+         绝不能写成"被引 0 次"来给无数据论文打低分（那是对无数据的惩罚，等同于编造）。
+
+    取不到可信值时返回 usable=False，调用方必须写中性表述并把该维度按「缺失」处理
+    （剩余权重归一化，不加分也不扣分）。
+    """
+    if not isinstance(real, dict):
+        return False, None, "外部数据源未返回可用结果"
+    if real.get("title_attribution_unconfirmed"):
+        return False, None, (
+            f"命中《{str(real.get('matched_title'))[:50]}》与查询标题词序不一致"
+            f"（相似度 {real.get('match_score')}），标题归属未确认，该被引数不归属本篇")
+    if real.get("low_confidence") or real.get("source_degraded") or real.get("error_kind"):
+        return False, None, (
+            f"{real.get('source') or '外部数据源'} 口径不完整或由降级而来"
+            f"（low_confidence={real.get('low_confidence')}，source_degraded={real.get('source_degraded')}，"
+            f"error_kind={real.get('error_kind') or '无'}），数值不可当作本篇被引总数")
+    c = real.get("cited_by_count")
+    if not isinstance(c, int):
+        c = real.get("count")
+    if not isinstance(c, int):
+        return False, None, "返回值缺 count/cited_by_count 整数字段"
+    if c <= 0:
+        return False, None, "外部数据源返回 0/无记录（可能是未收录或口径限制，不能据此断定该论文零被引）"
+    return True, c, ""
+
+
 def detect_frontier(ctx, G, metrics, use_external=True):
     """前沿(frontier)/潜力论文识别——不再是"本地库入度=0 的孤儿节点"。
 
@@ -305,6 +339,10 @@ def detect_frontier(ctx, G, metrics, use_external=True):
       ③ out_degree  出度高（引用大量文献 = 综述/跨学科倾向）；
       ④ interdiscipline 与其引用文献的主题向量距离（自身 vs 引用文献质心 + 引用文献两两距离）；
       ⑤ external    外部真实被引数（OpenAlex→S2→Crossref，仅对预打分 Top-K 查询，取不到不计分）。
+         该维度**先过可信度校验**（``_external_citation_trust``）：标注了
+         ``title_attribution_unconfirmed`` / ``low_confidence`` / ``source_degraded`` /
+         ``error_kind`` 的返回值（如限流降级到 Crossref 且命中另一篇论文）**一律不计分**，
+         reasons 写中性表述；``count`` 为 None/0 同样按"无证据"处理，不写成"被引 0 次"惩罚无数据论文。
     返回 [{"paper","title","score","reasons":[...], "components":{...}}]，按 score 降序。
     """
     if G is None or len(G.nodes) == 0 or not metrics:
@@ -405,15 +443,20 @@ def detect_frontier(ctx, G, metrics, use_external=True):
                 except Exception as e:
                     real = None
                     item["reasons"].append(f"外部被引查询异常：{type(e).__name__}（不计分）")
-                if real and isinstance(real.get("count"), int):
-                    c = max(0, real["count"])
+                # 只采信「可信度标注干净 + 正整数被引」的结果；其余一律不计分且写中性表述。
+                # 绝不能把错配/降级/口径不全的数字写成「外部真实被引 N 次」——那是把别的论文的
+                # 含金量算到本篇头上，比"没有数据"更糟（抗幻觉失败）。
+                usable, c, why = _external_citation_trust(real)
+                if usable:
                     ext = min(1.0, math.log10(1 + c) / 3.0)
                     item["comps"]["external"] = ext
                     item["reasons"].append(
                         f"外部真实被引 {c} 次（{real.get('source')}，匹配《{str(real.get('matched_title'))[:50]}》"
                         f"相似度 {real.get('match_score')}）→ 外部热度得分 {ext:.2f}")
                 else:
-                    item["reasons"].append("外部被引数据不可得（三级数据源均失败或未匹配），该维度不计分")
+                    item["reasons"].append(
+                        f"外部被引数据不可用（{why}），该维度不计分、按剩余维度归一化处理"
+                        f"（不加分也不扣分）")
 
     out = []
     for item in pre:

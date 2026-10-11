@@ -16,10 +16,20 @@
 统一 LLM 入口：本模块所有调用都走 :func:`core.llm.call_llm_with_retry`
 （core/llm.py:129，只读不改），并透传 ctx.llm 的 api_key/base_url/model，
 保证侧边栏选择的 Provider 依然生效（见 ``_llm_text``）。
+
+R6 修复（References 占位废稿）：
+- 生成流程改为「LLM 只写正文 + 系统**确定性拼接** References」，References 章节
+  逐条照抄 :func:`reference_whitelist` 抽出的真实文献，不经过大模型，根除
+  ``[1..40] (List the references…)`` 这类占位输出，同时省掉一次大的 LLM 输出；
+- :func:`sanitize_placeholders` / :func:`scan_placeholders` 做统一的占位串检测与清洗，
+  ``[Placeholder]`` / ``TODO`` / ``[1..N]`` 等命中后要么修复要么上报 UI；
+- :func:`validate_reference_whitelist` 补上「References 章节缺失/条目数不足」判定——旧版
+  在这种情形下会解析出 0 条并直接判 PASS（占位废稿被当成无幻觉放行）。
 """
 import os
 import re
 import io
+import time
 import shutil
 import difflib
 import hashlib
@@ -56,6 +66,12 @@ EMPTY_LIBRARY_HINT = ("⚠️ 文献库为空，无法生成「无幻觉 Referen
                       "请先到「📁 文献库管理」上传 PDF（或在左侧点击「🚀 一键加载演示数据」），"
                       "系统会从上传论文正文末尾的 References 段真实抽取条目作为引用白名单；"
                       "在文献库为空时本模块不会生成任何占位/编造引用。")
+NO_MODEL_OUTPUT_HINT = ("⚠️ 大模型未返回内容（可能是 API Key 未配置或网络异常），"
+                        "已中止生成，不输出任何引用。")
+# 大纲正文的篇幅上限（词数）：越长越慢，现场演示需要与质量平衡
+OUTLINE_TARGET_WORDS = 900
+# References 章节标题（确定性拼接用）
+REFERENCES_HEADING = "# References"
 
 # LLM 输出中可能出现的 [n] 引用角标
 _CITE_MARK_RE = re.compile(r"\[(\d+)\]")
@@ -78,6 +94,127 @@ _NUM_RE = re.compile(r"\d")
 _FIG_PREFIX_RE = re.compile(
     r"^\s*(?:\*{0,2}(?:figure|fig\.?|图)\*{0,2}\s*[A-Za-z]?\s*\d+(?:[.\-]\d+)?[A-Za-z]?\s*[.::：]?\s*)+",
     re.IGNORECASE)
+
+
+# ---------------------------------------------------------------- 占位串检测与修复（R6-T2）
+# LLM 常见的「偷懒占位」写法：把该生成的内容写成一句指令或占位符。
+# 命中这些模式说明**这一段根本没生成**，必须修复或显式告知用户，绝不能静默输出。
+_PLACEHOLDER_RULES = (
+    ("占位符标签", re.compile(r"\[\s*placeholder\s*\]", re.IGNORECASE)),
+    ("占位符标签", re.compile(r"\{\s*placeholder\s*\}", re.IGNORECASE)),
+    ("占位符标签", re.compile(r"<\s*placeholder\s*>", re.IGNORECASE)),
+    ("待办标记", re.compile(r"\b(?:TODO|TBD|FIXME)\b")),            # 大小写敏感：避免误伤普通词
+    ("待办标记", re.compile(r"\bXXX{2,}\b")),
+    ("未生成指令", re.compile(
+        r"\(\s*list (?:all )?the references[^)\n]{0,160}\)", re.IGNORECASE)),
+    ("未生成指令", re.compile(
+        r"\(\s*(?:insert|add|fill in|complete|provide)[^)\n]{0,80}"
+        r"(?:references?|citations?|here|later)[^)\n]{0,80}\)", re.IGNORECASE)),
+    ("未生成指令", re.compile(r"\bto be (?:added|filled|completed|written)\b", re.IGNORECASE)),
+    ("中文占位符", re.compile(r"(?:待补(?:充|写)?|占位符|此处省略|以下略|略去)")),
+)
+# 编号区间占位符 ``[1..40]`` / ``[1-40]``：区间跨度 >= 5 才判定（避免误伤合法的 [1, 3]）
+_NUM_RANGE_RE = re.compile(r"\[\s*(\d{1,4})\s*(\.\.|…|–|—|-)\s*(\d{1,4})\s*\]")
+_NUM_RANGE_MIN_SPAN = 5
+
+
+def scan_placeholders(text):
+    """扫描生成文本里的占位串，返回 ``[{"rule","fragment","line","line_no"}]``。
+
+    用于 T2 的「生成后统一检测」：命中即说明该片段没有被真正生成。
+    """
+    issues = []
+    try:
+        lines = str(text or "").splitlines()
+        for ln, line in enumerate(lines, 1):
+            hits = []
+            for name, rule in _PLACEHOLDER_RULES:
+                for m in rule.finditer(line):
+                    hits.append((name, m.group(0)))
+            for m in _NUM_RANGE_RE.finditer(line):
+                a, b = int(m.group(1)), int(m.group(3))
+                if b - a >= _NUM_RANGE_MIN_SPAN:
+                    hits.append(("编号区间占位符", m.group(0)))
+            for name, frag in hits:
+                issues.append({"rule": name, "fragment": frag.strip()[:120],
+                               "line": line.strip()[:200], "line_no": ln})
+    except Exception:
+        return issues
+    return issues
+
+
+def sanitize_placeholders(text):
+    """移除占位串，返回 ``(清洗后文本, 命中的 issue 列表)``。
+
+    策略（保守优先）：
+    1. 逐行删除命中的片段，保留该行其余真实内容；
+    2. 若一行删完之后什么都不剩 → 整行丢弃（这行本来就是占位行）；
+    3. 原有空行保留，不破坏 Markdown 结构。
+    """
+    issues = []
+    src_lines = str(text or "").splitlines()
+    out_lines = []
+    try:
+        for ln, line in enumerate(src_lines, 1):
+            cleaned, hits = line, []
+            for name, rule in _PLACEHOLDER_RULES:
+                for m in list(rule.finditer(cleaned)):
+                    hits.append((name, m.group(0)))
+                    cleaned = cleaned[:m.start()] + " " + cleaned[m.end():]
+            for m in list(_NUM_RANGE_RE.finditer(cleaned)):
+                a, b = int(m.group(1)), int(m.group(3))
+                if b - a >= _NUM_RANGE_MIN_SPAN:
+                    hits.append(("编号区间占位符", m.group(0)))
+                    cleaned = cleaned[:m.start()] + " " + cleaned[m.end():]
+            if hits:
+                cleaned = re.sub(r"\s{2,}", " ", cleaned)
+                cleaned = re.sub(r"\s+([.,;:])", r"\1", cleaned)   # 删占位符后残留的 " ."
+                cleaned = cleaned.strip(" \t-–—:：;；*")
+                for name, frag in hits:
+                    issues.append({"rule": name, "fragment": frag.strip()[:120],
+                                   "line": line.strip()[:200], "line_no": ln})
+                if not cleaned:                 # 占位行整行丢弃
+                    continue
+            elif not line.strip():
+                out_lines.append(line)          # 原有空行：保持 Markdown 段落结构
+                continue
+            out_lines.append(cleaned)
+    except Exception:
+        return str(text or ""), scan_placeholders(text)
+    return "\n".join(out_lines), issues
+
+
+def build_references_section(refs_list, heading=REFERENCES_HEADING):
+    """**确定性**拼接 References 章节（不经过 LLM），逐条照抄白名单里的真实文献。
+
+    真实文献的作者/标题/年份/venue 都在白名单里，让 LLM 再"写"一遍只会有编造风险
+    （实测 glm-4-flash 会把整节写成 ``[1..40] (List the references...)`` 占位指令），
+    因此这里用字符串拼接：编号即白名单下标，条目文本与注入 prompt 的完全一致，
+    既 100% 无幻觉，又省掉一次 LLM 输出。
+    """
+    lines = [heading, ""]
+    try:
+        for i, r in enumerate(refs_list or [], 1):
+            lines.append(_ref_line(i, r))
+    except Exception:
+        return heading
+    return "\n".join(lines)
+
+
+def _strip_generated_references(text):
+    """删掉 LLM 自己写的 References 章节（含标题行之后的全部内容）。
+
+    References 由 :func:`build_references_section` 确定性拼接，必须先清掉模型版本，
+    否则会出现两份 References 或把占位行留在末尾。
+    """
+    try:
+        hits = list(_GEN_REF_HEADING_RE.finditer(text or ""))
+        if not hits:
+            return str(text or ""), False
+        head = str(text or "")[:hits[-1].start()].rstrip()
+        return head, True
+    except Exception:
+        return str(text or ""), False
 
 
 # ---------------------------------------------------------------- 统一 LLM 入口（T6）
@@ -160,8 +297,11 @@ def _title_similarity(a, b):
 def _ref_line(i, r):
     """把一条结构化文献渲染为给 LLM 看的 ``[i] authors. title. venue, year.``。"""
     try:
-        parts = [r.get("authors") or "（作者见原文）", r.get("title") or "", r.get("venue") or ""]
-        line = ". ".join(p for p in parts if str(p).strip())
+        # 各字段自带句点时不再补第二个句点（避免出现 "et al.. Title."）
+        parts = [str(r.get("authors") or "（作者见原文）").strip().rstrip("."),
+                 str(r.get("title") or "").strip().rstrip("."),
+                 str(r.get("venue") or "").strip().rstrip(".")]
+        line = ". ".join(p for p in parts if p.strip())
         if r.get("year"):
             line += f", {r['year']}."
         elif line and not line.endswith("."):
@@ -346,6 +486,9 @@ def _parse_entry_fields(idx, raw):
     避免旧实现「authors/title/venue 三个字段错位」的问题。
     """
     text = _flow_text(_strip_numbering(raw))
+    # PDF 双栏排版会把 citation count / 页码混到条目末尾（"..., 2016. 10."），它会以句段身份
+    # 参与切分并顶掉真实年份，导致条目显示缺年份 → 先剥掉这层噪声
+    text = _TAIL_PAGE_NOISE_RE.sub(".", text)
     year = ""
     authors, title, venue = "", "", ""
 
@@ -387,6 +530,8 @@ def _parse_entry_fields(idx, raw):
     }
 
 
+# PDF 双栏排版会把 citation count / 页码混到条目末尾（"..., 2016. 10."），见 _parse_entry_fields
+_TAIL_PAGE_NOISE_RE = re.compile(r"[.,;:]?\s+\d{1,3}\s*[.,;:]?\s*$")
 # 一眼能看出是 venue 而不是论文标题的开头
 _VENUE_HEAD_RE = re.compile(
     r"^(?:in\s+|proceeding|proc\w*\.|arxiv|corr\b|abs/|journal|transactions?|advance|"
@@ -730,11 +875,13 @@ def reference_whitelist(ctx, preferred=None):
     → ③ 文献库元数据（authors/title/year）→ ④ 空（调用方必须提示先上传文献）。
     """
     refs_text, refs_list, source = "", [], ""
+    source_file, name = "", ""
     try:
         name = _target_paper(ctx, preferred)
         if name:
             path = _resolve_pdf(name)
             if path:
+                source_file = os.path.basename(path)
                 res = extract_references_with_quality(path)
                 refs_list = res["entries"]
                 low = res["low_confidence"]
@@ -771,6 +918,13 @@ def reference_whitelist(ctx, preferred=None):
     except Exception:
         refs_list, source = [], ""
     refs_list = (refs_list or [])[:MAX_REF_ENTRIES]
+    # 每条挂上来源 PDF 文件名：UI 要逐条展示"这条出自哪篇入库论文的参考文献表"（T4）
+    for r in refs_list:
+        try:
+            if isinstance(r, dict) and not r.get("source_pdf"):
+                r["source_pdf"] = source_file or name or ""
+        except Exception:
+            pass
     if refs_list:
         refs_text = "\n".join(_ref_line(i, r) for i, r in enumerate(refs_list, 1))
     return refs_text, refs_list, source
@@ -879,9 +1033,31 @@ def validate_reference_whitelist(generated_text, allowed_refs, threshold=TITLE_S
                         "reason": f"角标 [{n}] 超出真实文献范围 [1..{n_allowed}]",
                     })
 
-        # ---- 2) References 段条目标题实质匹配 ----
+        # ---- 2') References 章节是否真实存在且条目数达标 ----
+        # 旧逻辑在这里有个致命漏洞：模型把整节写成 "[1..40] (List the references…)"
+        # 时 _generated_reference_entries 解析出 0 条，走不到下面的标题匹配，
+        # 于是校验直接判 PASS —— 占位废稿被当成"无幻觉"放行。这里补上：
+        # References 章节缺失/条目数不达标，一律视为生成失败。
         entries = _generated_reference_entries(text)
         result["n_entries"] = len(entries)
+        if n_allowed > 0:
+            has_heading = bool(list(_GEN_REF_HEADING_RE.finditer(text)))
+            min_entries = min(MIN_REF_ENTRIES, n_allowed)
+            if not has_heading:
+                result["hallucinated"].append({
+                    "kind": "section", "id": 0, "text": "（整篇文本没有 References 章节）",
+                    "reason": f"生成文本中未找到 References/参考文献 章节，但白名单有 {n_allowed} 条真实文献，"
+                              f"参考文献应当被完整列出",
+                })
+            elif result["n_entries"] < min_entries:
+                result["hallucinated"].append({
+                    "kind": "section", "id": 0,
+                    "text": f"References 章节仅 {result['n_entries']} 条",
+                    "reason": (f"References 章节只有 {result['n_entries']} 条（< {min_entries}），"
+                               f"疑似未生成或被占位符替代"),
+                })
+
+        # ---- 3) References 段条目标题实质匹配 ----
         if n_allowed == 0:
             if entries:
                 result["hallucinated"].append({
@@ -935,35 +1111,71 @@ def validate_reference_whitelist(generated_text, allowed_refs, threshold=TITLE_S
 
 # ---------------------------------------------------------------- 大纲生成（T1）
 def _outline_prompt(idea, refs_text, n_allowed, strict=False):
-    rule = (f"Related Work 与 References 只能引用下列真实文献，按 [n] 编号，编号必须在 "
-            f"[1..{n_allowed}] 范围内；禁止编造任何未列出的文献，禁止改写标题。\n"
-            f"可用真实文献（共 {n_allowed} 条）：\n{refs_text}")
+    """大纲正文 prompt。
+
+    **刻意不再要求模型输出 References**：实测 glm-4-flash 会把整节写成占位指令
+    （``[1..40] (List the references as per the given real literature sources [1..40].)``）。
+    References 改由 :func:`build_references_section` 用白名单确定性拼接，
+    prompt 里明确禁止模型写这一节（写了也会被剔除）。
+    """
+    rule = (f"【引用规则·必须逐条遵守】\n"
+            f"1) 只能引用下面列表中的真实文献，引用角标 [n] 的 n 必须落在 [1..{n_allowed}] 内；"
+            f"禁止出现列表以外的编号，禁止编造文献。\n"
+            f"2) 若某个论点找不到对应文献，就**不写引用**，绝不要补一个编号上去。\n"
+            f"3) Introduction 与 Related Work 至少各引用 3 处，全文引用角标总数不少于 8 处；"
+            f"引用时写明该文献的作者姓氏与年份（如 [n] (Vaswani et al., 2017)）。\n"
+            f"4) 【重要】不要输出 References / Bibliography / 参考文献 章节，也不要写类似 "
+            f"“[1..{n_allowed}] (List the references…)” 的占位指令；"
+            f"这一节由系统用真实文献自动拼接，你写出来也会被丢弃。\n"
+            f"5) 禁止输出任何占位符/待办字眼（[Placeholder]、TODO、TBD、XXX、待补充）；"
+            f"写不出来的小节直接不写，不要留占位。\n"
+            f"\n可用真实文献（共 {n_allowed} 条）：\n{refs_text}")
     if strict:
-        rule += ("\n【强化约束·必须遵守】上一次生成出现了白名单之外的条目，本次请：\n"
-                 "1) References 段逐字照抄上面列表中的条目（含作者、标题、年份），不得新增、"
-                 "不得改写标题、不得翻译标题；\n"
-                 "2) 正文中每处引用角标 [n] 必须是列表里出现过的编号；\n"
-                 "3) 若某个论点确实找不到对应文献，宁可不写引用，也不要补一个编号。")
-    return f"""围绕以下研究 Idea，输出一篇学术论文的完整写作框架，包含各节要点与字数提示：
-Title / Abstract（拟写，标注关键结论占位）/ Introduction（动机与贡献点）/ Related Work /
-Method（含拟采用的模型/Agent 架构与公式占位）/ Experiments（数据集、指标、基线、消融）/
-Threats to Validity / Conclusion / References。
+        rule += ("\n【强化约束·上一轮不合格，本次务必遵守】\n"
+                 "1) 上一轮出现了白名单之外的文献或越界编号，本次每一个 [n] 都必须能在上面的列表里"
+                 "按位查到（第 n 条 = 列表里编号为 [n] 的文献）；\n"
+                 "2) 不允许出现任何占位符、省略语或“同上/见列表”之类的说法；\n"
+                 "3) 再次强调：不要写 References 章节。")
+    return f"""围绕以下研究 Idea，输出一篇英文学术论文的写作框架（Markdown）。
+
+必须且只包含以下章节（一级/二级标题均可，顺序固定，不要新增 References 章节）：
+Title / Abstract / Introduction（动机与贡献点）/ Related Work /
+Method（拟采用的模型或 Agent 架构，含关键公式）/ Experiments（数据集、指标、基线、消融）/
+Threats to Validity / Conclusion。
+
+【篇幅】全文控制在 {OUTLINE_TARGET_WORDS} 词以内，以要点式 bullet + 短句为主，每节给出字数建议。
 {rule}
 
 Idea：{idea}"""
 
 
 def generate_outline_verified(ctx, idea, preferred=None, strict=False, pdf_path=None):
-    """生成大纲并**自动**跑白名单校验。返回 dict（不抛异常）。
+    """生成大纲正文 + **确定性**拼接真实 References，然后跑白名单校验。返回 dict（不抛异常）。
 
-    ``{"text", "refs", "validation", "source", "sanitized", "empty_library"}``
+    返回字段：
+      ``text`` 最终全文（正文 + 确定性 References 章节）
+      ``refs`` 白名单真实条目（每条带 source_pdf）
+      ``validation`` :func:`validate_reference_whitelist` 的结果
+      ``source`` / ``sanitized`` / ``empty_library`` / ``placeholder_issues`` / ``elapsed_sec``
+
+    关键设计（对应赛题模块六「无幻觉 References」）：
+      References 章节**不交给大模型**，只用白名单字符串拼接，因此不存在编造空间，
+      也省掉了占用时间最长的那部分 token 输出。
     """
     out = {"text": "", "refs": [], "validation": None, "source": "",
-           "sanitized": 0, "empty_library": False}
+           "sanitized": 0, "empty_library": False, "placeholder_issues": [],
+           "elapsed_sec": 0.0, "body": "", "references_deterministic": False}
+    t_start = time.time()
     try:
+        # ---- 1) 真实白名单（少了它就谈不上无幻觉，直接提示用户先上传文献）----
         if pdf_path:
             refs_list = extract_references_from_pdf(pdf_path)
             source = f"PDF References 段真实抽取（{os.path.basename(str(pdf_path))}）" if refs_list else ""
+            for _r in refs_list:                       # 挂上来路，供 UI 逐条展示（T4）
+                try:
+                    _r["source_pdf"] = os.path.basename(str(pdf_path))
+                except Exception:
+                    pass
         else:
             refs_list = []
             source = ""
@@ -974,21 +1186,40 @@ def generate_outline_verified(ctx, idea, preferred=None, strict=False, pdf_path=
         if not refs_list:
             out["text"] = EMPTY_LIBRARY_HINT
             out["empty_library"] = True
+            out["elapsed_sec"] = round(time.time() - t_start, 2)
             return out
+
+        # ---- 2) LLM 只写正文（不含 References）----
         prompt = _outline_prompt(idea, refs_text, len(refs_list), strict=strict)
         raw = _llm_text(ctx, prompt, temperature=0.4)
         if not raw:
-            out["text"] = "⚠️ 大模型未返回内容（可能是 API Key 未配置或网络异常），已中止生成，不输出任何引用。"
+            out["text"] = NO_MODEL_OUTPUT_HINT
+            out["elapsed_sec"] = round(time.time() - t_start, 2)
             return out
-        # 先在**原始输出**上跑白名单校验（越界角标/编造条目此时还带着原编号，报告更可读），
-        # 再做角标清洗（越界 [n] → [?]）
-        validation = validate_reference_whitelist(raw, refs_list)
-        text, k = _sanitize_citations(raw, set(range(1, len(refs_list) + 1)))
-        out.update({"text": text, "refs": refs_list, "source": source, "sanitized": k,
-                    "validation": validation})
+
+        # ---- 3) 后处理：剔除模型自带 References → 清洗占位串 → 角标越界打码 ----
+        # 顺序很重要：先删 References 段，占位串里最常见的 "[1..N] (List the references…)"
+        # 本来就落在这一节里，会被整节带走。
+        body, _ = _strip_generated_references(raw)
+        body, issues = sanitize_placeholders(body)
+        body, k = _sanitize_citations(body, set(range(1, len(refs_list) + 1)))
+        # 再扫一遍：正文里若仍有占位串（如正文中间写了 [Placeholder]），必须如实上报
+        residual = scan_placeholders(body)
+
+        # ---- 4) 确定性拼接 References（不上 LLM，100% 来自白名单）----
+        ref_section = build_references_section(refs_list)
+        text = body.rstrip() + "\n\n" + ref_section + "\n"
+
+        # ---- 5) 对**最终全文**做白名单校验 ----
+        validation = validate_reference_whitelist(text, refs_list)
+        out.update({"text": text, "body": body, "refs": refs_list, "source": source,
+                    "sanitized": k, "validation": validation,
+                    "placeholder_issues": residual, "references_deterministic": True,
+                    "elapsed_sec": round(time.time() - t_start, 2)})
         return out
     except Exception as e:
         out["text"] = f"⚠️ 大纲生成失败：{type(e).__name__}: {str(e)[:160]}"
+        out["elapsed_sec"] = round(time.time() - t_start, 2)
         return out
 
 
