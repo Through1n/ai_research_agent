@@ -14,6 +14,7 @@ Round4 Worker8 重写要点：
 Trace 事件 kind 仍为 plan/route/thought/tool/guard/error/final。
 """
 import json
+import os
 import re
 import time
 
@@ -31,6 +32,30 @@ STEP_MIN_ITERS = 2
 STEP_MAX_ITERS = 4
 # 整轮全局迭代上限（防止规划步数过多时放大调用量）
 GLOBAL_MAX_ITERS = max(6, AGENT_MAX_ITERS * 2)
+# 硬天花板：即便计划被动态规划放大，迭代总数也不超过 MAX_TASKS × STEP_MAX_ITERS
+HARD_MAX_ITERS = max(GLOBAL_MAX_ITERS, MAX_TASKS * STEP_MAX_ITERS)
+
+
+def global_iter_cap(n_tasks):
+    """本轮全局迭代上限：默认 **随计划步数伸缩**，保证每个计划步骤至少拿到 STEP_MIN_ITERS 次迭代。
+
+    评委 E 实测缺陷：12 步计划 + 固定上限 16（=AGENT_MAX_ITERS*2）时，第 9 步起
+    迭代额度已耗尽，后续步骤被静默掐断（既不调用模型也不调用工具），最终却照常输出"完整答案"。
+    这里让上限至少覆盖 `n_tasks * STEP_MIN_ITERS`，并允许用环境变量 `AGENT_GLOBAL_MAX_ITERS`
+    显式覆盖（运维/评测可按需收紧或放开）。
+    """
+    try:
+        env = str(os.getenv("AGENT_GLOBAL_MAX_ITERS", "") or "").strip()
+        if env:
+            return max(1, int(env))
+    except (TypeError, ValueError):
+        pass
+    try:
+        n = max(1, int(n_tasks or 1))
+    except (TypeError, ValueError):
+        n = 1
+    # 硬天花板：防止重规划让计划膨胀后调用量失控
+    return min(max(GLOBAL_MAX_ITERS, n * STEP_MIN_ITERS), HARD_MAX_ITERS)
 
 # 学术安全补充约束（在 ACADEMIC_SYSTEM 之上叠加，重点：不许编造文献 / 必须标注来源）
 SAFETY_ADDENDUM = (
@@ -151,11 +176,13 @@ def _run_tool(reg, ctx, name, args, trace, expert, allowed, tool_call_id=""):
 
 # ------------------------------------------------------------------ 子任务执行
 def _execute_task(ctx, reg, expert, allowed, schemas, messages, task, trace,
-                  emit, budget, counters):
+                  emit, budget, counters, global_cap=None):
     """执行一个子任务：带工具的 ReAct 子循环。
 
+    global_cap 为本轮全局迭代上限（None 时退回模块常量 GLOBAL_MAX_ITERS）。
     返回 (status, content, tools_used[(name, ok)], error_msg)。
     """
+    cap = global_cap if isinstance(global_cap, int) and global_cap > 0 else GLOBAL_MAX_ITERS
     label = EXPERTS.get(expert, EXPERTS["qa"])["label"]
     counters["round"] += 1
     trace.thought(f"▶️ 第 {counters['round']} 轮 · 子任务 {task.get('id')}「{task.get('title','')}」"
@@ -174,9 +201,12 @@ def _execute_task(ctx, reg, expert, allowed, schemas, messages, task, trace,
     tools_used, err, last_obs = [], "", ""
     content = ""
     for _ in range(max(1, int(budget))):
-        if counters["iters"] >= GLOBAL_MAX_ITERS:
-            trace.thought("⏹ 已达全局迭代上限，提前结束本步并进入综合阶段。")
-            break
+        if counters["iters"] >= cap:
+            # 迭代额度耗尽：本步被截断（既不调模型也不调工具），必须如实记为"未执行"，
+            # 绝不能因为"没有报错"就当成完成——那会让最终答案看起来是基于全部步骤得出的。
+            trace.thought(f"⏹ 已达全局迭代上限（{cap} 次），子任务 {task.get('id')} 未执行，"
+                          f"直接进入下一步/综合阶段（该步结论不计入证据）。")
+            return "pending", "", [], f"未执行：达到全局迭代上限（{cap} 次）", last_obs
         counters["iters"] += 1
 
         msg = ctx.llm.chat(messages, temperature=0.2, tools=schemas)
@@ -240,6 +270,88 @@ def _execute_task(ctx, reg, expert, allowed, schemas, messages, task, trace,
         status = "failed"
         note = err or "本步未产出任何结论"
     return status, content, tools_used, note, last_obs
+
+
+# ------------------------------------------------------------------ 计划完成度核对
+def plan_completion(tasks):
+    """统计计划完成度：done / failed / skipped / pending（未执行）四类 + 明细。
+
+    pending 包含 status 为 pending 与 running（中途被打断）两种情形——它们都**没有产出结论**，
+    与 done 严格区分，绝不因为"没报错"就被算作完成。
+    返回 dict：total/done/failed/skipped/pending + 各类 id 列表与明细 + complete 标志。
+    """
+    res = {"total": 0, "done": 0, "failed": 0, "skipped": 0, "pending": 0,
+           "done_ids": [], "failed_ids": [], "skipped_ids": [], "pending_ids": [],
+           "failed_items": [], "pending_items": [], "skipped_items": [],
+           "complete": True}
+    try:
+        for t in (tasks or []):
+            t = t or {}
+            st = str(t.get("status") or "pending")
+            tid = str(t.get("id") or "?")
+            title = str(t.get("title") or "").strip()[:60]
+            note = str(t.get("note") or "").strip()[:80]
+            if st == "done":
+                res["done"] += 1
+                res["done_ids"].append(tid)
+            elif st == "failed":
+                res["failed"] += 1
+                res["failed_ids"].append(tid)
+                res["failed_items"].append((tid, title, note))
+            elif st == "skipped":
+                res["skipped"] += 1
+                res["skipped_ids"].append(tid)
+                res["skipped_items"].append((tid, title, note))
+            else:                       # pending / running / 其它未知状态
+                res["pending"] += 1
+                res["pending_ids"].append(tid)
+                res["pending_items"].append((tid, title, note))
+        res["total"] = len(tasks or [])
+        res["complete"] = (res["failed"] == 0 and res["pending"] == 0
+                           and res["skipped"] == 0)
+    except Exception:
+        res["complete"] = True
+    return res
+
+
+def _completion_warning(audit):
+    """存在未完成步骤时生成告警文案（全部完成则返回 ""）。
+
+    形态：'⚠️ 本次任务共 N 步，已完成 X 步、失败 Y 步、跳过 Z 步、未执行 W 步（步骤 …）。
+    以下答案基于已完成的 X 步生成，可能不完整。' + 未执行/失败/跳过的步骤清单。
+    """
+    try:
+        a = audit or {}
+        if a.get("complete", True):
+            return ""
+        total = int(a.get("total", 0) or 0)
+        done = int(a.get("done", 0) or 0)
+        failed = int(a.get("failed", 0) or 0)
+        skipped = int(a.get("skipped", 0) or 0)
+        pending = int(a.get("pending", 0) or 0)
+        if failed == 0 and pending == 0 and skipped == 0:
+            return ""
+        head = (f"⚠️ 本次任务共 {total} 步，已完成 {done} 步、失败 {failed} 步、"
+                f"跳过 {skipped} 步、未执行 {pending} 步")
+        pend_ids = a.get("pending_ids") or []
+        if pend_ids:
+            head += (f"（未执行：步骤 {'、'.join(pend_ids[:8])}"
+                     + ("…" if len(pend_ids) > 8 else "") + "）")
+        head += f"。以下答案基于已完成的 {done} 步生成，可能不完整。"
+
+        lines = [head]
+        for tid, title, note in (a.get("pending_items") or [])[:8]:
+            lines.append(f"- ⏳ 未执行 · {tid}「{title}」" + (f"（{note}）" if note else ""))
+        for tid, title, note in (a.get("failed_items") or [])[:8]:
+            lines.append(f"- ❌ 失败 · {tid}「{title}」" + (f"（{note}）" if note else ""))
+        for tid, title, note in (a.get("skipped_items") or [])[:8]:
+            lines.append(f"- ⚠️ 跳过 · {tid}「{title}」" + (f"（{note}）" if note else ""))
+        if a.get("truncated_by_iters") and pending:
+            lines.append(f"- ℹ️ 原因：本轮全局迭代上限 {a.get('iter_cap')} 次已用尽"
+                         f"（实际 {a.get('iters_used')} 次），剩余步骤未获得执行机会。")
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 # ------------------------------------------------------------------ Trace 辅助
@@ -358,7 +470,11 @@ def run(ctx, goal, user="user_001", live=None, registry=None, on_token=None):
     system = _system_prompt(expert)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": goal}]
     counters = {"iters": 0, "round": 0}
+    # 迭代上限随计划步数伸缩（见 global_iter_cap）：优先让计划里的每一步都拿到执行机会
+    cap = global_iter_cap(len(tasks))
     budget = max(STEP_MIN_ITERS, min(STEP_MAX_ITERS, AGENT_MAX_ITERS // max(1, len(tasks))))
+    trace.thought(f"🧭 执行预算：计划 {len(tasks)} 步｜每步最多 {budget} 次迭代"
+                  f"｜本轮全局迭代上限 {cap} 次（AGENT_MAX_ITERS={AGENT_MAX_ITERS}）")
     handoff_chain = list(trace.handoff_chain)
     n_replans = 0
     used_tools = []
@@ -400,7 +516,8 @@ def run(ctx, goal, user="user_001", live=None, registry=None, on_token=None):
         last_obs = ""
         try:
             status, content, tools_used, note, last_obs = _execute_task(
-                ctx, reg, expert, allowed, schemas, messages, task, trace, emit, budget, counters)
+                ctx, reg, expert, allowed, schemas, messages, task, trace, emit, budget,
+                counters, global_cap=cap)
         except Exception as e:                  # 子任务整体异常：标记失败，继续后续步骤
             status, content, tools_used = "failed", "", []
             note = f"子任务执行异常：{type(e).__name__}: {str(e)[:160]}"
@@ -436,6 +553,17 @@ def run(ctx, goal, user="user_001", live=None, registry=None, on_token=None):
             n_replans += 1
             new_tail = replan(ctx, goal, tasks, idx, task, note, expert)
             if new_tail:
+                # 评委 E 缺陷：重规划会让计划膨胀到 MAX_TASKS 之外，多出来的步骤
+                # 在 while 条件（idx < MAX_TASKS）下永远轮不到执行 → 永久 pending。
+                # 这里把尾巴裁到"放得下"的长度，并如实记录被省略的步数。
+                room = max(0, MAX_TASKS - (idx + 1))
+                dropped = max(0, len(new_tail) - room)
+                if dropped:
+                    trace.thought(f"⏹ 动态规划产出 {len(new_tail)} 步，超出单轮步数上限"
+                                  f"（MAX_TASKS={MAX_TASKS}），已省略末尾 {dropped} 步"
+                                  f"（这些步骤不会进入计划，也不会被算作已完成）。")
+                new_tail = new_tail[:room]
+            if new_tail:
                 tasks = tasks[:idx + 1] + new_tail
                 trace.tasks = tasks
                 trace.thought(f"🔁 触发动态规划（第 {n_replans} 次）：{note}"
@@ -445,12 +573,53 @@ def run(ctx, goal, user="user_001", live=None, registry=None, on_token=None):
                 emit()
         idx += 1
 
+    # 4.5 收尾核对一：把"从没拿到执行机会"的步骤如实标成 pending（严禁假标 done）
+    truncated_by_iters = counters["iters"] >= cap
+    marked = []
+    for j in range(idx, len(tasks)):
+        t = tasks[j]
+        if t.get("status") in ("done", "failed", "skipped"):
+            continue
+        t["status"] = "pending"
+        if not t.get("note"):
+            t["note"] = (("未执行：达到全局迭代上限（%d 次）" % cap) if truncated_by_iters
+                         else ("未执行：超出单轮可执行步数上限（MAX_TASKS=%d）" % MAX_TASKS))
+        marked.append(str(t.get("id")))
+    if marked:
+        trace.thought("⏹ 计划核对：%d 步未执行（%s）——%s" % (
+            len(marked), "、".join(marked),
+            "迭代额度耗尽" if truncated_by_iters else "超出步数上限"))
+        _emit_plan(trace, tasks, "任务规划 Task Planning（收尾核对）",
+                   f"{len(marked)} 步未执行，已在最终答案中标注")
+        emit()
+
+    # 4.6 收尾核对二：统计计划完成度，存在未完成步骤时准备告警文案
+    audit = plan_completion(tasks)
+    audit["iter_cap"] = cap
+    audit["iters_used"] = int(counters.get("iters", 0))
+    audit["truncated_by_iters"] = bool(truncated_by_iters)
+    trace.plan_audit = audit
+    warn = _completion_warning(audit)
+    if warn:
+        trace.guard(warn)          # UI 思考时间线可见（🛡 安全防护条目）
+        emit()
+
     # 5) 综合阶段：Token 级流式输出最终答案
     synth = {"role": "user",
              "content": "请基于以上各子任务的证据，给出最终中文答案：\n"
                         "1) 只陈述工具真实返回过的事实，未找到依据的必须明说；\n"
                         "2) 每个事实结论后用【n】标注来源编号；\n"
                         "3) 对比类问题用 Markdown 表格；不要复述我的指令。"}
+    if warn:
+        synth = {"role": "user",
+                 "content": synth["content"]
+                            + "\n4) 注意：本次计划共 %d 步，其中失败 %d 步、跳过 %d 步、未执行 %d 步"
+                              "（%s）。这些步骤**没有任何证据**，严禁把它们的结论写进答案；"
+                              "确实缺失的信息必须明说“未找到可靠依据”，不得用常识补全。"
+                            % (audit["total"], audit["failed"], audit["skipped"],
+                               audit["pending"],
+                               "、".join(audit["failed_ids"] + audit["skipped_ids"]
+                                         + audit["pending_ids"]) or "无")}
     synth_messages = messages + [synth]
     trace.final_messages = synth_messages
 
@@ -474,6 +643,12 @@ def run(ctx, goal, user="user_001", live=None, registry=None, on_token=None):
         final_text = step_best_text.strip()   # 综合失败时退回最后一步的结论，避免整轮空答
     if not final_text.strip():
         final_text = "（本次运行未产出最终答案：工具未返回有效证据，为避免幻觉不做无依据作答。）"
+
+    # 5.5 计划未完成 → 在最终答案开头加未完成告警（不能让漏做的步骤看起来"都做完了"）
+    if warn and final_text.strip():
+        final_text = warn + "\n\n---\n\n" + final_text.strip()
+        trace.guard("⚠️ 已在最终答案开头追加「计划未完成」告警"
+                    f"（未完成 {audit['failed'] + audit['skipped'] + audit['pending']} 步）")
 
     # 6) 输出侧 Guardrails：注入检测 + 密钥脱敏 + 无来源告警
     try:
