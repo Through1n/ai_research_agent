@@ -17,7 +17,8 @@ __pycache__/
 venv/
 
 # ---------- 演示过程产物（运行生成，非源码）----------
-docs/shots/
+# 注意：docs/shots/ 不再忽略——README 与技术文档引用这些截图，
+#      若忽略会导致推送到 GitHub 后文档图片全部裂图。
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

@@ -1,7 +1,19 @@
 """系统架构设计与技术创新亮点页面。"""
+import pandas as pd
 import streamlit as st
-from ui.common import embed_html, page_header
 
+from ui.common import embed_html, page_header, pretty_table, long_block, friendly_error
+
+# 讲稿式的完整分层说明（较长，统一折叠，避免首屏过长）
+_ARCH_DETAIL = """
+**分层与数据流**
+1. **交互层**：Streamlit 多页应用，承载 PDF 原生阅读、中英同步滚动、图谱可视化、对话与图表。
+2. **Agent 内核**：Guardrails 注入/密钥校验 → Task Planning 动态拆解 → Multi-Agent Router 专家路由 →
+   Function Calling 闭环执行，Memory 提供短期对话、长期笔记与用户画像。
+3. **工具/服务层**：PDF 解析与 OCR、Dense+Sparse 混合 RAG、arXiv/PubMed/Web 集成、NetworkX 图谱、
+   写作绘图与隔离 Python 执行；大模型经 Provider 抽象层多家热切换。
+4. **存储层**：Chroma 持久化向量库、BM25 索引、文献库元数据 JSON、原始 PDF 与图片。
+"""
 
 # 纯 HTML/CSS 分层架构图：不依赖任何外部 CDN，评审离线环境同样可渲染
 _ARCH_HTML = """
@@ -47,17 +59,22 @@ _ARCH_HTML = """
 
 
 def render_arch(ctx):
-    page_header("🏗️ 系统架构设计", "四层架构：交互层 → Agent 内核 → 工具/服务层 → 存储层，数据流与 Function Calling 闭环。")
-    embed_html(_ARCH_HTML, height=620, scrolling=False)
-    st.markdown("""
-**分层与数据流**
-1. **交互层**：Streamlit 多页应用，承载 PDF 原生阅读、中英同步滚动、图谱可视化、对话与图表。
-2. **Agent 内核**：Guardrails 注入/密钥校验 → Task Planning 动态拆解 → Multi-Agent Router 专家路由 →
-   Function Calling 闭环执行，Memory 提供短期对话、长期笔记与用户画像。
-3. **工具/服务层**：PDF 解析与 OCR、Dense+Sparse 混合 RAG、arXiv/PubMed/Web 集成、NetworkX 图谱、
-   写作绘图与隔离 Python 执行；大模型经 Provider 抽象层多家热切换。
-4. **存储层**：Chroma 持久化向量库、BM25 索引、文献库元数据 JSON、原始 PDF 与图片。
-""")
+    page_header("🏗️ 系统架构设计",
+                "四层架构：交互层 → Agent 内核 → 工具/服务层 → 存储层，数据流与 Function Calling 闭环。",
+                icon="🏗️")
+    try:
+        embed_html(_ARCH_HTML, height=620, scrolling=False)
+    except Exception as e:
+        friendly_error("架构图渲染", e,
+                       reasons=["内嵌 HTML 组件不可用"],
+                       actions=["刷新页面重试", "下方文字版分层说明不受影响"])
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.success("✅ 分层设计：交互层 / Agent 内核 / 工具服务层 / 存储层，职责单向依赖。")
+    with c2:
+        st.info("🔁 Function Calling 闭环：规划 → 路由 → 工具 → 观察 → Trace 可视化。")
+    with st.expander("📐 分层与数据流（完整版）", expanded=False):
+        st.markdown(_ARCH_DETAIL)
 
 
 _INNOV = [
@@ -77,6 +94,12 @@ _INNOV = [
 
 
 def render_innov(ctx):
-    page_header("💡 技术创新亮点", "12 项工程与算法创新：Agent 闭环、多模型 Provider、混合检索抗幻觉、图论挖掘等。")
+    page_header("💡 技术创新亮点",
+                "12 项工程与算法创新：Agent 闭环、多模型 Provider、混合检索抗幻觉、图论挖掘等。",
+                icon="💡")
+    rows = [{"#": i, "创新点": t, "说明": d} for i, (t, d) in enumerate(_INNOV, 1)]
+    pretty_table(pd.DataFrame(rows), title="💡 12 项创新一览")
+    st.success(f"✅ 共 {len(_INNOV)} 项创新点，覆盖 Agent 架构、检索抗幻觉、图论挖掘与工程可复现。")
     for i, (t, d) in enumerate(_INNOV, 1):
-        st.markdown(f"**{i}. {t}**\n\n{d}")
+        with st.expander(f"🔎 {i}. {t}", expanded=False):
+            st.markdown(d)

@@ -1,0 +1,58 @@
+# ===== 密钥 / 环境变量（安全第一：严禁打进镜像）=====
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# ===== 版本控制 / CI =====
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# ===== 运行时数据（容器内由 volume 挂载或重新生成）=====
+storage/
+logs/
+*.log
+
+# ===== 构建产物 / 桌面打包（与 Docker 镜像无关）=====
+dist/
+build/
+dist-release/
+build_log.txt
+version_info.txt
+AI4SResearchAgent.spec
+installer.iss
+build_desktop.bat
+desktop/
+
+# ===== Python 缓存 =====
+__pycache__/
+*.pyc
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== 前端 =====
+node_modules/
+
+# ===== Streamlit 本地配置（Docker CMD 已显式指定端口/地址）=====
+.streamlit/
+
+# ===== 文档 / 截图 / 评审材料（不参与运行）=====
+docs/
+
+# ===== 系统 / 编辑器 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ===== 其他非运行必需 =====
+tests/
+version_history/
+LICENSE

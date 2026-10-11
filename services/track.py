@@ -5,6 +5,7 @@
 - diff_new(ctx, topic, items)：纯增量比对（供自测与守护脚本复用）；
 - 检查点存于长期记忆（storage/memory.json 的 kv），无需数据库即可跨会话追踪。
 """
+import re
 import json
 
 from services import extern
@@ -43,6 +44,39 @@ def fetch_track(ctx, max_results=8, only_new=True):
         new = diff_new(ctx, topic, items) if only_new else items
         report.append({"topic": topic, "count": len(items), "new": new})
     return report
+
+
+def _fetch_topic(topic, max_results=8):
+    """按话题抓论文：'cs.AI' 形式走分类最新，其余走关键词检索（按提交时间倒序）。"""
+    t = (topic or "").strip()
+    if re.fullmatch(r"[a-z\-]+\.[A-Za-z\-]+", t):
+        return extern.latest_arxiv(t, max_results)
+    return extern.search_arxiv(t, max_results, sort="submitted")
+
+
+def track_topic(ctx, topic, max_results=8, only_new=True):
+    """单话题追踪（供 agent 工具 t_track_topic 调用）。
+
+    topic 可为 arXiv 分类（如 "cs.AI"）或关键词；返回该话题本次抓到的论文数与「上次检查点之后」的新论文。
+    抓取失败的条目带 error 字段，不做任何假数据填充。
+    """
+    if not topic or not str(topic).strip():
+        return {"error": "topic 为空"}
+    try:
+        items = _fetch_topic(topic, max_results)
+    except Exception as e:
+        return {"topic": topic, "error": f"{type(e).__name__}: {str(e)[:120]}",
+                "count": 0, "new": []}
+    try:
+        new = diff_new(ctx, topic, items) if only_new else items
+    except Exception as e:
+        return {"topic": topic, "error": f"检查点比对失败：{type(e).__name__}: {str(e)[:120]}",
+                "count": len(items), "new": items}
+    slim = lambda lst: [{"arxiv_id": p.get("arxiv_id", ""), "title": p.get("title", ""),
+                         "published": p.get("published", ""), "github": p.get("github", [])}
+                        for p in lst]
+    return {"topic": topic, "count": len(items), "new_count": len(new),
+            "new": slim(new), "all": slim(items)}
 
 
 def reset_checkpoints(ctx):

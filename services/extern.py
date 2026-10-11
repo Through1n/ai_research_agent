@@ -1,9 +1,19 @@
-"""外部数据源集成：arXiv、PubMed、DuckDuckGo 网页、PDF 下载、GitHub 线索识别。"""
+"""外部数据源集成：arXiv、PubMed、DuckDuckGo 网页、PDF 下载、GitHub 线索识别与仓库复现性评估。"""
+import os
 import re
 import json
+import base64
 import difflib
 import urllib.request
 import urllib.parse
+import urllib.error
+from datetime import datetime, timezone
+
+# GitHub REST API：未认证限流 60 次/小时；配置 GITHUB_TOKEN（或 .env 中同名变量）可提额
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "") or os.getenv("GITHUB_API_TOKEN", "")
+GITHUB_TIMEOUT = 8            # 仓库元数据请求超时（秒）
+GITHUB_README_TIMEOUT = 8     # README 抓取超时（秒）
+GITHUB_README_CHARS = 3000    # README 取前 3000 字用于复现性判断
 
 
 def detect_github(*texts):
@@ -95,3 +105,157 @@ def download(url, dest, timeout=120):
     with urllib.request.urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:
         f.write(r.read())
     return dest
+
+
+# ---------------- GitHub 仓库复现性评估（真实调用 REST API，不编造） ----------------
+def _github_headers():
+    h = {"User-Agent": "AI4S-Research-Agent/1.0",
+         "Accept": "application/vnd.github+json"}
+    if GITHUB_TOKEN:
+        h["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    return h
+
+
+def _github_json(url, timeout=GITHUB_TIMEOUT):
+    req = urllib.request.Request(url, headers=_github_headers())
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", errors="ignore"))
+
+
+def parse_github_repo(url):
+    """从任意 GitHub 链接（含 .git / ssh 形式）解析 (owner, repo)；解析失败返回 (None, None)。"""
+    m = re.search(r"github\.com[:/]+([A-Za-z0-9_\-\.]+)/([A-Za-z0-9_\-\.]+)", str(url or ""))
+    if not m:
+        return None, None
+    return m.group(1), m.group(2).rstrip("/").removesuffix(".git")
+
+
+def _fetch_readme(owner, repo):
+    """取 README：优先 raw.githubusercontent（HEAD），失败降级 GitHub contents API（base64）。
+
+    返回 (文本, 来源, 错误)；任一路径失败都不编造内容，返回空文本 + 明确错误说明。
+    """
+    try:
+        req = urllib.request.Request(
+            f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/README.md",
+            headers={"User-Agent": "AI4S-Research-Agent/1.0"})
+        with urllib.request.urlopen(req, timeout=GITHUB_README_TIMEOUT) as r:
+            return r.read().decode("utf-8", errors="ignore"), "raw.githubusercontent", ""
+    except Exception as e:
+        raw_err = f"raw.githubusercontent 不可用：{type(e).__name__}: {str(e)[:60]}"
+    try:
+        data = _github_json(f"https://api.github.com/repos/{owner}/{repo}/readme")
+        content = (data.get("content") or "").replace("\n", "")
+        text = base64.b64decode(content).decode("utf-8", errors="ignore") if content else ""
+        return text, "api.github.com/readme", ""
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 429):
+            return "", "", f"{raw_err}；GitHub API 限流(HTTP {e.code})，README 未取到"
+        return "", "", f"{raw_err}；README 接口 HTTP {e.code}"
+    except Exception as e:
+        return "", "", f"{raw_err}；README 抓取失败：{type(e).__name__}: {str(e)[:60]}"
+
+
+def github_repo_info(url):
+    """查询 GitHub 仓库真实复现性指标。
+
+    真实调用 https://api.github.com/repos/{owner}/{repo}（免 key，限流 60 次/小时）取
+    stars/forks/open_issues/license/pushed_at/archived，再尝试取 README（前 GITHUB_README_CHARS 字）。
+    返回结构化结果；限流/网络失败时返回明确降级说明（degraded=True），**不编造任何指标**。
+    """
+    owner, repo = parse_github_repo(url)
+    if not owner or not repo:
+        return {"error": f"无法从 URL 解析 owner/repo：{url}", "degraded": True,
+                "reproducibility": "未知", "reasons": [f"URL 解析失败：{url}"]}
+    out = {"repo": f"{owner}/{repo}", "url": f"https://github.com/{owner}/{repo}",
+           "stars": None, "forks": None, "open_issues": None, "license": "unknown",
+           "pushed_at": "", "last_push_days": None, "archived": None,
+           "has_readme": False, "readme_chars": 0, "readme_source": "",
+           "reproducibility": "未知", "reasons": [], "degraded": False, "error": ""}
+    try:
+        d = _github_json(f"https://api.github.com/repos/{owner}/{repo}")
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 429):
+            out.update({"degraded": True, "reproducibility": "未知",
+                        "error": f"GitHub API 限流或禁止访问（HTTP {e.code}）：未认证额度 60 次/小时，"
+                                 f"可配置 GITHUB_TOKEN 提额。本次不做任何推测性评级"})
+            out["reasons"].append("仓库元数据未取到（限流），无法评估复现性")
+            return out
+        out.update({"degraded": True, "error": f"GitHub API HTTP {e.code}",
+                    "reasons": [f"仓库元数据请求失败：HTTP {e.code}"]})
+        return out
+    except Exception as e:
+        out.update({"degraded": True, "error": f"{type(e).__name__}: {str(e)[:120]}",
+                    "reasons": [f"仓库元数据请求失败：{type(e).__name__}"]})
+        return out
+
+    out["stars"] = d.get("stargazers_count")
+    out["forks"] = d.get("forks_count")
+    out["open_issues"] = d.get("open_issues_count")
+    lic = (d.get("license") or {}).get("spdx_id") or "unknown"
+    out["license"] = lic
+    out["archived"] = bool(d.get("archived"))
+    out["pushed_at"] = d.get("pushed_at") or ""
+    try:
+        pushed = datetime.fromisoformat(out["pushed_at"].replace("Z", "+00:00"))
+        out["last_push_days"] = int((datetime.now(timezone.utc) - pushed).total_seconds() // 86400)
+    except Exception:
+        out["last_push_days"] = None
+
+    readme, src, rerr = _fetch_readme(owner, repo)
+    out["has_readme"] = bool(readme.strip())
+    out["readme_chars"] = len(readme)
+    out["readme_source"] = src
+    if rerr:
+        out["reasons"].append(rerr)
+
+    # ---- 复现性评分（可解释加权，全部基于上面真实取到的字段） ----
+    s, reasons = 0.0, out["reasons"]
+    st = out["stars"] or 0
+    if st >= 500:
+        s += 2.0; reasons.append(f"stars {st} ≥ 500，社区关注度高 (+2.0)")
+    elif st >= 100:
+        s += 1.5; reasons.append(f"stars {st} 在 100~500，有一定社区基础 (+1.5)")
+    elif st >= 20:
+        s += 1.0; reasons.append(f"stars {st} 在 20~100 (+1.0)")
+    else:
+        reasons.append(f"stars {st} < 20，社区验证不足 (+0)")
+
+    if out["has_readme"]:
+        s += 1.5; reasons.append(f"存在 README（{out['readme_chars']} 字，来源 {src or '未取到'}）(+1.5)")
+        if out["readme_chars"] >= 1500:
+            s += 0.5; reasons.append("README 内容较完整（≥1500 字）(+0.5)")
+    else:
+        reasons.append("未取到 README (+0)")
+
+    if lic and lic not in ("unknown", "NOASSERTION"):
+        s += 1.0; reasons.append(f"有明确开源许可证 {lic} (+1.0)")
+    else:
+        reasons.append(f"许可证缺失或不明确（{lic}）(+0)")
+
+    d_days = out["last_push_days"]
+    if d_days is None:
+        reasons.append("最近推送时间未知 (+0)")
+    elif d_days <= 180:
+        s += 1.5; reasons.append(f"最近推送在 {d_days} 天内，维护活跃 (+1.5)")
+    elif d_days <= 365:
+        s += 1.0; reasons.append(f"最近推送 {d_days} 天前，近一年内有维护 (+1.0)")
+    elif d_days <= 730:
+        s += 0.5; reasons.append(f"最近推送 {d_days} 天前，维护缓慢 (+0.5)")
+    else:
+        reasons.append(f"最近推送 {d_days} 天前，长期未维护 (+0)")
+
+    if out["archived"]:
+        s -= 3.0; reasons.append("仓库已归档（archived），作者停止维护 (-3.0)")
+
+    if out["archived"]:
+        out["reproducibility"] = "低"
+    elif s >= 4.0:
+        out["reproducibility"] = "高"
+    elif s >= 2.5:
+        out["reproducibility"] = "中"
+    else:
+        out["reproducibility"] = "低"
+    out["score"] = round(s, 2)
+    out["reasons"].append(f"综合得分 {s:.2f} → 复现性评级「{out['reproducibility']}」")
+    return out

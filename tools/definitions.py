@@ -8,8 +8,11 @@ import subprocess
 from datetime import datetime, timezone
 
 from tools.registry import Registry
-from services import extern, library, rag, graph as gsvc, writing
-from services.citation_quality import score_references
+from services import extern, library, rag, graph as gsvc, writing, track
+from services.citation_quality import score_references, assess_reference
+
+# 单条工具调用最多对多少条参考文献走真实网络被引查询（避免请求风暴/超时）
+CITATION_NETWORK_BUDGET = 5
 
 
 def trunc(t, n=600):
@@ -98,58 +101,47 @@ def t_track_arxiv(ctx, arxiv_id, since_days=7):
 
 
 def t_github_search(ctx, repo_url):
-    """查询 GitHub 仓库复现性指标（stars / license / 最近推送 / 开放 issue）。"""
+    """查询 GitHub 仓库复现性指标（stars/forks/license/最近推送/开放 issue + README）。
+
+    真实调用 GitHub REST API（services/extern.py:github_repo_info）；限流/失败时返回明确降级说明。
+    """
     try:
-        m = re.search(r"github\.com[:/](?P<owner>[A-Za-z0-9_\-\.]+)/(?P<repo>[A-Za-z0-9_\-\.]+)",
-                      str(repo_url))
-        if not m:
-            return {"error": f"无法从 repo_url 解析 owner/repo: {repo_url}"}
-        owner = m.group("owner")
-        repo = m.group("repo").rstrip(".git")
-        api = f"https://api.github.com/repos/{owner}/{repo}"
-        req = extern.urllib.request.Request(
-            api, headers={"User-Agent": "ai-research-agent",
-                           "Accept": "application/vnd.github+json"})
-        with extern.urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode("utf-8"))
-        stars = data.get("stargazers_count", 0)
-        pushed_at = data.get("pushed_at", "") or ""
-        lic = (data.get("license") or {}).get("spdx_id") or "unknown"
-        open_issues = data.get("open_issues_count", 0)
-        desc = data.get("description") or ""
-        age_years = 999.0
-        try:
-            pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
-            age_years = (datetime.now(timezone.utc) - pushed_dt).total_seconds() / 86400.0 / 365.0
-        except Exception:
-            age_years = 999.0
-        if stars >= 500 and lic != "unknown" and age_years < 1:
-            score = "A"
-        elif stars >= 50 and lic != "unknown":
-            score = "B"
-        else:
-            score = "C"
-        return {
-            "repo": f"{owner}/{repo}",
-            "stars": stars,
-            "pushed_at": pushed_at,
-            "license": lic,
-            "open_issues": open_issues,
-            "description": desc,
-            "repro_score": score,
-        }
-    except Exception:
-        return {
-            "repo_url": repo_url,
-            "stars": "unknown",
-            "license": "unknown",
-            "pushed_at": "unknown",
-            "note": "GitHub API 不可达",
-        }
+        info = extern.github_repo_info(repo_url)
+    except Exception as e:
+        return {"repo_url": repo_url, "degraded": True,
+                "error": f"{type(e).__name__}: {str(e)[:120]}", "note": "GitHub API 不可达"}
+    if info.get("error") or info.get("degraded"):
+        return {"repo": info.get("repo", repo_url), "degraded": True,
+                "error": info.get("error", ""), "reasons": info.get("reasons", []),
+                "reproducibility": info.get("reproducibility", "未知"),
+                "note": "GitHub 数据未取到，未做推测性评级"}
+    # 兼容旧字段：repro_score 为 A/B/C 字母评级（由 高/中/低 映射而来）
+    letter = {"高": "A", "中": "B", "低": "C"}.get(info.get("reproducibility", ""), "C")
+    return {
+        "repo": info.get("repo"),
+        "url": info.get("url"),
+        "stars": info.get("stars"),
+        "forks": info.get("forks"),
+        "open_issues": info.get("open_issues"),
+        "license": info.get("license"),
+        "pushed_at": info.get("pushed_at"),
+        "last_push_days": info.get("last_push_days"),
+        "archived": info.get("archived"),
+        "has_readme": info.get("has_readme"),
+        "readme_chars": info.get("readme_chars"),
+        "reproducibility": info.get("reproducibility"),
+        "repro_score": letter,
+        "reasons": info.get("reasons", []),
+        "degraded": False,
+    }
 
 
 def t_citation_quality(ctx, references):
-    """对参考文献列表做含金量打分，返回均分、等级分布与头尾样本。"""
+    """对参考文献列表做含金量评估（真实被引数据 + venue 等级 + 引用位置 + 主题相关性）。
+
+    前 CITATION_NETWORK_BUDGET 条走 OpenAlex→Semantic Scholar→Crossref 真实被引链路；
+    全部条目同时给出离线规则打分。取不到真实被引时如实标注，不编造数字。
+    """
     try:
         refs = [r for r in (references or []) if isinstance(r, str) and r.strip()]
         if not refs:
@@ -165,15 +157,49 @@ def t_citation_quality(ctx, references):
                for ref, res in paired[:3]]
         bottom = [{"ref": ref, "score": res["score"], "grade": res["grade"]}
                   for ref, res in paired[-3:][::-1]]
+
+        assessed, real_hits = [], 0
+        for i, ref in enumerate(refs[:CITATION_NETWORK_BUDGET]):
+            try:
+                a = assess_reference(ref, use_network=True)
+            except Exception as e:
+                a = {"level": "评估失败", "real_citations": None, "venue_tier": "未知",
+                     "score": 0, "reasons": [f"{type(e).__name__}: {str(e)[:80]}"]}
+            if a.get("real_citations") is not None:
+                real_hits += 1
+            assessed.append({"ref": ref[:160], "level": a.get("level"),
+                             "real_citations": a.get("real_citations"),
+                             "venue_tier": a.get("venue_tier"),
+                             "score": a.get("score"), "reasons": a.get("reasons", [])[:4]})
         return {
             "scored_count": len(results),
             "avg_score": avg,
             "grade_distribution": dist,
             "top_refs": top,
             "bottom_refs": bottom,
+            "network_assessed": len(assessed),
+            "real_citation_hits": real_hits,
+            "assessed": assessed,
+            "note": (f"前 {len(assessed)} 条已查询真实被引（OpenAlex→Semantic Scholar→Crossref）；"
+                     f"其中 {real_hits} 条取到真实数字，其余标注为不可得，未做任何数值猜测"),
         }
     except Exception as e:
         return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+
+
+def t_track_topic(ctx, topic="", arxiv_id="", max_results=8, only_new=True):
+    """定时追踪：按话题/分类（如 cs.AI 或关键词）抓取最新论文，并给出「上次检查点之后」的新论文。
+
+    底层调用 services/track.py 的 diff_new（检查点持久化在长期记忆），抓取走 arXiv 真实接口。
+    二选一传参：topic（话题/分类）或 arxiv_id（单篇论文版本追踪）。
+    """
+    if arxiv_id:
+        return {"mode": "arxiv_id", **t_track_arxiv(ctx, arxiv_id)}
+    try:
+        return {"mode": "topic", **track.track_topic(ctx, topic, int(max_results), bool(only_new))}
+    except Exception as e:
+        return {"mode": "topic", "topic": topic, "error": f"{type(e).__name__}: {str(e)[:120]}",
+                "count": 0, "new": []}
 
 
 def _ingest_arxiv_paper(ctx, p):
@@ -183,6 +209,9 @@ def _ingest_arxiv_paper(ctx, p):
     os.remove(tmp.name)
     fname = p["arxiv_id"].split("v")[0] + ".pdf"
     prepared = library.prepare_pdf(ctx, data=data, filename=fname)
+    if prepared.get("error"):
+        return {"ok": False, "error": prepared.get("error"),
+                "reason": prepared.get("reason", "")}
     if prepared["dup_name"]:
         return {"ok": False, "duplicate": prepared["dup_name"],
                 "sim": round(prepared["dup_sim"], 3), "note": "语义查重命中，该论文已在库"}
@@ -212,20 +241,30 @@ def t_batch_download(ctx, titles):
 
 # ---------------- 图谱 / 综述 ----------------
 def _graph(ctx):
+    """构建图谱并返回 (G, edges, metrics, cornerstone, frontier)。
+
+    第 5 项由原来的「入度=0 孤儿列表」升级为 detect_frontier 的前沿/潜力论文结果（带 score 与 reasons）。
+    """
     G, edges = gsvc.build_graph(ctx)
     metrics = gsvc.analyze(G)
-    corner, edge = gsvc.classify_papers(G, metrics)
-    return G, edges, metrics, corner, edge
+    corner, _ = gsvc.classify_papers(G, metrics)
+    try:
+        frontier = gsvc.detect_frontier(ctx, G, metrics)
+    except Exception:
+        frontier = []
+    return G, edges, metrics, corner, frontier
 
 
 def t_build_graph(ctx):
     import streamlit as st
-    G, edges, metrics, corner, edge = _graph(ctx)
+    G, edges, metrics, corner, frontier = _graph(ctx)
     st.session_state["last_graph_html"] = gsvc.graph_html(G, metrics, corner)
     return {"nodes": len(G.nodes), "edge_count": len(edges),
             "edges": [{"from": a, "to": b} for a, b, _ in edges],
             "cornerstone": [ctx.papers[n]["title"] for n in corner],
-            "edge_derivative": [ctx.papers[n]["title"] for n in edge]}
+            # 字段名沿用旧契约 edge_derivative，内容改为 frontier 模型输出（含可解释理由）
+            "edge_derivative": [{"paper": f["title"], "score": f["score"],
+                                 "reasons": f["reasons"]} for f in frontier]}
 
 
 def t_review(ctx):
@@ -254,22 +293,52 @@ def t_translate(ctx, text, direction):
 
 
 # ---------------- 代码执行 ----------------
+def _tail_text(value, limit):
+    """安全截尾：保留最后 limit 个字符；兼容 None / bytes / 超长文本。"""
+    try:
+        if not value:
+            return ""
+        if isinstance(value, (bytes, bytearray)):
+            value = bytes(value).decode("utf-8", errors="replace")
+        value = str(value)
+        return value[-limit:] if len(value) > limit else value
+    except Exception:
+        return ""
+
+
 def t_run_python(ctx, code):
     from core.sandbox import validate_code, SandboxViolation
     try:
         validate_code(code)
     except SandboxViolation as e:
         return {"rc": -2, "blocked": True, "reason": f"已被安全护栏拦截：{e}"}
-    work = tempfile.mkdtemp(prefix="ai4s_code_")
-    fp = os.path.join(work, "cell.py")
-    with open(fp, "w", encoding="utf-8") as f:
-        f.write(code)
+    except Exception as e:
+        return {"rc": -2, "blocked": True,
+                "reason": f"静态检查失败：{type(e).__name__}: {str(e)[:120]}"}
     try:
-        p = subprocess.run([sys.executable, fp], cwd=work, capture_output=True,
-                           text=True, timeout=25)
-        return {"rc": p.returncode, "stdout": p.stdout[-3000], "stderr": p.stderr[-1500]}
-    except subprocess.TimeoutExpired:
-        return {"rc": -1, "error": "执行超时(>25s)"}
+        work = tempfile.mkdtemp(prefix="ai4s_code_")
+        fp = os.path.join(work, "cell.py")
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(code)
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        try:
+            p = subprocess.run([sys.executable, fp], cwd=work, capture_output=True,
+                               timeout=25, env=env, encoding="utf-8", errors="replace")
+            stdout_text = p.stdout or ""
+            return {"rc": p.returncode,
+                    "stdout": _tail_text(stdout_text, 3000),
+                    "stderr": _tail_text(p.stderr, 1500),
+                    "stdout_truncated": len(stdout_text) > 3000}
+        except subprocess.TimeoutExpired as e:
+            # 超时后 p.stdout 不可用，从异常对象里尽力回收已产生的输出
+            return {"rc": -1, "error": "执行超时(>25s)",
+                    "stdout": _tail_text(getattr(e, "stdout", None), 3000),
+                    "stderr": _tail_text(getattr(e, "stderr", None), 1500)}
+    except Exception as e:
+        return {"rc": -3, "error": f"{type(e).__name__}: {str(e)[:200]}",
+                "stdout": "", "stderr": ""}
 
 
 # ---------------- 记忆 ----------------
@@ -310,6 +379,15 @@ def build_registry():
                    "arxiv_id": {"type": "string", "description": "arXiv 编号，如 2301.00001 或 2301.00001v2"},
                    "since_days": {"type": "integer", "description": "判定更新的时间窗口（天）", "default": 7}},
                 "required": ["arxiv_id"]}, t_track_arxiv)
+    r.register("track_topic", "定时追踪：按 arXiv 分类（如 cs.AI）或关键词抓取最新论文，返回「上次检查点之后」的新增论文"
+                              "（检查点持久化在长期记忆）；也可传入 arxiv_id 追踪单篇论文的版本更新。"
+                              "用于回答「最近有什么新论文/这个方向有新进展吗」。",
+               {"type": "object", "properties": {
+                   "topic": {"type": "string", "description": "arXiv 分类（如 cs.AI/cs.CL）或关键词；与 arxiv_id 二选一"},
+                   "arxiv_id": {"type": "string", "description": "要追踪的 arXiv 编号（如 2301.00001）；与 topic 二选一"},
+                   "max_results": {"type": "integer", "description": "每个话题抓取条数", "default": 8},
+                   "only_new": {"type": "boolean", "description": "是否只返回上次检查点之后的新论文", "default": True}},
+                }, t_track_topic)
     r.register("github_search", "查询 GitHub 仓库复现性指标（stars/license/最近推送），并给出复现性评级 A/B/C。",
                {"type": "object", "properties": {
                    "repo_url": {"type": "string", "description": "形如 https://github.com/owner/repo"}},

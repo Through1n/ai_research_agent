@@ -5,13 +5,64 @@
 - 候选生成：标题 token 倒排索引，把 O(n²) 全文比对降为「按共享词根候选」；
 - 双重匹配：词面窗口匹配失败时，用论文标题与参考文献条目的语义向量兜底；
 - 版本归并：同一 arXiv 号仅取最新版本入图，避免重复节点。
+
+新增（对应赛题 D 路审计整改）：
+- detect_frontier：真正的 frontier 模型（低被引 + 时间新近 + 高出度 + 跨学科向量距离 + 外部真实被引）；
+- generate_review：社区发现聚簇 → 簇代表 → 时间线 → 引用骨干边，图谱结构驱动综述；
+- explore_future_structured：用引用图 1/2 跳可达性判定 Future Work 是否已被后续论文解决。
 """
 import re
 import math
+import time
 import statistics
 import networkx as nx
 
 from services.library import cosine
+from core.llm import call_llm_with_retry
+
+# ---------- 可调常量（本模块内自持，不外挂 config） ----------
+FRONTIER_EXTERNAL_TOPK = 5     # frontier 打分后，仅对 Top-K 篇查外部真实被引（控制网络开销）
+FRONTIER_TOP_N = 10            # frontier 结果最多返回条数
+REVIEW_EDGE_BACKBONE = 15      # 综述注入的引用骨干边条数
+REVIEW_REPS_PER_CLUSTER = 3    # 每个主题簇取前几篇 PageRank 最高者作代表
+FUTURE_MAX_ITEMS = 12          # Future Work 结构化输出最多条数
+LLM_TEMPERATURE = 0.4          # LLM 调用默认温度
+# True：优先复用 ctx.llm（保留用户在侧边栏选择的 provider/key），不可用时降级 call_llm_with_retry；
+# False：一律走 core.llm.call_llm_with_retry（core/llm.py:129，读 config 默认 provider）。
+PREFER_CTX_LLM = True
+
+# frontier 各分量权重（缺失分量时按剩余权重归一化，不做零分惩罚）
+_FRONTIER_WEIGHTS = {"low_indegree": 0.25, "recency": 0.20,
+                     "out_degree": 0.15, "interdiscipline": 0.25, "external": 0.15}
+
+
+def _llm_text(ctx, prompt_or_messages, temperature=LLM_TEMPERATURE):
+    """统一 LLM 入口（T7）：默认优先复用 ctx.llm（保留用户在侧边栏配置的 provider/key），
+    不可用时降级 core.llm.call_llm_with_retry（core/llm.py:129）；两者都失败返回明确降级文案，
+    **不编造内容**，由调用方改用确定性结果。"""
+    messages = prompt_or_messages if isinstance(prompt_or_messages, list) \
+        else [{"role": "user", "content": str(prompt_or_messages)}]
+    err = "已跳过 ctx.llm（PREFER_CTX_LLM=False）"
+    if PREFER_CTX_LLM:
+        try:
+            llm = getattr(ctx, "llm", None)
+            if llm is not None and getattr(llm, "available", False):
+                return (llm.chat(messages, temperature=temperature).content or "").strip()
+            err = "ctx.llm 不可用（未配置 API Key 或 provider 未就绪）"
+        except Exception as e:
+            err = f"ctx.llm 调用异常：{type(e).__name__}: {str(e)[:100]}"
+    try:
+        resp = call_llm_with_retry(messages, temperature=temperature)
+        content = getattr(resp.choices[0].message, "content", "") or ""
+        return content.strip()
+    except Exception as e:
+        return f"【LLM 调用失败：{err}；降级调用 core.llm.call_llm_with_retry 也失败：" \
+               f"{type(e).__name__}: {str(e)[:100]}】"
+
+
+def _llm_ok(text):
+    """判断 LLM 输出是否为可信内容（伪响应/兜底文案一律视为不可用）。"""
+    return bool(text) and "【LLM" not in text
 
 
 def norm(s):
@@ -186,8 +237,13 @@ def analyze(G):
     return {"pagerank": pr, "indegree": indeg, "betweenness": bet, "eigenvector": eig}
 
 
-def classify_papers(G, metrics):
-    """基石论文 = 高被引/高PageRank；边缘衍生 = 入度低(仅引用他人)。"""
+def classify_papers(G, metrics, ctx=None):
+    """基石论文 = 高被引/高PageRank；第二项默认仍为「本地入度=0」列表（向后兼容）。
+
+    向后兼容说明：ui/page_graph.py:22 以 `corner, edge = classify_papers(G, metrics)` 调用，
+    返回仍是 2-tuple。当额外传入 ctx 时（tools/definitions.py 的 agent 工具链路），第二项升级为
+    detect_frontier 得到的「前沿/潜力论文」列表，不再是单纯孤儿节点。
+    """
     if not metrics:
         return [], []
     pr, indeg = metrics["pagerank"], metrics["indegree"]
@@ -198,8 +254,177 @@ def classify_papers(G, metrics):
         corner = ranked[:max(1, math.ceil(n * 0.3))]
     else:
         corner = ranked[:1]
-    edge = [x for x in ranked if indeg[x] == 0]
-    return corner, edge
+    if ctx is None:
+        edge = [x for x in ranked if indeg[x] == 0]
+        return corner, edge
+    try:
+        frontier = detect_frontier(ctx, G, metrics, use_external=False)
+        n_keep = max(3, math.ceil(n * 0.3))
+        return corner, [f["paper"] for f in frontier[:n_keep]]
+    except Exception:
+        return corner, [x for x in ranked if indeg[x] == 0]
+
+
+def _paper_vectors(ctx, nodes):
+    """论文主题向量：title + abstract 前 800 字做 embedding；失败返回 {}（跨学科维度自动跳过）。"""
+    vecs = {}
+    if not nodes:
+        return vecs
+    texts, order = [], []
+    for n in nodes:
+        info = ctx.papers.get(n, {})
+        order.append(n)
+        texts.append(f"{info.get('title', n)} {str(info.get('abstract', ''))[:800]}")
+    try:
+        emb = ctx.embed(texts)
+        for n, v in zip(order, emb):
+            vecs[n] = v
+    except Exception:
+        return {}
+    return vecs
+
+
+def _mean_pairwise_distance(vecs):
+    """引用文献之间的平均两两向量距离（1-cos）：越大说明引用的文献越"跨领域"。"""
+    if len(vecs) < 2:
+        return None
+    tot, cnt = 0.0, 0
+    for i in range(len(vecs)):
+        for j in range(i + 1, len(vecs)):
+            tot += 1.0 - cosine(vecs[i], vecs[j])
+            cnt += 1
+    return tot / cnt if cnt else None
+
+
+def detect_frontier(ctx, G, metrics, use_external=True):
+    """前沿(frontier)/潜力论文识别——不再是"本地库入度=0 的孤儿节点"。
+
+    五维打分（缺失维度按剩余权重归一化，绝不假装有数据）：
+      ① low_indegree 本地被引少（但入度=0 且出度=0 的完全孤立点按噪声扣分）；
+      ② recency     发表年份新近性（时间衰减 1 - Δyear/10，年份缺失取中性 0.3 并注明）；
+      ③ out_degree  出度高（引用大量文献 = 综述/跨学科倾向）；
+      ④ interdiscipline 与其引用文献的主题向量距离（自身 vs 引用文献质心 + 引用文献两两距离）；
+      ⑤ external    外部真实被引数（OpenAlex→S2→Crossref，仅对预打分 Top-K 查询，取不到不计分）。
+    返回 [{"paper","title","score","reasons":[...], "components":{...}}]，按 score 降序。
+    """
+    if G is None or len(G.nodes) == 0 or not metrics:
+        return []
+    pr = metrics.get("pagerank", {})
+    indeg = metrics.get("indegree", {})
+    nodes = list(G.nodes)
+    n = len(nodes)
+    cur_year = time.localtime().tm_year
+    max_out = max([d for _, d in G.out_degree()] or [1]) or 1
+
+    years = {x: _node_year(ctx, x) for x in nodes}
+    vecs = _paper_vectors(ctx, nodes)
+    if not vecs:
+        vecs = {}
+
+    def _centroid(vs):
+        if not vs:
+            return None
+        dim = len(vs[0])
+        c = [0.0] * dim
+        for v in vs:
+            for i in range(min(dim, len(v))):
+                c[i] += v[i]
+        return [x / len(vs) for x in c]
+
+    pre = []
+    for x in nodes:
+        comps, reasons = {}, []
+
+        # ① 本地入度低
+        in_d, out_d = indeg.get(x, 0), G.out_degree(x)
+        low_indeg = 1.0 - (in_d / max(1, n - 1))
+        comps["low_indegree"] = low_indeg
+        reasons.append(f"本地被引 {in_d} 次（入度低得分 {low_indeg:.2f}）")
+
+        # ② 时间新近性
+        y = years.get(x)
+        if y:
+            recency = max(0.0, min(1.0, 1.0 - (cur_year - y) / 10.0))
+            comps["recency"] = recency
+            reasons.append(f"发表年份 {y}（时间衰减得分 {recency:.2f}）")
+        else:
+            comps["recency"] = 0.3
+            reasons.append("年份缺失，时间维度取中性值 0.30（未做推断）")
+
+        # ③ 高出度
+        od = out_d / max_out
+        comps["out_degree"] = od
+        reasons.append(f"出度 {out_d}（引用文献数量得分 {od:.2f}）")
+
+        # ④ 跨学科：自身 vs 引用文献质心距离 + 引用文献两两平均距离
+        if vecs.get(x) is not None:
+            refs = [vecs[r] for r in G.successors(x) if vecs.get(r) is not None]
+            dist_self, div_refs = None, _mean_pairwise_distance(refs)
+            if refs:
+                cen = _centroid(refs)
+                if cen:
+                    dist_self = max(0.0, min(1.0, 1.0 - cosine(vecs[x], cen)))
+            if dist_self is None and div_refs is None:
+                reasons.append("无可计算向量邻居，跨学科维度跳过")
+            else:
+                parts = [v for v in (dist_self, div_refs) if v is not None]
+                inter = sum(parts) / len(parts)
+                comps["interdiscipline"] = max(0.0, min(1.0, inter))
+                reasons.append(
+                    f"跨学科距离 {inter:.2f}（自身vs引用文献质心 {'-' if dist_self is None else f'{dist_self:.2f}'}"
+                    f"，引用文献两两差异 {'-' if div_refs is None else f'{div_refs:.2f}'}）")
+        else:
+            reasons.append("embedding 不可用，跨学科维度跳过")
+
+        # 噪声惩罚：完全孤立（入度0 且 出度0）
+        penalty = 0.0
+        if in_d == 0 and out_d == 0:
+            penalty = -0.20
+            reasons.append("入度=0 且出度=0，判为孤立噪声节点而非前沿 (-0.20)")
+
+        wsum = sum(_FRONTIER_WEIGHTS[k] for k in comps)
+        raw = sum(_FRONTIER_WEIGHTS[k] * comps[k] for k in comps) / wsum if wsum else 0.0
+        pre.append({"paper": x, "title": ctx.papers.get(x, {}).get("title", x),
+                    "pre": raw * 100.0 + penalty * 100.0, "penalty": penalty, "comps": comps,
+                    "reasons": reasons, "pr": pr.get(x, 0.0)})
+
+    pre.sort(key=lambda d: -d["pre"])
+
+    # ⑤ 外部真实被引：只对预打分 Top-K 查询，控制网络开销
+    if use_external:
+        try:
+            from services.citation_quality import fetch_citation_count
+        except Exception:
+            fetch_citation_count = None
+        if fetch_citation_count:
+            for item in pre[:FRONTIER_EXTERNAL_TOPK]:
+                info = ctx.papers.get(item["paper"], {})
+                try:
+                    real = fetch_citation_count(info.get("title", item["paper"]),
+                                                year=_node_year(ctx, item["paper"]))
+                except Exception as e:
+                    real = None
+                    item["reasons"].append(f"外部被引查询异常：{type(e).__name__}（不计分）")
+                if real and isinstance(real.get("count"), int):
+                    c = max(0, real["count"])
+                    ext = min(1.0, math.log10(1 + c) / 3.0)
+                    item["comps"]["external"] = ext
+                    item["reasons"].append(
+                        f"外部真实被引 {c} 次（{real.get('source')}，匹配《{str(real.get('matched_title'))[:50]}》"
+                        f"相似度 {real.get('match_score')}）→ 外部热度得分 {ext:.2f}")
+                else:
+                    item["reasons"].append("外部被引数据不可得（三级数据源均失败或未匹配），该维度不计分")
+
+    out = []
+    for item in pre:
+        comps = item["comps"]
+        wsum = sum(_FRONTIER_WEIGHTS[k] for k in comps)
+        score = sum(_FRONTIER_WEIGHTS[k] * comps[k] for k in comps) / wsum * 100.0 if wsum else 0.0
+        score = round(max(0.0, min(100.0, score + item.get("penalty", 0.0) * 100.0)), 1)
+        out.append({"paper": item["paper"], "title": item["title"], "score": score,
+                    "reasons": item["reasons"], "components": {k: round(v, 3) for k, v in comps.items()}})
+    out.sort(key=lambda d: -d["score"])
+    return out[:FRONTIER_TOP_N]
 
 
 def graph_html(G, metrics, cornerstone):
@@ -254,99 +479,232 @@ def _node_year(ctx, n):
         return None
 
 
-def generate_review(ctx, G, metrics, cornerstone):
-    """基于图谱分层（基石/高介面/普通）与年份三段（早/中/近）驱动综述。"""
-    # ---- 备份原 prompt（fallback） ----
-    abstracts = "\n".join(
-        f"《{ctx.papers[n].get('title', n)}》({ctx.papers[n].get('year','')}): {ctx.papers[n].get('abstract','')[:500]}"
-        for n in ctx.paper_order)
-    corner_simple = "、".join(ctx.papers[n].get("title", n) for n in cornerstone)
-    fallback_prompt = f"""基于以下局域文献库与引用分析，用中文撰写一篇结构完整的简短领域综述（含：领域背景、主要技术脉络、
-基石工作（{corner_simple}）的贡献、当前进展与局限）。客观、连贯、800字内。
-文献信息：
-{abstracts[:6000]}"""
-
+def _communities(G):
+    """社区发现三级降级：greedy_modularity → louvain → 弱连通分量。返回 [set(node)]（按规模降序）。"""
+    if G is None or len(G.nodes) == 0:
+        return []
     try:
-        if G is None or len(G.nodes) == 0 or not metrics or "pagerank" not in metrics:
-            raise RuntimeError("G 空或 metrics 缺失")
+        return sorted((set(c) for c in nx.community.greedy_modularity_communities(G.to_undirected())),
+                      key=len, reverse=True)
+    except Exception:
+        pass
+    try:
+        return sorted((set(c) for c in nx.community.louvain_communities(G.to_undirected(), seed=42)),
+                      key=len, reverse=True)
+    except Exception:
+        pass
+    return sorted((set(c) for c in nx.weakly_connected_components(G)), key=len, reverse=True)
 
-        corner_set = set(cornerstone or [])
-        bet = metrics.get("betweenness", {})
 
-        # ---- 1) 高介面层：betweenness top 20% 且不在 cornerstone ----
-        all_nodes = list(G.nodes)
-        bet_sorted = sorted(((bet.get(n, 0.0), n) for n in all_nodes), reverse=True)
-        n_bridge = max(1, int(len(all_nodes) * 0.2))
-        bridge_set = set()
-        for _, n in bet_sorted[:n_bridge]:
-            if n not in corner_set:
-                bridge_set.add(n)
+def _cluster_label(ctx, members):
+    """主题簇标签：成员标题中的高频实词 top3（纯统计，非 LLM 编造）。"""
+    freq = {}
+    for m in members:
+        for w in set(norm(ctx.papers.get(m, {}).get("title", m)).split()):
+            if len(w) > 4 and w not in _STOP:
+                freq[w] = freq.get(w, 0) + 1
+    top = sorted(freq.items(), key=lambda x: (-x[1], x[0]))[:3]
+    return "/".join(w for w, _ in top) if top else "未命名主题簇"
 
-        def _fmt(n, with_abstract=False):
-            info = ctx.papers.get(n, {})
-            title = info.get("title", n)
-            year = info.get("year", "")
-            if with_abstract:
-                return f"《{title}》({year}) {info.get('abstract','')[:200]}"
-            return f"《{title}》({year})"
 
-        corner_block = "\n".join(f"- {_fmt(n, with_abstract=True)}" for n in (cornerstone or []))
-        bridge_block = "\n".join(f"- {_fmt(n)}" for n in bridge_set) if bridge_set else "（无）"
-        normal_set = [n for n in all_nodes if n not in corner_set and n not in bridge_set]
-        normal_block = "\n".join(f"- {_fmt(n)}" for n in normal_set) if normal_set else "（无）"
+def review_structure(ctx, G, metrics, cornerstone, reps_per_cluster=REVIEW_REPS_PER_CLUSTER,
+                     backbone_k=REVIEW_EDGE_BACKBONE):
+    """从引用图谱抽取综述骨架（纯 networkx 计算，不经过 LLM）。
 
-        # ---- 2) 年份三段：按中位数 ±3 切 ----
-        years = []
-        year_of = {}
-        for n in all_nodes:
-            y = _node_year(ctx, n)
-            if y is not None:
-                year_of[n] = y
-                years.append(y)
-        early_block = mid_block = recent_block = "（无）"
-        if years:
-            y_mid = statistics.median(years)
-            early = [n for n, y in year_of.items() if y < y_mid - 3]
-            mid = [n for n, y in year_of.items() if y_mid - 3 <= y <= y_mid + 3]
-            recent = [n for n, y in year_of.items() if y > y_mid + 3]
+    返回 {"clusters":[{label,size,avg_year,reps:[...],members:[...]}], "timeline":[(year,[...])],
+          "backbone":[{"from","to","from_title","to_title","evidence"}], "bridges":[...],
+          "pr_top":[(node, pr)], "n_nodes":int, "n_edges":int}；图谱为空返回 None。
+    """
+    if G is None or len(G.nodes) == 0 or not metrics or "pagerank" not in metrics:
+        return None
+    pr = metrics.get("pagerank", {})
+    comms = _communities(G)
+    if not comms:
+        return None
 
-            def _tl(lst):
-                return "\n".join(f"- {_fmt(n)}" for n in sorted(lst, key=lambda x: year_of.get(x, 0)))
+    def _title(n):
+        return ctx.papers.get(n, {}).get("title", n)
 
-            early_block = _tl(early) if early else "（无）"
-            mid_block = _tl(mid) if mid else "（无）"
-            recent_block = _tl(recent) if recent else "（无）"
+    def _year(n):
+        return _node_year(ctx, n)
 
-        corner_names = "、".join(ctx.papers[n].get("title", n) for n in (cornerstone or []))
-        bridge_names = "、".join(ctx.papers[n].get("title", n) for n in list(bridge_set)[:5])
+    clusters = []
+    comm_of = {}
+    for i, members in enumerate(comms):
+        comm_of.update({m: i for m in members})
+        ys = [y for y in (_year(m) for m in members) if y]
+        reps = sorted(members, key=lambda m: -pr.get(m, 0.0))[:reps_per_cluster]
+        clusters.append({"id": i, "label": _cluster_label(ctx, members), "size": len(members),
+                         "avg_year": round(statistics.mean(ys), 1) if ys else None,
+                         "reps": reps, "members": sorted(members, key=lambda m: -pr.get(m, 0.0))})
+    # 簇间按平均年份排序 → 形成时间脉络（并重排展示序号，使 #0 为最早的方向）
+    clusters.sort(key=lambda c: (c["avg_year"] is None, c["avg_year"] or 0))
+    for i, c in enumerate(clusters):
+        c["id"] = i
 
-        prompt = f"""你在为本领域撰写一篇基于引用图谱的中文简短综述（800字内）。请严格按以下结构展开：
+    year_of = {n: y for n in (x for x in G.nodes) for y in [_year(n)] if y}
+    by_year = {}
+    for n, y in year_of.items():
+        by_year.setdefault(y, []).append(n)
+    timeline = [(y, sorted(v, key=lambda m: -pr.get(m, 0.0))) for y, v in sorted(by_year.items())]
 
-1) **基石论文奠定的方向**：围绕以下基石论文（按 PageRank/被引筛出）说明它们各自奠定了哪条技术路线：
+    def _edge_item(a, b):
+        return {"from": a, "to": b, "from_title": _title(a), "to_title": _title(b),
+                "evidence": (G.edges[a, b].get("evidence", "") if G.has_edge(a, b) else "")[:120]}
+
+    ranked_edges = sorted(G.edges, key=lambda e: -(pr.get(e[0], 0.0) + pr.get(e[1], 0.0)))
+    backbone = [_edge_item(a, b) for a, b in ranked_edges[:backbone_k]]
+    bridges = [_edge_item(a, b) for a, b in ranked_edges
+               if comm_of.get(a) != comm_of.get(b)][:5]
+    pr_top = sorted(((n, pr.get(n, 0.0)) for n in G.nodes), key=lambda x: -x[1])[:5]
+    return {"clusters": clusters, "timeline": timeline, "backbone": backbone, "bridges": bridges,
+            "pr_top": pr_top, "n_nodes": len(G.nodes), "n_edges": len(G.edges)}
+
+
+def _structure_blocks(ctx, st):
+    """把骨架渲染为注入 prompt 的文本块（主题簇 / 簇代表 / 时间线 / 骨干边 / 中心性 Top）。"""
+    def _fmt(n):
+        return f"《{ctx.papers.get(n, {}).get('title', n)}》({ctx.papers.get(n, {}).get('year', '')})"
+
+    clus_lines = []
+    for c in st["clusters"]:
+        ys = f"，平均年份 {c['avg_year']}" if c["avg_year"] else "，年份缺失"
+        clus_lines.append(
+            f"- 主题簇 #{c['id']}「{c['label']}」（{c['size']} 篇{ys}）\n"
+            f"  代表论文（PageRank 最高 {len(c['reps'])} 篇）："
+            f"{'、'.join(_fmt(r) for r in c['reps'])}")
+    cluster_block = "\n".join(clus_lines) or "（无）"
+
+    tl_lines = []
+    for y, papers in st["timeline"]:
+        tl_lines.append(f"- {y}：{'、'.join(_fmt(p) for p in papers)}")
+    timeline_block = "\n".join(tl_lines) or "（无年份数据，时间线不可用）"
+
+    bb_lines = [f"- 《{e['from_title']}》 → 引用 → 《{e['to_title']}》"
+                f"（证据：{e['evidence'] or '—'}）" for e in st["backbone"]]
+    backbone_block = "\n".join(bb_lines) or "（无引用边）"
+
+    br_lines = [f"- 《{e['from_title']}》 → 引用 → 《{e['to_title']}》（跨主题簇连接）"
+                for e in st["bridges"]]
+    bridge_block = "\n".join(br_lines) or "（无跨簇边）"
+
+    pr_block = "\n".join(f"- {_fmt(n)}  PageRank={v:.4f}" for n, v in st["pr_top"]) or "（无）"
+    return cluster_block, timeline_block, backbone_block, bridge_block, pr_block
+
+
+def _deterministic_review(ctx, st):
+    """LLM 不可用时的确定性综述：完全由图谱结构数据生成，不编造任何内容。"""
+    def _fmt(n):
+        return f"《{ctx.papers.get(n, {}).get('title', n)}》({ctx.papers.get(n, {}).get('year', '')})"
+
+    lines = [f"### 一、研究脉络（时间线，按论文年份排序，共 {st['n_nodes']} 个节点 / {st['n_edges']} 条引用边）", ""]
+    if st["timeline"]:
+        for y, papers in st["timeline"]:
+            lines.append(f"- **{y}**：" + "、".join(_fmt(p) for p in papers))
+    else:
+        lines.append("- 文献元数据中无可用年份，时间线维度不可得（不做推断）")
+
+    lines += ["", "### 二、主要方向（networkx 社区发现聚簇，按簇平均年份排序）", ""]
+    for c in st["clusters"]:
+        ys = f"，平均年份 {c['avg_year']}" if c["avg_year"] else ""
+        lines.append(f"- **主题簇 #{c['id']}「{c['label']}」**（{c['size']} 篇{ys}）：代表论文 "
+                     + "、".join(_fmt(r) for r in c["reps"]))
+
+    lines += ["", "### 三、关键基石（PageRank Top）", ""]
+    for n, v in st["pr_top"]:
+        lines.append(f"- {_fmt(n)}  PageRank={v:.4f}")
+
+    lines += ["", "### 四、分歧与展望", ""]
+    if st["bridges"]:
+        lines.append("- 跨主题簇引用边（可视为方向交叉/分歧点）："
+                     + "；".join(f"《{e['from_title']}》→《{e['to_title']}》" for e in st["bridges"]))
+    else:
+        lines.append("- 未发现跨主题簇引用边，各方向之间暂未在引用图上产生交叉")
+    lines.append("- 展望需结合 Future Work 扫描结果（见「前沿方向」），此处不做超出图谱数据的推断")
+    return "\n".join(lines)
+
+
+def _structure_appendix(ctx, st):
+    """结构化附录：把图谱计算的原始依据附在综述后，便于核查（非 LLM 生成）。"""
+    def _fmt(n):
+        return f"《{ctx.papers.get(n, {}).get('title', n)}》"
+
+    lines = ["---", "#### 图谱结构明细（networkx 计算所得，非 LLM 生成）", "",
+             f"- 节点 {st['n_nodes']} 个、引用边 {st['n_edges']} 条、主题簇 {len(st['clusters'])} 个"]
+    lines.append("- 主题簇代表论文：" + "；".join(
+        f"#{c['id']}「{c['label']}」→ " + "、".join(_fmt(r) for r in c["reps"])
+        for c in st["clusters"]))
+    if st["backbone"]:
+        lines.append("- 引用骨干边（按两端 PageRank 之和取 Top "
+                     f"{len(st['backbone'])}）：" + "；".join(
+                         f"{_fmt(e['from'])}→{_fmt(e['to'])}" for e in st["backbone"]))
+    return "\n".join(lines)
+
+
+def generate_review(ctx, G, metrics, cornerstone):
+    """基于图谱结构（社区发现 → 簇代表 → 时间线 → 引用骨干边 → 中心性 Top）驱动的中文综述。
+
+    签名与返回类型（str/Markdown）向后兼容；图谱为空时退回摘要拼接的旧行为。
+    """
+    st = review_structure(ctx, G, metrics, cornerstone)
+
+    # ---- 图谱不可用：退回旧版摘要拼接（保持原行为，但走统一 LLM 入口） ----
+    if not st:
+        abstracts = "\n".join(
+            f"《{ctx.papers[n].get('title', n)}》({ctx.papers[n].get('year','')}): "
+            f"{ctx.papers[n].get('abstract','')[:500]}" for n in ctx.paper_order)
+        corner_simple = "、".join(ctx.papers[n].get("title", n) for n in (cornerstone or []))
+        prompt = (f"基于以下局域文献库，用中文撰写一篇结构完整的简短领域综述（含领域背景、主要技术脉络、"
+                  f"基石工作（{corner_simple}）的贡献、当前进展与局限）。客观、连贯、800字内。\n"
+                  f"文献信息：\n{abstracts[:6000]}")
+        out = _llm_text(ctx, prompt, 0.4)
+        if not _llm_ok(out):
+            return ("【图谱为空（无节点或引用边）且 LLM 不可用，无法生成综述。"
+                    f"LLM 返回：{out[:160]}】")
+        return out
+
+    cluster_block, timeline_block, backbone_block, bridge_block, pr_block = _structure_blocks(ctx, st)
+    corner_block = "\n".join(
+        f"- 《{ctx.papers[n].get('title', n)}》({ctx.papers[n].get('year','')}) "
+        f"{str(ctx.papers[n].get('abstract', ''))[:200]}" for n in (cornerstone or [])) or "（无）"
+
+    prompt = f"""你在为本领域撰写一篇**基于引用图谱的**中文综述（900字内）。图谱由 networkx 从本地文献库
+真实解析的引用关系计算而来：共 {st['n_nodes']} 个节点、{st['n_edges']} 条引用边，已做社区发现聚簇。
+请严格用以下四个 Markdown 小标题组织内容（不要增加其他一级结构）：
+
+## 一、研究脉络（时间线）
+按下列年份顺序讲清"早期问题提出 → 中期改进扩展 → 近期趋势"的演化，只使用给出的论文：
+{timeline_block}
+
+## 二、主要方向（按主题簇）
+下列主题簇由网络社区发现算法得出，请逐簇说明该方向在做什么、簇内代表论文各自解决了什么：
+{cluster_block}
+
+## 三、关键基石（PageRank Top）
+结合下列 PageRank 排名与基石论文清单，说明它们为何成为枢纽（被谁引用、奠定了什么）：
+{pr_block}
+基石论文清单：
 {corner_block}
 
-2) **高介面论文如何串联子方向**：以下论文不在基石层但 betweenness 高，它们常被多个子方向同时引用，请说明它们扮演了什么桥梁/衔接角色（{bridge_names} 等）：
+## 四、分歧与展望
+基于下列跨主题簇引用边（方向交叉点）与引用骨干边，指出当前存在的技术路线分歧与值得继续的方向：
+跨簇边：
 {bridge_block}
+引用骨干边（谁引用了谁，构成发展脉络）：
+{backbone_block}
 
-3) **按时间线的演化**：
-- 早期（问题提出阶段）：
-{early_block}
-- 中期（改进/扩展阶段）：
-{mid_block}
-- 近期（当前趋势）：
-{recent_block}
-请按"早期问题→中期改进→近期趋势"的顺序讲清楚演化脉络。
+硬性要求：
+1) 只能使用上面列出的论文与边，**禁止引入任何本地库之外的文献或编造引用关系**；
+2) 每个小标题下必须至少点名 1-2 篇上面给出的论文；
+3) 客观、连贯，不要平铺摘要。"""
 
-4) **其余普通节点**（仅作背景，不必逐一点名）：
-{normal_block}
-
-5) **开放问题**：在结尾用 1-2 句点出当前仍然未解决或值得继续做的方向。
-
-要求：客观、连贯、不要堆砌摘要；明确使用上面给出的基石/桥梁/时间分层信息，而不是把所有摘要平铺。"""
-    except Exception:
-        prompt = fallback_prompt
-
-    return ctx.llm.chat([{"role": "user", "content": prompt}], temperature=0.4).content
+    body = _llm_text(ctx, prompt, 0.4)
+    if not _llm_ok(body):
+        body = _deterministic_review(ctx, st)
+        note = "\n\n> 注：LLM 不可用，以下综述由 networkx 图谱结构确定性生成（未编造内容）。"
+    else:
+        note = ""
+    return f"{body}{note}\n\n{_structure_appendix(ctx, st)}"
 
 
 # Future Work 关键词抽取时忽略的停用词
@@ -374,71 +732,182 @@ def _extract_fw_keywords(snippet, top_k=5):
 
 
 def _rule_predict_followup(ctx, G, n, keywords):
-    """用 G 的入边（谁引用了 n）预判 n 的 Future Work 是否已被跟进。
+    """（保留兼容）1 跳规则的薄封装：内部委托给引用图可达性引擎 _future_status。"""
+    status, evidences = _future_status(ctx, G, n, keywords)
+    if not evidences and status == "开放":
+        return "仍开放（规则预判）", "暂未在引用图中发现命中关键词的后续跟进论文"
+    return f"{status}（规则预判）", "；".join(evidences) if evidences else ""
 
-    G 边方向：a→b 表示 a 引用 b。所以引用 n 的后续论文 = G.predecessors(n) = {m : m→n}。
-    返回 (status_str, reason)；无法判时返回 ("", "")。
+
+def _future_snippets(ctx):
+    """抽取每篇论文的 Future Work 段落。
+
+    返回 [(node, snippet, is_fallback)]；正则失配时用正文结尾兜底并标记 is_fallback=True
+    （审计指出该兜底可靠性低，故在输出中显式标注，不伪装成真实 Future Work 段落）。
     """
-    if G is None or n not in G or not keywords:
-        return "", ""
-    try:
-        y_n = _node_year(ctx, n) or 0
-        for m in G.predecessors(n):
-            if m == n:
-                continue
-            y_m = _node_year(ctx, m) or 0
-            if y_m < y_n:
-                continue  # 引用 n 的论文比 n 还早，不是"后续跟进"
-            info_m = ctx.papers.get(m, {})
-            hay = (info_m.get("title", "") + " " + info_m.get("abstract", "")).lower()
-            hits = [kw for kw in keywords if kw in hay]
-            if len(hits) >= 2:
-                m_title = info_m.get("title", m)
-                return ("已被跟进（规则预判）",
-                        f"被后续论文《{m_title}》({info_m.get('year','')}) 引用，命中关键词：{', '.join(hits)}")
-    except Exception:
-        return "", ""
-    return "仍开放（规则预判）", "暂未在引用图中发现命中关键词的后续跟进论文"
+    out = []
+    for n in sorted(ctx.paper_order, key=lambda x: ctx.papers[x].get("year", "")):
+        text = "\n".join(c["text"] for c in ctx.chunks if c["source"] == n)
+        m = re.search(r"(future work|future research|limitations|conclusion|展望|未来工作).{0,1200}",
+                      text, re.IGNORECASE | re.DOTALL)
+        if m:
+            out.append((n, m.group(0)[:1200], False))
+        elif text:
+            out.append((n, text[-900:], True))
+    return out
+
+
+_FW_CUE = re.compile(r"(future|remain|open (?:question|problem)|we plan|we intend|"
+                     r"not (?:yet )?(?:explored|addressed)|展望|未来|尚未|值得进一步)", re.IGNORECASE)
+
+
+def _future_item_text(snippet):
+    """从 Future Work 段落里挑出最像"未来方向"的 1-2 句（避免整段塞给 LLM）。"""
+    sents = [s.strip() for s in re.split(r"(?<=[.!?。])\s+", snippet or "") if len(s.strip()) > 20]
+    if not sents:
+        return (snippet or "")[:240]
+    cued = [s for s in sents if _FW_CUE.search(s)]
+    picked = (cued or sents)[:2]
+    return " ".join(picked)[:400]
+
+
+def _reachable_citers(G, src):
+    """引用图中「引用了 src」的论文及其跳数：1 跳 = 直接引用；2 跳 = 间接（B→X→src）。
+
+    G 边方向 a→b 表示 a 引用 b，故引用者 = predecessors。
+    返回 {node: hops}。
+    """
+    if G is None or src not in G:
+        return {}
+    res = {}
+    for m in G.predecessors(src):
+        if m != src:
+            res[m] = 1
+    for x in list(res):
+        for m in G.predecessors(x):
+            if m != src and m not in res:
+                res[m] = 2
+    return res
+
+
+def _future_status(ctx, G, src, keywords):
+    """用引用图可达性判定某条 Future Work 是否已被后续论文解决。
+
+    判定条件：存在论文 B，(a) B 在 1 跳或 2 跳内引用了提出该 future work 的论文 A，
+    且 (b) B 的标题/摘要与该 future work 关键词有实质重叠（≥2 个关键词命中，或标题短语重叠）。
+    命中 → "已解决"；仅 1 个关键词命中或年份不支持 → "存疑"；无命中 → "开放"。
+    返回 (status, evidence_list)。
+    """
+    if G is None or not keywords:
+        return "开放", ["无引用图或无关键词，无法做可达性判定"]
+    citers = _reachable_citers(G, src)
+    if not citers:
+        return "开放", ["引用图中无任何论文引用了该文献（无 1/2 跳后继）"]
+    y_src = _node_year(ctx, src)
+    evidences, weak = [], []
+    for m, hops in sorted(citers.items(), key=lambda x: x[1]):
+        info_m = ctx.papers.get(m, {})
+        hay = f"{info_m.get('title', '')} {info_m.get('abstract', '')}".lower()
+        hits = [kw for kw in keywords if kw and kw in hay]
+        if not hits:
+            continue
+        y_m = _node_year(ctx, m)
+        newer = True
+        if y_src and y_m:
+            newer = y_m >= y_src - 1      # 同年/更晚才算"后续"（允许 1 年容差）
+        desc = (f"《{info_m.get('title', m)}》({info_m.get('year', '')}) 以 {hops} 跳引用了本文，"
+                f"命中关键词 {len(hits)} 个：{'、'.join(hits[:5])}")
+        if not newer:
+            weak.append(f"{desc}（但发表年份 {y_m} 早于本文 {y_src}，不作为「已解决」证据）")
+        elif len(hits) >= 2:
+            evidences.append(desc)
+        else:
+            weak.append(f"{desc}（仅命中 1 个关键词，证据不足）")
+    if evidences:
+        return "已解决", evidences[:4]
+    if weak:
+        return "存疑", weak[:4]
+    return "开放", [f"存在 {len(citers)} 篇 1/2 跳引用论文，但无一命中该方向的关键词"]
+
+
+def explore_future_structured(ctx, G):
+    """结构化 Future Work 判定（不依赖 LLM）：引用图可达性 + 关键词重叠。
+
+    返回 [{"item","source_paper","source_title","year","keywords",
+            "status":"已解决/开放/存疑","evidence":[...],"snippet_fallback":bool}]
+    """
+    out = []
+    for n, snippet, is_fallback in _future_snippets(ctx):
+        kws = _extract_fw_keywords(snippet)
+        status, evidences = _future_status(ctx, G, n, kws)
+        if is_fallback:
+            evidences = list(evidences) + ["未定位到 Future Work 段落，使用正文结尾 900 字兜底，可靠性低"]
+            if status == "开放":
+                status = "存疑"
+        out.append({
+            "item": _future_item_text(snippet),
+            "source_paper": n,
+            "source_title": ctx.papers.get(n, {}).get("title", n),
+            "year": ctx.papers.get(n, {}).get("year", ""),
+            "keywords": kws,
+            "status": status,
+            "evidence": evidences,
+            "snippet_fallback": is_fallback,
+        })
+    # 开放项优先、其次存疑、最后已解决；同状态按年份升序
+    order = {"开放": 0, "存疑": 1, "已解决": 2}
+    out.sort(key=lambda d: (order.get(d["status"], 3), str(d["year"])))
+    return out[:FUTURE_MAX_ITEMS]
+
+
+def _future_markdown(items):
+    """把结构化结果渲染为中文 Markdown 表格（纯确定性，LLM 不可用也能出结果）。"""
+    head = "| 提出的方向（来源） | 状态 | 判断依据（引用图证据） |\n|---|---|---|"
+    rows = []
+    for it in items:
+        txt = it["item"].replace("|", "/")[:150]
+        src = f"《{it['source_title']}》({it['year']})"
+        ev = "；".join(it["evidence"])[:260].replace("|", "/") if it["evidence"] else "—"
+        flag = " ⚠️段落兜底" if it["snippet_fallback"] else ""
+        rows.append(f"| {txt}{flag} | **{it['status']}** | {src}：{ev} |")
+    return "\n".join([head] + rows) if rows else "（未抽取到任何 Future Work 条目）"
 
 
 def explore_future(ctx, G):
-    """提取各文 Future Work，先用引用图做规则预判，再让 LLM 润色为表格。"""
-    items = []
-    for n in sorted(ctx.paper_order, key=lambda x: ctx.papers[x].get("year", "")):
-        text = "\n".join(c["text"] for c in ctx.chunks if c["source"] == n)
-        m = re.search(r"(future work|limitations|conclusion|展望).{0,1200}", text, re.IGNORECASE | re.DOTALL)
-        snippet = m.group(0)[:1200] if m else text[-900:]
+    """提取各文 Future Work → 用引用图可达性做结构化判定 → LLM 仅做最后一步语义确认。
 
-        # ---- 规则预判（新增） ----
-        pred_status, pred_reason = "", ""
-        try:
-            kws = _extract_fw_keywords(snippet)
-            pred_status, pred_reason = _rule_predict_followup(ctx, G, n, kws)
-        except Exception:
-            kws = []
+    返回 Markdown 字符串（签名与 UI/tools 契约不变）。LLM 不可用时直接输出确定性判定结果，
+    **不让它凭空判断、也不编造证据**。
+    """
+    items = explore_future_structured(ctx, G)
+    table = _future_markdown(items)
+    n_open = sum(1 for i in items if i["status"] == "开放")
+    stat_line = (f"> 引用图可达性判定：共 {len(items)} 条，已解决 "
+                 f"{sum(1 for i in items if i['status'] == '已解决')} 条、存疑 "
+                 f"{sum(1 for i in items if i['status'] == '存疑')} 条、开放 {n_open} 条。")
 
-        head = f"【{ctx.papers[n].get('title', n)} · {ctx.papers[n].get('year','')}】"
-        if pred_status:
-            head += f"  [规则预判：{pred_status}；{pred_reason}]"
-            if kws:
-                head += f"  [抽取关键词：{', '.join(kws)}]"
-        items.append(f"{head}\n{snippet}")
+    structured = "\n".join(
+        f"- [{it['status']}] 《{it['source_title']}》({it['year']})：{it['item'][:200]}\n"
+        f"  关键词：{'、'.join(it['keywords']) or '无'}；证据：{'；'.join(it['evidence']) or '无'}"
+        for it in items) or "（无条目）"
 
-    later = "\n".join(
-        f"《{ctx.papers[n].get('title',n)}》({ctx.papers[n].get('year','')})摘要：{ctx.papers[n].get('abstract','')[:300]}"
-        for n in ctx.paper_order)
-    prompt = f"""下面按时间顺序给出多篇论文的 Future Work / 局限部分，以及后续发表论文的摘要。
-其中每条 Future Work 上方已经由引用图谱给出"规则预判"状态（已被跟进 / 仍开放），并附命中关键词与跟进论文标题。
-请在该规则预判的基础上润色修正，不要从零判断：
-1) 逐条判断早期提出的未来方向是否已被后续论文解决或部分解决（若规则预判与你判断不一致，以你的语义判断为准并说明理由）；
-2) 自动排除/标注已解决的旧 idea；
-3) 提炼出至今仍具探索价值的开放方向。
-用中文 Markdown 表格输出，列：提出的方向(来源) | 状态(已解决/部分解决/仍开放) | 判断依据 | 探索价值。
-随后用项目符号列出 3-5 个真正值得做的未来方向。
+    prompt = f"""下面是**已经用引用图完成结构化判定**的 Future Work 清单（判定依据 = 后续论文在引用图中
+1 跳或 2 跳引用了提出方，且标题/摘要与方向关键词实质重叠）。你的任务**不是重新判断**，而是：
+1) 对每条做语义确认：若证据论文确实解决了该方向，确认"已解决"；若只是部分涉及，改为"部分解决"；
+   若证据不充分，改为"存疑/开放"并说明理由；
+2) 从"开放/存疑"条目中提炼 3-5 个真正值得做的未来方向。
 
-各文 Future Work（含规则预判先验）：
-{chr(10).join(items)[:6000]}
+结构化清单：
+{structured[:5000]}
 
-后续/同期进展：
-{later[:3000]}"""
-    return ctx.llm.chat([{"role": "user", "content": prompt}], temperature=0.4).content
+输出格式（中文 Markdown）：
+## 语义确认
+（逐条给出：方向 → 最终状态 → 一句话理由；不要新增清单之外的方向）
+## 值得做的开放方向
+（3-5 条项目符号，每条一句话说明价值）"""
+
+    body = _llm_text(ctx, prompt, 0.4)
+    if not _llm_ok(body):
+        body = ("## 语义确认\nLLM 不可用，以下直接使用引用图可达性的确定性判定结果（未做语义改写、未编造证据）。\n"
+                + structured)
+    return f"{stat_line}\n\n{table}\n\n{body}"

@@ -1,11 +1,21 @@
 """文献库管理：入库、基于内容 embedding 的语义去重、版本管理与差异对比、删除。"""
-import re
+import io
 import math
+import queue
+import re
+import threading
 import time
+
 import numpy as np
 
+from core.llm import call_llm_with_retry
 from services import parsing
 from config import UPLOAD_DIR
+
+
+PDF_BATCH_SIZE = 20
+PDF_PAGE_TIMEOUT_SECONDS = 30
+PDF_PROGRESS_INTERVAL = 50
 
 
 def cosine(a, b):
@@ -84,100 +94,354 @@ def check_duplicate(ctx, embedding, threshold=None, arxiv_id=None, fingerprints=
     return None, max_sim, ""
 
 
-def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=None,
-                timeout_per_page=30, on_page_error=None):
-    """读取 PDF（含扫描件 OCR），不做写入。返回待提交数据 + 查重结果。
+def _empty_prepared(filename, raw=b"", error="", reason="corrupt"):
+    """构造 prepare_pdf 的兼容空结果，避免文件级异常向上冒泡。
 
-    长文档增强：
-    - timeout_per_page：单页解析耗时阈值（秒）。Windows 无 signal.alarm，不强制中断单页，
-      仅在 native 分支逐页用 time.monotonic() 做协作式耗时观测，超阈值时通过 on_page_error 上报；
-      OCR 分支由 parsing.ocr_document 内部逐页 try/except 容错。
-    - on_page_error(page_idx, err_str)：单页失败或超时时的回调，便于上层记录，不影响主流程。
-    - 内存监控：若环境安装了 psutil，返回 peak_mem_mb（处理完成后进程 RSS，单位 MB）；
-      psutil 不可用或采样失败时该 key 为 None，不影响主流程。
+    2026-10 R1 修复：必须带 ``error`` 键（ui/page_library.py 的 ``elif get("error")``
+    分支依赖该契约），否则损坏/截断 PDF 会被静默入库成 0 页幽灵文献。
     """
-    # --- 内存监控：开始前确认 psutil 可用（缺失则静默降级）---
-    peak_mem_mb = None
-    _proc = None
+    failed_pages = [{"page": 0, "error": str(error)}] if error else []
+    return {
+        "filename": filename, "scanned": False, "page_count": 0,
+        "page_texts": [], "full_text": "", "embedding": None,
+        "fingerprints": [], "dup_name": None, "dup_sim": 0.0,
+        "dup_evidence": "", "raw": raw, "peak_mem_mb": None,
+        "failed_pages": failed_pages, "toc": [], "_chunks": [],
+        "error": str(error or "PDF 解析失败"), "reason": reason,
+        "truncated": False, "expected_pages": 0, "extracted_pages": 0,
+    }
+
+
+def _notify_pdf_progress(progress_cb, done, total, msg):
+    """优先调用三参数新回调；兼容旧 UI 的 ``callback(ratio, page)``。"""
+    if not progress_cb:
+        return
     try:
-        import psutil
-        _proc = psutil.Process()
-        _proc.memory_info().rss  # 首次采样，确认接口可用
+        progress_cb(done, total, msg)
+        return
+    except TypeError:
+        pass
     except Exception:
-        _proc = None
+        return
+    try:
+        progress_cb(done / max(total, 1), done)
+    except Exception:
+        pass
 
-    raw = bytes(data) if data is not None else open(path, "rb").read()
-    doc = parsing.open_doc(raw)
-    scanned = parsing.detect_scanned(doc)
 
-    def _safe_progress(r, page):
-        """进度回调包一层，避免回调异常打断入库。"""
-        if progress_cb:
+def _notify_page_error(on_page_error, page_index, reason):
+    if not on_page_error:
+        return
+    try:
+        on_page_error(page_index, reason)
+    except Exception:
+        pass
+
+
+def _extract_page_from_raw(raw, page_index, use_ocr, llm):
+    """在独立文档实例中解析单页，避免超时线程与主 doc 并发访问。"""
+    local_doc = None
+    try:
+        local_doc = parsing.open_doc(raw)
+        page = local_doc[page_index]
+        if use_ocr:
+            text = parsing.ocr_page_text(page, llm)
+            return text, {"lines": [], "text": text}
+        text, blocks = parsing.extract_page_text_column_aware(page, return_blocks=True)
+        return text, parsing.heading_page_data(blocks, text)
+    finally:
+        if local_doc is not None:
             try:
-                progress_cb(r, page)
+                local_doc.close()
             except Exception:
                 pass
 
-    if scanned and ctx.llm.available:
-        # OCR 分支：parsing.ocr_document 内部已逐页 try/except，这里直接透传进度
-        page_texts = parsing.ocr_document(doc, ctx.llm, progress_cb=_safe_progress)
-    else:
-        # native 分支：逐页解析 + 单页错误恢复 + 每 50 页进度 + 耗时观测
-        total = doc.page_count
-        page_texts = [""] * total
-        for i, page in enumerate(doc):
-            t0 = time.monotonic()
-            try:
-                page_texts[i] = page.get_text()
-            except Exception as e:
-                # PyMuPDF 单页 get_text 一般不抛，保险起见兜底：失败页置空并上报
-                page_texts[i] = ""
-                if on_page_error:
-                    try:
-                        on_page_error(i, str(e))
-                    except Exception:
-                        pass
-            elapsed = time.monotonic() - t0
-            if elapsed > timeout_per_page and on_page_error:
-                try:
-                    on_page_error(i, f"单页解析耗时 {elapsed:.1f}s，超过阈值 {timeout_per_page}s")
-                except Exception:
-                    pass
-            # 每 50 页或最后一页回调一次进度
-            if (i + 1) % 50 == 0 or i + 1 == total:
-                _safe_progress((i + 1) / max(total, 1), i + 1)
 
-    full_text = "\n\n".join(t for t in page_texts if t)
-    doc.close()
+def _extract_page_with_timeout(raw, page_index, use_ocr, llm, timeout_seconds):
+    """用守护线程执行单页解析；超时立即返回并由调用方跳过该页。"""
+    result_queue = queue.Queue(maxsize=1)
 
-    # --- 处理完成后记录一次内存峰值（Python RSS 只增不减，此时近似高水位）---
-    if _proc is not None:
+    def worker():
         try:
-            peak_mem_mb = round(_proc.memory_info().rss / (1024 * 1024), 1)
-        except Exception:
-            peak_mem_mb = None
+            result_queue.put((True, _extract_page_from_raw(raw, page_index, use_ocr, llm)))
+        except Exception as exc:
+            try:
+                result_queue.put((False, str(exc)))
+            except Exception:
+                pass
 
-    embedding = _paper_embedding(ctx, full_text) if full_text else None
-    fingerprints = _paper_fingerprints(ctx, full_text) if full_text else []
+    try:
+        timeout = max(0.1, float(timeout_seconds or PDF_PAGE_TIMEOUT_SECONDS))
+    except Exception:
+        timeout = float(PDF_PAGE_TIMEOUT_SECONDS)
+    try:
+        thread = threading.Thread(target=worker, daemon=True,
+                                  name=f"pdf-page-{page_index + 1}")
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            return None, None, f"单页处理超过 {timeout:g} 秒，已跳过"
+        try:
+            ok, payload = result_queue.get_nowait()
+        except queue.Empty:
+            return None, None, "单页处理未返回结果"
+        if not ok:
+            return None, None, str(payload)
+        text, heading_data = payload
+        return text or "", heading_data or {"lines": [], "text": text or ""}, None
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+def _sample_process_memory(process, current_peak):
+    if process is None:
+        return current_peak
+    try:
+        current = process.memory_info().rss / (1024 * 1024)
+        return round(max(float(current_peak or 0.0), current), 1)
+    except Exception:
+        return current_peak
+
+
+def _validate_prepared(prepared, expected_pages, extracted_pages, total_chars):
+    """对逐页提取结果做完整性校验；异常时返回带 error 键的结果，正常返回 None。
+
+    2026-10 R1 修复：损坏/截断 PDF 此前会被静默入库（0 页幽灵文献 / 静默丢正文）。
+    - 无法打开 / 加密 / 0 页 / 全部页失败 / 文本量过少 → error（UI 不入库）
+    - 成功提取页 < 声称页数的 70% → error(reason=truncated)，并带
+      truncated/expected_pages/extracted_pages 字段供 UI 做警示
+    - 成功页占比 70%~100% 但有缺页 → 仅带 truncated 字段（warning 级提示）
+    """
+    try:
+        expected_pages = int(expected_pages or 0)
+        extracted_pages = int(extracted_pages or 0)
+        total_chars = int(total_chars or 0)
+        prepared["expected_pages"] = expected_pages
+        prepared["extracted_pages"] = extracted_pages
+        prepared["truncated"] = bool(expected_pages > 0 and extracted_pages < expected_pages)
+        if expected_pages <= 0:
+            prepared["error"] = "PDF 没有任何可读页面（0 页），未入库。"
+            prepared["reason"] = "empty"
+            return prepared
+        if extracted_pages <= 0:
+            if prepared.get("scanned"):
+                prepared["error"] = ("检测为扫描件，但当前未启用/不可用 OCR，全部页面均未提取到文本，"
+                                     "未入库。请配置支持视觉的模型后重试。")
+                prepared["reason"] = "scanned_no_ocr"
+            else:
+                prepared["error"] = "PDF 所有页面均未提取到有效文本，疑似损坏或纯图片扫描件，未入库。"
+                prepared["reason"] = "corrupt"
+            return prepared
+        if extracted_pages < expected_pages * 0.7:
+            prepared["error"] = (f"PDF 疑似截断或损坏：声称 {expected_pages} 页，"
+                                 f"实际仅成功提取 {extracted_pages} 页（不足 70%），未入库。"
+                                 "请重新下载/上传完整的 PDF。")
+            prepared["reason"] = "truncated"
+            return prepared
+        if total_chars < 200 or extracted_pages < expected_pages * 0.3:
+            prepared["error"] = (f"PDF 提取到的有效文本过少（{extracted_pages}/{expected_pages} 页、"
+                                 f"共 {total_chars} 字符），疑似截断或损坏，未入库。")
+            prepared["reason"] = "truncated"
+            return prepared
+        return None
+    except Exception as exc:
+        prepared["error"] = f"PDF 完整性校验失败：{exc}"
+        prepared["reason"] = "corrupt"
+        return prepared
+
+
+def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=None,
+                timeout_per_page=PDF_PAGE_TIMEOUT_SECONDS, on_page_error=None):
+    """分页读取 PDF（含扫描件 OCR），返回待提交数据和查重结果。
+
+    每 ``PDF_BATCH_SIZE`` 页生成一批 chunks，每 50 页通过
+    ``progress_cb(done, total, msg)`` 报告进度；旧的两参数回调仍兼容。单页在独立
+    守护线程中执行，超过 ``timeout_per_page`` 秒即跳过并写入 ``failed_pages``。
+    """
+    raw = b""
+    try:
+        if data is not None:
+            raw = bytes(data)
+        else:
+            with open(path, "rb") as source_file:
+                raw = source_file.read()
+    except Exception as exc:
+        return _empty_prepared(filename, raw, f"读取 PDF 失败：{exc}")
+
+    peak_mem_mb = None
+    process = None
+    try:
+        import psutil
+        process = psutil.Process()
+        peak_mem_mb = _sample_process_memory(process, peak_mem_mb)
+    except Exception:
+        process = None
+
+    doc = None
+    try:
+        doc = parsing.open_doc(raw)
+        try:
+            if bool(getattr(doc, "needs_pass", False)):
+                raise RuntimeError("PDF 已加密，需要密码才能读取")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+        total = int(doc.page_count)
+        if total <= 0:
+            raise RuntimeError("PDF 没有任何可读页面（0 页）")
+        scanned = bool(parsing.detect_scanned(doc))
+        try:
+            toc = doc.get_toc() or []
+        except Exception:
+            toc = []
+    except Exception as exc:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
+        reason = "encrypted" if "加密" in str(exc) else "corrupt"
+        return _empty_prepared(filename, raw, f"打开 PDF 失败：{exc}", reason=reason)
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+    try:
+        use_ocr = bool(scanned and getattr(ctx.llm, "available", False))
+    except Exception:
+        use_ocr = False
+
+    page_texts = []
+    heading_pages = []
+    streamed_chunks = []
+    failed_pages = []
+    full_text_buffer = io.StringIO()
+
+    for batch_start in range(0, total, PDF_BATCH_SIZE):
+        batch_end = min(batch_start + PDF_BATCH_SIZE, total)
+        batch_texts = []
+        for page_index in range(batch_start, batch_end):
+            text, heading_data, error = _extract_page_with_timeout(
+                raw, page_index, use_ocr, getattr(ctx, "llm", None), timeout_per_page
+            )
+            if error:
+                reason = str(error)[:300]
+                failed_pages.append({"page": page_index + 1, "error": reason})
+                _notify_page_error(on_page_error, page_index, reason)
+                text = ""
+                heading_data = {"lines": [], "text": ""}
+            batch_texts.append(text or "")
+            heading_pages.append(heading_data)
+            if text:
+                if full_text_buffer.tell() > 0:
+                    full_text_buffer.write("\n\n")
+                full_text_buffer.write(text)
+            done = page_index + 1
+            if done % PDF_PROGRESS_INTERVAL == 0 or done == total:
+                _notify_pdf_progress(progress_cb, done, total,
+                                     f"已处理 {done}/{total} 页")
+
+        page_texts.extend(batch_texts)
+        try:
+            batch_chunks = parsing.build_chunks_from_texts(batch_texts, page_offset=batch_start)
+            if streamed_chunks and batch_chunks:
+                overlap = max(0, int(getattr(parsing, "CHUNK_OVERLAP", 0) or 0))
+                if overlap:
+                    batch_chunks[0]["text"] = streamed_chunks[-1]["text"][-overlap:] + batch_chunks[0]["text"]
+            streamed_chunks.extend(batch_chunks)
+        except Exception:
+            pass
+        peak_mem_mb = _sample_process_memory(process, peak_mem_mb)
+
+    try:
+        full_text = full_text_buffer.getvalue()
+    except Exception:
+        full_text = "\n\n".join(text for text in page_texts if text)
+    finally:
+        try:
+            full_text_buffer.close()
+        except Exception:
+            pass
+
+    # 完整性校验：损坏/截断/空 PDF 必须带 error 返回，禁止静默入库（R1 缺陷2）
+    try:
+        extracted_pages = sum(1 for text in page_texts if (text or "").strip())
+        total_chars = len(full_text or "")
+        prepared_base = {
+            "filename": filename, "raw": raw, "failed_pages": failed_pages,
+            "scanned": bool(scanned), "peak_mem_mb": peak_mem_mb, "_chunks": streamed_chunks,
+            "toc": toc, "page_texts": page_texts, "full_text": full_text,
+            "page_count": len(page_texts),
+        }
+        invalid = _validate_prepared(prepared_base, total, extracted_pages, total_chars)
+        if invalid is not None:
+            invalid["embedding"] = None
+            invalid["fingerprints"] = []
+            invalid["dup_name"] = None
+            invalid["dup_sim"] = 0.0
+            invalid["dup_evidence"] = ""
+            return invalid
+        if prepared_base.get("truncated"):
+            # warning 级：有缺页但未达拦截阈值，放行入库并带上提示字段
+            truncated_info = {k: prepared_base[k] for k in ("truncated", "expected_pages", "extracted_pages")}
+        else:
+            truncated_info = {"truncated": False, "expected_pages": total, "extracted_pages": extracted_pages}
+    except Exception as exc:
+        return _empty_prepared(filename, raw, f"PDF 完整性校验异常：{exc}", reason="corrupt")
+
+    if not toc:
+        try:
+            toc = parsing.infer_headings_from_text(heading_pages)
+        except Exception:
+            toc = []
+
+    try:
+        embedding = _paper_embedding(ctx, full_text) if full_text else None
+    except Exception:
+        embedding = None
+    try:
+        fingerprints = _paper_fingerprints(ctx, full_text) if full_text else []
+    except Exception:
+        fingerprints = []
     aid = _guess_arxiv(filename)
-    dup_name, dup_sim, dup_ev = (check_duplicate(ctx, embedding, arxiv_id=aid, fingerprints=fingerprints)
-                                 if embedding is not None else (None, 0.0, ""))
+    try:
+        dup_name, dup_sim, dup_ev = (
+            check_duplicate(ctx, embedding, arxiv_id=aid, fingerprints=fingerprints)
+            if embedding is not None else (None, 0.0, "")
+        )
+    except Exception:
+        dup_name, dup_sim, dup_ev = None, 0.0, ""
+    peak_mem_mb = _sample_process_memory(process, peak_mem_mb)
     return {
         "filename": filename, "scanned": scanned, "page_count": len(page_texts),
         "page_texts": page_texts, "full_text": full_text, "embedding": embedding,
         "fingerprints": fingerprints,
         "dup_name": dup_name, "dup_sim": dup_sim, "dup_evidence": dup_ev, "raw": raw,
-        "peak_mem_mb": peak_mem_mb,
+        "peak_mem_mb": peak_mem_mb, "failed_pages": failed_pages, "toc": toc,
+        "_chunks": streamed_chunks,
+        **truncated_info,
     }
 
 
 def commit(ctx, prepared, title=None, authors=None, arxiv_id=None, version=None,
            year=None, github=None, replace=None):
     """把 prepare 的结果正式入库。replace 指定被覆盖的旧文件名。"""
+    if prepared.get("error"):
+        # 双保险：带 error 的结果绝不入库（正常流程在 UI 层已被拦截）
+        raise ValueError(f"拒绝入库：{prepared.get('error')}")
     filename = prepared["filename"]
     if prepared.get("raw"):
         (UPLOAD_DIR / filename).write_bytes(prepared["raw"])
-    chunks = parsing.build_chunks_from_texts(prepared["page_texts"])
+    chunks = prepared.get("_chunks")
+    if chunks is None:
+        try:
+            chunks = parsing.build_chunks_from_texts(prepared["page_texts"])
+        except Exception:
+            chunks = []
     arxiv_id = arxiv_id or _guess_arxiv(filename)
     version = version or _guess_version(filename)
 
@@ -288,8 +552,18 @@ def version_diff(ctx, files):
 对比维度至少包含：标题/作者、摘要、方法、实验数据(BLEU/参数量等)、参考文献。全部用中文。
 {chr(10).join(texts)}
 只输出 Markdown 表格。"""
-    msg = ctx.llm.chat([{"role": "user", "content": prompt}], temperature=0.3)
-    return msg.content
+    try:
+        llm = getattr(ctx, "llm", None)
+        response = call_llm_with_retry(
+            [{"role": "user", "content": prompt}],
+            model=getattr(llm, "model", None),
+            temperature=0.3,
+            api_key=getattr(llm, "api_key", None),
+            base_url=getattr(llm, "base_url", None),
+        )
+        return response.choices[0].message.content or ""
+    except Exception as exc:
+        return f"版本差异分析暂不可用：{str(exc)[:120]}"
 
 
 def _guess_arxiv(filename):
