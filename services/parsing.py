@@ -41,6 +41,12 @@ def detect_scanned(doc, sample=3):
         return False
 
 
+def is_ocr_error_text(text):
+    """判断文本是否为 OCR 失败/降级的占位符（不能当作正文入库）。"""
+    text = (text or "").strip()
+    return text.startswith("[OCR") or text.startswith("[扫描件 OCR 降级提示]")
+
+
 def _line_record(line):
     """把 PyMuPDF dict line 压缩为标题推断所需的轻量元数据。"""
     try:
@@ -282,6 +288,21 @@ def _llm_kwargs(llm):
         }
     except Exception:
         return {}
+
+
+def ocr_supported(llm):
+    """是否具备可用 OCR 能力：有视觉模型、Key 非空且能被 HTTP 头安全编码。"""
+    try:
+        key = str(getattr(llm, "api_key", "") or "").strip()
+    except Exception:
+        key = ""
+    if not str(getattr(llm, "vl_model", "") or "").strip() or len(key) < 20:
+        return False
+    try:
+        key.encode("ascii")
+        return True
+    except UnicodeEncodeError:
+        return False
 
 
 def ocr_page_text(page, llm, zoom=2.0):

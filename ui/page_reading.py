@@ -10,6 +10,13 @@
   B3 LLM 并发与超时                  → 并发 ≤ MAX_TRANSLATE_WORKERS、单次 ≤ LLM_CALL_TIMEOUT、失败中文提示
   跨页对接                           → 消费 ui/page_qa.py 写入的 st.session_state["qa_jump_page"]
 
+本轮（考生7）新增（模块三：正文引用标记 ↔ References 双向无损跳转）：
+  T1 引用双向跳转   → build_reference_index() 真实抽取 References + citation_links_html()
+                      （正文 [n] → #ref-n；参考文献「↩ 回到正文」循环第 k/m 处）
+  T2 标题树定位     → 无内置书签时接 services.parsing.infer_headings_from_text 推断回退，
+                      点击后原生渲染定位到该页并高亮该标题（native_page_html(highlight=)）
+  T3 公式保留       → 翻译前 protect_math() 占位、翻译后 restore_math() 还原
+
 硬性约束：所有新代码块 try/except 兜底，异常不冒泡；session_state key 先初始化再读。
 """
 import gc
@@ -28,10 +35,16 @@ from ui.common import embed_html, page_header
 from config import UPLOAD_DIR, PDF_DIR
 from services import parsing, writing
 from services.translate import (native_page_html, bilingual_html, in_place_pdf,
-                                citation_jump_html, selectable_text_html, detect_columns)
+                                citation_jump_html, selectable_text_html, detect_columns,
+                                build_reference_index, find_reference_start_page,
+                                citation_links_html, protect_math, restore_math)
 
 # ---------------- 常量（集中配置，便于调参） ----------------
 JUMP_KEY = "qa_jump_page"          # 与 ui/page_qa.py 约定（只读 + 消费后清理）
+TOC_JUMP_KEY = "read_toc_jump"     # 考生7：标题树点击 → 原生渲染定位（消费后清理）
+CITE_BODY_CAP = 40                 # T1：正文窗口最大页数（长文档防卡）
+TOC_SCAN_CAP = 120                 # T2：无书签时推断标题最多扫描的页数
+TOC_RENDER_CAP = 220               # T2：标题树首屏最多渲染的按钮数（长文档防卡）
 MAX_TRANSLATE_WORKERS = 3          # B3：翻译并发上限（≤3，避免打爆限流）
 LLM_CALL_TIMEOUT = 60.0            # B3：单次 LLM 调用超时（秒）
 PAGE_TIMEOUT = 30.0                # B2：单页处理超时（秒），超时跳过并记录页码
@@ -356,12 +369,14 @@ def _safe_translate(ctx, text, timeout=LLM_CALL_TIMEOUT):
         return "", "内容为空"
     if not getattr(getattr(ctx, "llm", None), "available", False):
         return "", "未配置 API Key"
-    ok, val, err = _run_with_timeout(writing.translate_to_chinese, timeout, ctx, txt)
+    # T3：翻译前把公式/LaTeX/数值表达式占位，翻译后原样还原（模块三要求公式保留英文）
+    masked, store = protect_math(txt)
+    ok, val, err = _run_with_timeout(writing.translate_to_chinese, timeout, ctx, masked)
     if ok:
         out = str(val or "").strip()
         if not out:
             return "", "模型返回空内容"
-        return out, ""
+        return restore_math(out, store), ""
     if err and err.startswith("timeout"):
         return "", f"调用超时（> {timeout:.0f}s）"
     return "", (err or "调用失败")
@@ -442,6 +457,15 @@ def _translate_pairs(ctx, paras, label="段落翻译"):
     return pairs, errors
 
 
+def _safe_int_pos(v, default=0):
+    """转正整数：解析失败返回 default（页面内所有编号比较都走这里，杜绝 ValueError 冒泡）。"""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
 def _cache_key(text):
     try:
         import hashlib
@@ -507,6 +531,198 @@ def _consume_qa_jump(ctx, tps):
     except Exception:
         pass
     return {"source": src, "page": page, "para_idx": para}
+
+
+# ============================ T2：标题树跳转消费 ============================
+def _consume_toc_jump(tps):
+    """消费标题树点击写入的 st.session_state["read_toc_jump"]。
+
+    返回 dict(page, title) 或 None；消费后清空，避免下次进页面重复跳转。
+    """
+    payload = None
+    try:
+        payload = st.session_state.get(TOC_JUMP_KEY)
+    except Exception:
+        payload = None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        page = int(payload.get("page", 1) or 1)
+    except (TypeError, ValueError):
+        return None
+    page = min(max(1, page), max(1, int(tps or 1)))
+    title = str(payload.get("title") or "").strip()
+    _drop_state(("np", "sp", "pp", "hp"))
+    try:
+        st.session_state["read_jump_page"] = page
+        st.session_state["read_hl"] = {"page": page, "title": title}
+        st.session_state[TOC_JUMP_KEY] = None
+    except Exception:
+        pass
+    try:
+        st.success(f"🎯 标题树定位：第 {page} 页「{title[:40]}」"
+                   f"（已切到「📄 原生渲染」标签并高亮该标题）")
+    except Exception:
+        pass
+    return {"page": page, "title": title, "source": "toc"}
+
+
+# ---- T2：无内置书签时用 parsing.infer_headings_from_text 推断标题树 ----
+_SECTION_WORDS = frozenset((
+    "abstract", "摘要", "introduction", "引言", "conclusion", "conclusions", "结论",
+    "references", "bibliography", "参考文献", "acknowledgment", "acknowledgments",
+    "acknowledgement", "acknowledgements", "appendix", "related work", "background",
+    "method", "methods", "experiment", "experiments", "results", "discussion",
+))
+
+
+def _tidy_headings(items, tps=None):
+    """整理推断结果：合并「编号行 + 标题行」、剔除首页作者行、去重、夹取页码。"""
+    out = []
+    seen = set()
+    pending = None            # (编号, 页, level)
+    p1_root_taken = False
+    for item in items or []:
+        try:
+            level, title, pg = int(item[0]), str(item[1]).strip(), int(item[2])
+        except Exception:
+            continue
+        if pg < 1 or (tps and pg > int(tps)) or not title:
+            continue
+        # ① 纯编号行（"1" / "3.2.1"）与同一页的下一行标题合并为 "3.2.1 Scaled Dot-Product ..."
+        if re.match(r"^\d+(?:\.\d+)*\.?$", title):
+            pending = (title.rstrip("."), pg, level)
+            continue
+        if pending and pending[1] == pg:
+            title = "%s %s" % (pending[0], title)
+            pending = None
+        # ② 首页非编号条目多半是作者/机构：只保留首个（文章标题）与常见章节名
+        if pg == 1 and not re.match(r"^\d", title):
+            if title.lower().strip(" .:") in _SECTION_WORDS:
+                pass
+            elif p1_root_taken:
+                continue
+            else:
+                p1_root_taken = True
+        if len(title) < 2:
+            continue
+        # ③ 正文碎片（"2014) methods." / "or paragraph embeddings (Le and..."）不是标题
+        if re.match(r"^\d{4}\b", title):                       # 以年份开头的句子残片
+            continue
+        if title[:1].isalpha() and title[:1].islower():        # 小写开头 = 句中片段
+            continue
+        key = (pg, title.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((min(6, max(1, level)), title[:90], pg))
+    return out
+
+
+_CHAPTER_RE = re.compile(r"^\s*(?:chapter|part|section)\s+(\d+)\s*[:.\-\u2013]?\s*(\S.*)$", re.I)
+_CN_CHAPTER_RE = re.compile(r"^\s*\u7b2c\s*([0-9\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]+)"
+                            r"\s*[\u7ae0\u8282\u7bc7\u90e8]\s*(\S.*)$")
+
+
+def _chapter_headings(doc, tps, cap=TOC_SCAN_CAP):
+    """兜底：按「Chapter N xxx」/「第 N 章 xxx」识别章节（无字号差异的合成长文档常用）。"""
+    out, seen = [], set()
+    try:
+        n = min(int(tps or 0), int(cap))
+        for i in range(n):
+            try:
+                txt = doc[i].get_text() or ""
+            except Exception:
+                continue
+            for line in str(txt).splitlines():
+                line = re.sub(r"\s+", " ", line).strip()
+                if not line or len(line) > 90:
+                    continue
+                m = _CHAPTER_RE.match(line) or _CN_CHAPTER_RE.match(line)
+                if not m:
+                    continue
+                title = ("%s %s" % (m.group(1), m.group(2))).strip()[:90]
+                key = title.casefold()
+                if key in seen:
+                    continue          # 页眉重复：只保留首次出现的页
+                seen.add(key)
+                out.append((1, title, i + 1))
+    except Exception:
+        return []
+    return out
+
+
+def _infer_headings(doc, tps, cap=TOC_SCAN_CAP):
+    """无内置书签时的推断回退：接 services.parsing.infer_headings_from_text。"""
+    try:
+        n = min(int(tps or 0), int(cap))
+        if n <= 0:
+            return []
+        pages = []
+        for i in range(n):
+            try:
+                blocks = parsing.extract_page_blocks_column_aware(doc[i])
+                pages.append(parsing.heading_page_data(blocks))
+            except Exception:
+                pages.append({"lines": [], "text": ""})
+        raw = parsing.infer_headings_from_text(pages) or []
+        tidy = _tidy_headings(raw, tps)
+        if not tidy:
+            tidy = _chapter_headings(doc, tps, cap)   # 字号无差异时的章节号兜底
+        return tidy
+    except Exception:
+        return []
+
+
+def _ensure_headings(doc, doc_id, tps):
+    """标题树缓存（内置书签优先，无则推断回退），避免每次 rerun 重复扫描。"""
+    cache = st.session_state.get("read_toc_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        try:
+            st.session_state["read_toc_cache"] = cache
+        except Exception:
+            pass
+    if cache.get("id") == doc_id and isinstance(cache.get("toc"), list):
+        return list(cache.get("toc") or []), bool(cache.get("inferred"))
+    toc, inferred = [], False
+    try:
+        toc = list(doc.get_toc() or [])
+    except Exception:
+        toc = []
+    if not toc:
+        toc = _infer_headings(doc, tps)
+        inferred = bool(toc)
+    try:
+        st.session_state["read_toc_cache"] = {"id": doc_id, "toc": toc, "inferred": inferred}
+    except Exception:
+        pass
+    return toc, inferred
+
+
+# ============================ T1：References 索引（带缓存） ============================
+def _ensure_ref_index(doc, doc_id, force=False):
+    """抽取 References 编号索引并缓存到 session_state（key 先初始化再读）。"""
+    cache = st.session_state.get("read_ref_index")
+    if not isinstance(cache, dict):
+        cache = {}
+        try:
+            st.session_state["read_ref_index"] = cache
+        except Exception:
+            pass
+    if (not force) and cache.get("id") == doc_id and isinstance(cache.get("refs"), list):
+        return list(cache.get("refs") or []), dict(cache.get("meta") or {})
+    refs, meta = [], {"source": "", "status": "empty", "message": "未抽取到参考文献条目"}
+    try:
+        refs, meta = build_reference_index(doc)
+    except Exception as e:
+        meta = {"source": "", "status": "empty",
+                "message": "%s: %s" % (type(e).__name__, str(e)[:120])}
+    try:
+        st.session_state["read_ref_index"] = {"id": doc_id, "refs": refs, "meta": meta}
+    except Exception:
+        pass
+    return refs, meta
 
 
 # ============================ 文档/文本 ============================
@@ -658,9 +874,13 @@ def render(ctx):
             st.warning("⚠️ 该 PDF 没有可读取的页面。")
             return
         st.caption(f"📄 {os.path.basename(path)}（{tps} 页）")
+        # T1/T2 缓存键：文件名 + 页数（切换 PDF 时自动失效）
+        doc_id = "%s|%d" % (os.path.basename(path), int(tps))
 
-        # ② 消费 qa_jump_page（含 para_idx），得到默认页码
+        # ② 消费 qa_jump_page（含 para_idx），得到默认页码；无则消费标题树跳转
         jump = _consume_qa_jump(ctx, tps)
+        if not jump:
+            jump = _consume_toc_jump(tps)
         default_page = 1
         if jump:
             default_page = int(jump.get("page", 1) or 1)
@@ -683,8 +903,18 @@ def render(ctx):
                 with c_a:
                     if st.button("🎨 渲染该页", key="np_go"):
                         try:
-                            h, pw, ph = native_page_html(doc, int(p))
+                            # T2：标题树跳转命中的那页，把标题文字高亮出来
+                            hl_word = ""
+                            try:
+                                hlv = st.session_state.get("read_hl")
+                                if isinstance(hlv, dict) and int(hlv.get("page", 0)) == int(p):
+                                    hl_word = str(hlv.get("title") or "")
+                            except Exception:
+                                hl_word = ""
+                            h, pw, ph = native_page_html(doc, int(p), highlight=hl_word or None)
                             embed_html(h, height=min(int(ph * 1.18) + 60, 900), scrolling=True)
+                            if hl_word:
+                                st.caption(f"🔎 已高亮标题：{hl_word[:60]}")
                         except Exception as e:
                             st.warning(f"⚠️ 该页渲染失败：{str(e)[:160]}")
                 with c_b:
@@ -804,22 +1034,100 @@ def render(ctx):
             except Exception as e:
                 st.warning(f"⚠️ 原位 PDF 区异常：{str(e)[:160]}")
 
-        # ---------- 4 引用双向跳转 ----------
+        # ---------- 4 引用双向跳转（T1：正文 [n] ↔ References 条目） ----------
         with tabs[3]:
             try:
-                cit = st.text_input("引用标记（如 13）", key="cit")
-                if st.button("🔗 生成双向跳转", key="cit_go") and str(cit).strip():
-                    probe = _new_probe("引用定位")
+                ref_page = None
+                try:
+                    ref_page = find_reference_start_page(doc)
+                except Exception:
+                    ref_page = None
+                refs, meta = _ensure_ref_index(doc, doc_id)
+
+                if not refs:
+                    st.warning("⚠️ 未能从该 PDF 抽取到 References 列表"
+                               f"（{meta.get('message') or '未定位到 References 标题'}）。"
+                               "正文引用标记仍会显示，但不提供跳转。")
+                    st.caption("🛠️ 怎么办：该 PDF 可能是扫描件（无文本层）或参考文献标题非标准；"
+                               "可改选带文本层的 PDF，或临时上传。")
+                else:
+                    st.success(f"✅ References 抽取成功：{len(refs)} 条"
+                               f"（来源：{meta.get('source') or '-'}"
+                               f"{'，标题页 p%d' % ref_page if ref_page else ''}）")
+
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    bs = st.number_input("正文起始页", 1, max(1, tps), value=1, key="cj_s")
+                with c2:
+                    be_def = (ref_page - 1) if (ref_page and ref_page > 1) else min(tps, 12)
+                    be_def = min(max(1, int(be_def)), max(1, tps))
+                    be = st.number_input("正文结束页", 1, max(1, tps), value=be_def, key="cj_e")
+                cit = st.text_input("按编号快速定位单条（如 11，可留空）", key="cit")
+
+                if st.button("🔗 生成双向跳转视图", key="cit_go"):
+                    probe = _new_probe("引用双向跳转")
                     probe.start()
-                    body, ref, scanned = _find_citation(doc, cit, tps)
                     try:
-                        embed_html(citation_jump_html(body or "未找到正文位置。",
-                                                      ref or "未找到参考文献条目。"),
-                                   height=560, scrolling=True)
+                        if not refs:
+                            st.info("ℹ️ 当前 PDF 无 References 索引，已转为单条回溯定位模式。")
+                            body, ref, scanned = _find_citation(doc, cit or "1", tps)
+                            try:
+                                embed_html(citation_jump_html(body or "未找到正文位置。",
+                                                              ref or "未找到参考文献条目。"),
+                                           height=560, scrolling=True)
+                            except Exception as e:
+                                st.warning(f"⚠️ 跳转视图渲染失败：{str(e)[:160]}")
+                            st.caption(f"🔎 已回溯扫描 {scanned} 页（上限 {CITE_SCAN_CAP}）")
+                        else:
+                            s_i, e_i = int(bs), int(be)
+                            if e_i < s_i:
+                                s_i, e_i = e_i, s_i
+                            if (e_i - s_i + 1) > CITE_BODY_CAP:
+                                e_i = s_i + CITE_BODY_CAP - 1
+                                st.caption(f"ℹ️ 正文窗口已限制为 {CITE_BODY_CAP} 页，避免长文档卡顿。")
+                            body_pages = []
+                            for pno in range(s_i, e_i + 1):
+                                try:
+                                    body_pages.append((pno, doc[pno - 1].get_text() or ""))
+                                except Exception:
+                                    body_pages.append((pno, ""))
+                            html, cst = citation_links_html(body_pages, refs)
+                            try:
+                                embed_html(html, height=780, scrolling=True)
+                            except Exception as e:
+                                st.warning(f"⚠️ 跳转视图渲染失败：{str(e)[:160]}")
+                            st.success(
+                                f"🔗 双向跳转已生成：正文 {cst.get('pages', 0)} 页 / "
+                                f"引用标记 {cst.get('markers', 0)} 个"
+                                f"（可跳转 {cst.get('linked', 0)}、未匹配 {cst.get('unlinked', 0)}）/ "
+                                f"引用出现 {cst.get('occurrences', 0)} 处 / "
+                                f"References {cst.get('refs', 0)} 条"
+                                f"（其中 {cst.get('refs_in_body', 0)} 条在正文中被引用）")
+                            st.caption("· 正向：点击正文里蓝色 [n] → 右侧定位并高亮第 n 条；"
+                                       "悬停显示该条标题前 60 字。"
+                                       "· 反向：点击条目下方「↩ 回到正文」→ 循环定位第 1/m、2/m… 处引用。"
+                                       "全程不刷新页面、不重置翻译状态、不改变当前页码。")
                     except Exception as e:
-                        st.warning(f"⚠️ 跳转视图渲染失败：{str(e)[:160]}")
-                    st.caption(f"🔎 已回溯扫描 {scanned} 页（上限 {CITE_SCAN_CAP}）· "
-                               f"峰值内存 {probe.peak_mb():.0f} MB / 耗时 {probe.elapsed():.1f} 秒")
+                        st.warning(f"⚠️ 引用跳转视图生成失败：{str(e)[:160]}")
+                    finally:
+                        try:
+                            st.caption(f"🔎 峰值内存 {probe.peak_mb():.0f} MB / "
+                                       f"耗时 {probe.elapsed():.1f} 秒")
+                        except Exception:
+                            pass
+
+                # 按编号快速定位单条（无需生成整窗视图）
+                try:
+                    n_raw = re.sub(r"\D", "", str(cit or ""))
+                    n = int(n_raw) if n_raw else 0
+                except (TypeError, ValueError):
+                    n = 0
+                if n and refs:
+                    hit = [r for r in refs if _safe_int_pos(r[0]) == n]
+                    if hit:
+                        st.markdown(f"**[{n}]** {str(hit[0][1])[:400]}")
+                    else:
+                        st.caption(f"References 中没有编号 {n} 的条目（共 {len(refs)} 条）。")
             except Exception as e:
                 st.warning(f"⚠️ 引用跳转区异常：{str(e)[:160]}")
 
@@ -862,23 +1170,35 @@ def render(ctx):
             except Exception as e:
                 st.warning(f"⚠️ 划词翻译区异常：{str(e)[:160]}")
 
-        # ---------- 6 标题树 ----------
+        # ---------- 6 标题树（T2：内置书签 + 推断回退 + 点击定位） ----------
         with tabs[5]:
             try:
-                toc = doc.get_toc() or []
-                if not toc:
-                    st.caption("未检测到内置书签目录。")
-                for i, item in enumerate(toc[:400]):
+                toc, inferred = _ensure_headings(doc, doc_id, tps)
+                if inferred:
+                    st.caption(f"未检测到内置书签目录，已按字号/粗体/章节编号自动推断 "
+                               f"{len(toc)} 条标题（扫描前 {min(tps, TOC_SCAN_CAP)} 页）。"
+                               "点击任一标题即可跳转并高亮。")
+                elif toc:
+                    st.caption(f"内置书签 {len(toc)} 条，点击可跳转并高亮。")
+                else:
+                    st.caption("未检测到内置书签目录，且未能从正文推断出标题"
+                               "（可能是扫描件，或全文无章节编号/字号差异）。")
+                shown = toc[:TOC_RENDER_CAP]
+                for i, item in enumerate(shown):
                     try:
                         level, title, pg = int(item[0]), str(item[1]), int(item[2])
                     except Exception:
                         continue
+                    pg = min(max(1, pg), max(1, int(tps)))
                     if st.button(f"{'　' * (max(1, level) - 1)}{title} · p{pg}", key=f"toc{i}"):
                         try:
-                            st.session_state["read_jump_page"] = pg
+                            st.session_state[TOC_JUMP_KEY] = {"page": pg, "title": title}
                         except Exception:
                             pass
-                        st.success(f"已定位到第 {pg} 页（切换到「📄 原生渲染」标签查看）")
+                        st.success(f"已定位到第 {pg} 页「{title[:40]}」"
+                                   f"（切换到「📄 原生渲染」标签查看并高亮）")
+                if len(toc) > len(shown):
+                    st.caption(f"（目录共 {len(toc)} 条，首屏渲染前 {len(shown)} 条，避免长文档卡顿）")
             except Exception as e:
                 st.warning(f"⚠️ 目录解析失败：{str(e)[:160]}")
     finally:

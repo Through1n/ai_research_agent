@@ -1,8 +1,8 @@
 """UI 渲染冒烟测试（进程内 AppTest，不启动 streamlit server）。
 
 用法：
-    C:/Users/Administrator/anaconda3/python.exe scripts/_smoke_ui.py            # 标准：渲染全部页面
-    C:/Users/Administrator/anaconda3/python.exe scripts/_smoke_ui.py --heavy    # 额外触发本地重操作（建图/演示数据）
+    python scripts/_smoke_ui.py            # 标准：渲染全部页面
+    python scripts/_smoke_ui.py --heavy    # 额外触发本地重操作（建图/演示数据）
 
 说明：
 - 只验证「渲染不抛异常」（演示路径零崩溃），不校验视觉样式；

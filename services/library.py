@@ -54,6 +54,112 @@ def _seg_sim(new_fps, old_fps):
     return sum(top) / len(top), per[0]
 
 
+def _version_key(value):
+    """从 v1 / V7 / version 2 等字符串取版本号数字，取不到按 0 处理。"""
+    match = re.search(r"v\s*(\d+)", str(value or ""), re.IGNORECASE)
+    if match:
+        try:
+            return int(match.group(1))
+        except Exception:
+            return 0
+    match = re.search(r"(\d+)", str(value or ""))
+    try:
+        return int(match.group(1)) if match else 0
+    except Exception:
+        return 0
+
+
+def _version_relation(new_value, old_value):
+    """返回 (是否可比, 新版本是否更新)；版本号缺失时不可比。"""
+    new_key, old_key = _version_key(new_value), _version_key(old_value)
+    if not new_key or not old_key or new_key == old_key:
+        return False, False
+    return True, new_key > old_key
+
+
+_BOILERPLATE_RE = re.compile(
+    r"^(arxiv\s*:|provided proper attribution|preprint|under review|to appear|"
+    r"copyright|all rights reserved|permission to reproduce|abstract\b)",
+    re.IGNORECASE,
+)
+# 首页样板常跨行断句：以连接词/冠词结尾的行几乎不可能是标题
+_DANGLING_RE = re.compile(r"(?:\b(or|and|the|in|for|of|to|solely|this)\s*)$", re.IGNORECASE)
+
+
+def guess_title_from_text(full_text, fallback=""):
+    """从正文最前面取一个像标题的完整行（不依赖文件名）。
+
+    学术论文首页常有跨行标题（"BERT: Pre-training of ... / Language Understanding"）
+    和版权样板（"Provided proper attribution ... / scholarly works."），因此这里
+    会合并紧邻的续行并剔除样板行与以句号结尾的句子片段。
+    """
+    try:
+        lines = []
+        for raw_line in str(full_text or "").splitlines():
+            line = re.sub(r"\s+", " ", raw_line).strip()
+            if line:
+                lines.append(line)
+        for index, line in enumerate(lines[:40]):
+            if len(line) < 8 or len(line) > 160:
+                continue
+            if _BOILERPLATE_RE.match(line) or _DANGLING_RE.search(line):
+                continue
+            if line.endswith((".", "!", "?", ",")):   # 句子片段，不是标题
+                continue
+            title = line
+            if line.endswith((":", "-", "–", "—")) and index + 1 < len(lines):
+                nxt = lines[index + 1]
+                if len(nxt) <= 80 and not nxt.endswith((".", ":")):
+                    title = f"{line} {nxt}".replace(" :", ":").strip()
+            title = re.sub(r"\s+", " ", title).strip(" .:;,-–—")
+            if 8 <= len(title) <= 160 and not _DANGLING_RE.search(title):
+                return title
+    except Exception:
+        pass
+    return fallback
+
+
+def extract_abstract(full_text, limit=600):
+    """尽力定位 Abstract 之后的正文；无 Abstract 标记时跳过首页版权声明再取。"""
+    text = str(full_text or "")
+    head = text[:2500]
+    # 学术论文首页的 "Abstract" 通常单独成行或后接换行/冒号；宽松匹配多种排版
+    matches = list(re.finditer(r"(?im)^\s*abstract\s*[:\-–—.]?\s*$", head))
+    if not matches:
+        matches = list(re.finditer(r"(?i)\babstract\b\s*[:\-–—.\s]", head))
+    if not matches:
+        matches = list(re.finditer(r"(?i)\babstract\b", head))
+    match = matches[-1] if matches else None
+    if match:
+        body = text[match.end():match.end() + limit]
+    else:
+        # 无 Abstract 标记：跳过以版权/许可声明开头的首页样板
+        stripped = re.sub(
+            r"(?is)^.{0,400}?(?:permission to reproduce|all rights reserved|"
+            r"this paper is provided|copyright)\b.{0,200}?\n", "", text, count=1)
+        body = stripped if len(stripped.strip()) > limit // 2 else text
+        body = body[:limit]
+    return re.sub(r"\s+", " ", body).strip()
+
+
+def duplicate_advice(ctx, dup_name, new_version=None, new_title=""):
+    """为命中查重的结果给出保留建议。"""
+    if not dup_name:
+        return ""
+    old = ctx.papers.get(dup_name) or {}
+    old_version = old.get("version") or _guess_version(dup_name)
+    comparable, newer = _version_relation(new_version, old_version)
+    if comparable and not newer:
+        return (f"库中已有较新版本《{old.get('title', dup_name)}》（{old_version}），"
+                f"当前上传为 {new_version}；建议保留库中较新版本，或覆盖为旧版后重新核对引用。")
+    if comparable and newer:
+        return (f"库中已有较旧版本《{old.get('title', dup_name)}》（{old_version}），"
+                f"当前上传为 {new_version}；建议覆盖旧版以保持时效性。")
+    return (f"库中已有内容高度相似文献《{old.get('title', dup_name)}》"
+            f"（{old_version or '版本未知'}），请确认是否为重复入库；"
+            "若为同一论文建议使用「覆盖旧版」避免检索结果重复。")
+
+
 def check_duplicate(ctx, embedding, threshold=None, arxiv_id=None, fingerprints=None, title=None):
     """内容级语义去重（不依赖文件名）。返回 (dup_name, sim, evidence)。
 
@@ -104,8 +210,9 @@ def _empty_prepared(filename, raw=b"", error="", reason="corrupt"):
     return {
         "filename": filename, "scanned": False, "page_count": 0,
         "page_texts": [], "full_text": "", "embedding": None,
-        "fingerprints": [], "dup_name": None, "dup_sim": 0.0,
+        "fingerprints": [],         "dup_name": None, "dup_sim": 0.0,
         "dup_evidence": "", "raw": raw, "peak_mem_mb": None,
+        "dup_advice": "", "title": "", "version": _guess_version(filename), "ocr_error": str(error or ""),
         "failed_pages": failed_pages, "toc": [], "_chunks": [],
         "error": str(error or "PDF 解析失败"), "reason": reason,
         "truncated": False, "expected_pages": 0, "extracted_pages": 0,
@@ -138,11 +245,42 @@ def _notify_page_error(on_page_error, page_index, reason):
         pass
 
 
-def _extract_page_from_raw(raw, page_index, use_ocr, llm):
-    """在独立文档实例中解析单页，避免超时线程与主 doc 并发访问。"""
-    local_doc = None
+def _close_batch_doc(doc_cache):
+    """关闭批次复用的文档实例。
+
+    若仍有超时线程持有该实例，则移交给线程自行关闭（owned=True），
+    避免解析线程在已关闭的文档上继续取页。
+    """
     try:
-        local_doc = parsing.open_doc(raw)
+        doc = doc_cache.get("doc") if isinstance(doc_cache, dict) else None
+    except Exception:
+        doc = None
+    if doc is None:
+        return
+    try:
+        if doc_cache.get("abandoned"):
+            return
+    except Exception:
+        return
+    try:
+        doc.close()
+    except Exception:
+        pass
+
+
+def _extract_page_from_raw(raw, page_index, use_ocr, llm, doc_cache=None):
+    """解析单页；同一批次复用一个独立文档实例，避免超时线程与主 doc 并发访问。"""
+    local_doc = None
+    owned = False
+    try:
+        if isinstance(doc_cache, dict):
+            local_doc = doc_cache.get("doc")
+            if local_doc is None:
+                local_doc = parsing.open_doc(raw)
+                doc_cache["doc"] = local_doc
+        else:
+            local_doc = parsing.open_doc(raw)
+            owned = True
         page = local_doc[page_index]
         if use_ocr:
             text = parsing.ocr_page_text(page, llm)
@@ -150,20 +288,25 @@ def _extract_page_from_raw(raw, page_index, use_ocr, llm):
         text, blocks = parsing.extract_page_text_column_aware(page, return_blocks=True)
         return text, parsing.heading_page_data(blocks, text)
     finally:
-        if local_doc is not None:
-            try:
-                local_doc.close()
-            except Exception:
-                pass
+        # 批次已被放弃（发生超时）时由本线程负责关闭，避免访问已关闭文档
+        if owned or (isinstance(doc_cache, dict) and doc_cache.get("abandoned")):
+            if local_doc is not None:
+                try:
+                    local_doc.close()
+                except Exception:
+                    pass
 
 
-def _extract_page_with_timeout(raw, page_index, use_ocr, llm, timeout_seconds):
+def _extract_page_with_timeout(raw, page_index, use_ocr, llm, timeout_seconds,
+                               doc_cache=None):
     """用守护线程执行单页解析；超时立即返回并由调用方跳过该页。"""
     result_queue = queue.Queue(maxsize=1)
 
     def worker():
         try:
-            result_queue.put((True, _extract_page_from_raw(raw, page_index, use_ocr, llm)))
+            result_queue.put(
+                (True, _extract_page_from_raw(raw, page_index, use_ocr, llm, doc_cache))
+            )
         except Exception as exc:
             try:
                 result_queue.put((False, str(exc)))
@@ -180,6 +323,10 @@ def _extract_page_with_timeout(raw, page_index, use_ocr, llm, timeout_seconds):
         thread.start()
         thread.join(timeout)
         if thread.is_alive():
+            try:
+                doc_cache["abandoned"] = True       # 交权给线程关闭，防悬空文档
+            except Exception:
+                pass
             return None, None, f"单页处理超过 {timeout:g} 秒，已跳过"
         try:
             ok, payload = result_queue.get_nowait()
@@ -203,7 +350,8 @@ def _sample_process_memory(process, current_peak):
         return current_peak
 
 
-def _validate_prepared(prepared, expected_pages, extracted_pages, total_chars):
+def _validate_prepared(prepared, expected_pages, extracted_pages, total_chars,
+                       ocr_error=""):
     """对逐页提取结果做完整性校验；异常时返回带 error 键的结果，正常返回 None。
 
     2026-10 R1 修复：损坏/截断 PDF 此前会被静默入库（0 页幽灵文献 / 静默丢正文）。
@@ -225,8 +373,9 @@ def _validate_prepared(prepared, expected_pages, extracted_pages, total_chars):
             return prepared
         if extracted_pages <= 0:
             if prepared.get("scanned"):
+                detail = ("（%s）" % ocr_error[:120]) if ocr_error else ""
                 prepared["error"] = ("检测为扫描件，但当前未启用/不可用 OCR，全部页面均未提取到文本，"
-                                     "未入库。请配置支持视觉的模型后重试。")
+                                     "未入库。请配置支持视觉的模型/有效 Key 后重试。" + detail)
                 prepared["reason"] = "scanned_no_ocr"
             else:
                 prepared["error"] = "PDF 所有页面均未提取到有效文本，疑似损坏或纯图片扫描件，未入库。"
@@ -311,9 +460,14 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
                 pass
 
     try:
-        use_ocr = bool(scanned and getattr(ctx.llm, "available", False))
+        use_ocr = bool(
+            scanned
+            and getattr(ctx.llm, "available", False)
+            and parsing.ocr_supported(getattr(ctx, "llm", None))
+        )
     except Exception:
         use_ocr = False
+    ocr_error = ""
 
     page_texts = []
     heading_pages = []
@@ -324,10 +478,16 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
     for batch_start in range(0, total, PDF_BATCH_SIZE):
         batch_end = min(batch_start + PDF_BATCH_SIZE, total)
         batch_texts = []
+        doc_cache = {}
         for page_index in range(batch_start, batch_end):
             text, heading_data, error = _extract_page_with_timeout(
-                raw, page_index, use_ocr, getattr(ctx, "llm", None), timeout_per_page
+                raw, page_index, use_ocr, getattr(ctx, "llm", None), timeout_per_page,
+                doc_cache=doc_cache,
             )
+            if not error and parsing.is_ocr_error_text(text):
+                error = str(text).strip("[]")[:300]
+                if not ocr_error:
+                    ocr_error = str(text)
             if error:
                 reason = str(error)[:300]
                 failed_pages.append({"page": page_index + 1, "error": reason})
@@ -345,6 +505,7 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
                 _notify_pdf_progress(progress_cb, done, total,
                                      f"已处理 {done}/{total} 页")
 
+        _close_batch_doc(doc_cache)
         page_texts.extend(batch_texts)
         try:
             batch_chunks = parsing.build_chunks_from_texts(batch_texts, page_offset=batch_start)
@@ -377,7 +538,8 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
             "toc": toc, "page_texts": page_texts, "full_text": full_text,
             "page_count": len(page_texts),
         }
-        invalid = _validate_prepared(prepared_base, total, extracted_pages, total_chars)
+        invalid = _validate_prepared(prepared_base, total, extracted_pages, total_chars,
+                                     ocr_error=ocr_error)
         if invalid is not None:
             invalid["embedding"] = None
             invalid["fingerprints"] = []
@@ -408,19 +570,28 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
     except Exception:
         fingerprints = []
     aid = _guess_arxiv(filename)
+    title_guess = guess_title_from_text(full_text, "")
+    new_version = _guess_version(filename)
     try:
         dup_name, dup_sim, dup_ev = (
-            check_duplicate(ctx, embedding, arxiv_id=aid, fingerprints=fingerprints)
+            check_duplicate(ctx, embedding, arxiv_id=aid, fingerprints=fingerprints,
+                            title=title_guess)
             if embedding is not None else (None, 0.0, "")
         )
     except Exception:
         dup_name, dup_sim, dup_ev = None, 0.0, ""
+    try:
+        dup_advice = duplicate_advice(ctx, dup_name, new_version, title_guess) if dup_name else ""
+    except Exception:
+        dup_advice = ""
     peak_mem_mb = _sample_process_memory(process, peak_mem_mb)
     return {
         "filename": filename, "scanned": scanned, "page_count": len(page_texts),
         "page_texts": page_texts, "full_text": full_text, "embedding": embedding,
         "fingerprints": fingerprints,
         "dup_name": dup_name, "dup_sim": dup_sim, "dup_evidence": dup_ev, "raw": raw,
+        "dup_advice": dup_advice, "title": title_guess, "version": new_version,
+        "ocr_error": ocr_error,
         "peak_mem_mb": peak_mem_mb, "failed_pages": failed_pages, "toc": toc,
         "_chunks": streamed_chunks,
         **truncated_info,
@@ -434,6 +605,7 @@ def commit(ctx, prepared, title=None, authors=None, arxiv_id=None, version=None,
         # 双保险：带 error 的结果绝不入库（正常流程在 UI 层已被拦截）
         raise ValueError(f"拒绝入库：{prepared.get('error')}")
     filename = prepared["filename"]
+    title = title or (prepared.get("title") or "").strip() or filename
     if prepared.get("raw"):
         (UPLOAD_DIR / filename).write_bytes(prepared["raw"])
     chunks = prepared.get("_chunks")
@@ -446,12 +618,13 @@ def commit(ctx, prepared, title=None, authors=None, arxiv_id=None, version=None,
     version = version or _guess_version(filename)
 
     paper = {
-        "filename": filename, "title": title or filename,
+        "filename": filename, "title": title,
         "authors": authors or "", "year": year or "",
         "arxiv_id": arxiv_id, "version": version,
         "page_count": prepared["page_count"], "scanned": prepared["scanned"],
         "added_at": time.strftime("%Y-%m-%d %H:%M"),
-        "abstract": prepared["full_text"][:600],
+        "abstract": extract_abstract(prepared["full_text"]),
+        "toc": prepared.get("toc") or [],
         "github": github or [], "embedding": prepared["embedding"],
         "fingerprints": prepared.get("fingerprints") or [],
     }
@@ -540,20 +713,100 @@ def latest_of(files):
     return sorted(files, key=vnum, reverse=True)
 
 
+def _abstract_of(ctx, filename, chunks, limit=600):
+    """优先用入库时保存的摘要（基于全文抽取，标题行可能被切块过滤掉）。"""
+    stored = str((ctx.papers.get(filename) or {}).get("abstract") or "").strip()
+    if stored:
+        return stored
+    return extract_abstract("\n".join(str(item.get("text", "")) for item in chunks), limit)
+
+
+def _version_stats(ctx, files, toc_by_file=None):
+    """离线可复现的版本对比统计（不依赖 LLM）。"""
+    toc_by_file = toc_by_file or {}
+    stats = {}
+    for filename in files:
+        chunks = [item for item in ctx.chunks if item["source"] == filename]
+        text = "\n".join(str(item.get("text", "")) for item in chunks)
+        pages = [int(item.get("page_end") or item.get("page") or 0) for item in chunks]
+        paper = ctx.papers.get(filename) or {}
+        chapters = _titles_of(toc_by_file.get(filename) or paper.get("toc"))
+        stats[filename] = {
+            "chunks": len(chunks),
+            "chars": len(text),
+            "pages": max(pages) if pages else int(paper.get("page_count") or 0),
+            "refs": len(set(re.findall(r"\[\d{1,3}\]|arXiv:\d{4}\.\d{4,5}", text))),
+            "abstract": _abstract_of(ctx, filename, chunks),
+            "chapters": _titles_of(toc_by_file.get(filename) or paper.get("toc")),
+        }
+    return stats
+
+
+def _titles_of(toc, level=1, limit=8):
+    """从 [level, title, page] 形式的 toc 中取指定层级标题。"""
+    out = []
+    for item in toc or []:
+        try:
+            if len(item) > 2 and int(item[0]) == level:
+                title = str(item[1]).strip()
+                if title:
+                    out.append(title)
+        except Exception:
+            continue
+    return out[:limit]
+
+
+def _offline_version_report(ctx, files, toc_by_file=None):
+    toc_by_file = toc_by_file or {}
+    stats = _version_stats(ctx, files, toc_by_file=toc_by_file)
+    rows = ["| 对比维度 | " + " | ".join(f"版本{i + 1}（{name}）" for i, name in enumerate(files))
+            + " | 差异说明 |"]
+    rows.append("|" + "---|" * (len(files) + 2))
+
+    def row(dimension, getter, note=""):
+        cells = [str(getter(name)).replace("|", "/") or "-" for name in files]
+        rows.append(f"| {dimension} | " + " | ".join(cells) + f" | {note} |")
+
+    row("文档规模（页数）", lambda name: stats[name]["pages"], "按 chunk 的最大页码统计")
+    row("切块数", lambda name: stats[name]["chunks"], "入库 chunk 数量")
+    row("正文字数", lambda name: f"{stats[name]['chars']:,}", "全部 chunk 字符合计")
+    row("参考文献条目", lambda name: stats[name]["refs"], "按 [n] 与 arXiv 编号去重计数")
+    row("摘要首句", lambda name: stats[name]["abstract"][:80], "摘要起始 80 字")
+    for index in range(max((len(stats[name]["chapters"]) for name in files), default=0)):
+        cells = []
+        for name in files:
+            chapters = stats[name]["chapters"]
+            cells.append(str(chapters[index]).replace("|", "/") if index < len(chapters) else "-")
+        rows.append(f"| 第 {index + 1} 个一级章节 | " + " | ".join(cells) + " | 章节标题逐项对比 |")
+    return "\n".join(rows)
+
+
 def version_diff(ctx, files):
-    """让 LLM 以中文表格总结同一论文不同版本差异。"""
+    """让 LLM 以中文表格总结同一论文不同版本差异。
+
+    LLM 不可用（无 Key / 网络受限 / 返回错误占位）时，降级为**离线统计表**：
+    页数、切块数、正文字数、参考文献条目、摘要首句、一级章节逐项对比，
+    保证官方 v1/v7 用例在任何环境下都能输出可复核的差异。
+    """
     texts = []
     for fn in files:
         t = "\n".join(c["text"] for c in ctx.chunks if c["source"] == fn)
         texts.append(f"【{fn}】\n{t[:3500]}")
     headers = " | ".join([f"版本{i+1}" for i in range(len(files))])
+    offline = _offline_version_report(ctx, files)
     prompt = f"""请对比同一论文的 {len(files)} 个版本，用中文 Markdown 表格总结差异。
 表头列：对比维度 | {headers} | 差异说明
 对比维度至少包含：标题/作者、摘要、方法、实验数据(BLEU/参数量等)、参考文献。全部用中文。
+以下是已离线统计的客观数据，请直接采用，不要编造：
+{offline}
+
+两版正文前 3500 字：
 {chr(10).join(texts)}
 只输出 Markdown 表格。"""
     try:
         llm = getattr(ctx, "llm", None)
+        if not getattr(llm, "available", False):
+            raise RuntimeError("当前 Provider 不可用（可能缺少有效 API Key）")
         response = call_llm_with_retry(
             [{"role": "user", "content": prompt}],
             model=getattr(llm, "model", None),
@@ -561,9 +814,13 @@ def version_diff(ctx, files):
             api_key=getattr(llm, "api_key", None),
             base_url=getattr(llm, "base_url", None),
         )
-        return response.choices[0].message.content or ""
-    except Exception as exc:
-        return f"版本差异分析暂不可用：{str(exc)[:120]}"
+        content = (response.choices[0].message.content or "").strip()
+        if not content or "【LLM 暂时不可用" in content or "错误摘要" in content:
+            raise RuntimeError(content[:80] or "LLM 返回空结果")
+        return ("#### 离线客观统计（可直接复核）\n\n" + offline
+                + "\n\n#### 大模型语义对比\n\n" + content)
+    except Exception:
+        return ("#### 离线客观统计（LLM 不可用，已降级为离线对比）\n\n" + offline)
 
 
 def _guess_arxiv(filename):

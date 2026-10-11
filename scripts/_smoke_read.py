@@ -1,7 +1,8 @@
 """阅读页（页面3）渲染冒烟 + A/B/C 组关键修复自验。
 
-用法（项目实际环境，含 pymupdf / streamlit / psutil）：
-    C:/Users/Administrator/anaconda3/envs/ai_research/python.exe scripts/_smoke_read.py
+用法（需 ai_research 环境，含 pymupdf / streamlit / psutil）：
+    conda activate ai_research
+    python scripts/_smoke_read.py
 
 分两部分：
   Part 1  纯 Python 校验：双栏检测、原位 PDF 中文叠加、MemoryProbe、LLM 重试退避

@@ -4,30 +4,58 @@
 
 ![主界面 · 文献库管理（语义查重 / 版本管理 / 细粒度解析）](docs/shots/p0.png)
 
-<!-- TODO: 替换为真实演示链接 -->
-**在线演示**：`【占位符】待部署后填入评审地址（Docker 一键部署命令见下方"快速开始 · Docker"，或技术文档第 6 章）`
-提交前请把本行替换为 `https://你的演示域名` 形式的真实链接。
+<!-- TODO: 替换为真实演示链接（部署步骤见 docs/在线演示部署指南.md） -->
+**在线演示**：`【占位符】待部署后填入评审地址`
+- 系统为**开放式访问，无需注册登录**，评审老师打开链接即可直接使用（代码中无任何登录鉴权逻辑）。
+- **无需自备 API Key**：打开后点侧边栏 `🚀 一键加载演示数据（v1/v7/BERT）`，即可体验文献解析 / 语义去重 / 版本管理 / 引用图谱等全部离线链路。
+- 若想体验问答、翻译、写作等 LLM 功能，可在侧边栏「接入方式 → 🏢 预设平台」自选平台并填入自己的 Key（仅存于会话内存，不落盘、不回传）。
 
 ---
 
 ## 🚀 一键运行（3 行命令）
 
+> 三条安装运行路径任选其一：**conda 本地运行**（推荐开发/演示）、**Docker**（推荐交付/复现）、**在线访问**（评审打开即可）。
+
+### 路径一：conda 本地运行（Windows / Linux / macOS）
+
 ```bash
 git clone <repo-url> ai_research_agent && cd ai_research_agent
-pip install -r requirements.txt        # 已有 conda 可改为: conda activate ai_research
+
+# ① 建环境（环境名固定为 ai_research，与启动脚本一致）
+conda create -n ai_research python=3.11 -y
+conda activate ai_research
+
+# ② 装依赖（13 个核心包，约 3–5 分钟）
+pip install -r requirements.txt
+
+# ③ 起服务
 streamlit run app.py                   # 浏览器打开 http://localhost:8501
 ```
 
 > Windows 也可双击根目录 **`启动科研助手.vbs`**（无黑窗口、自动开浏览器，内部执行
 > `conda activate ai_research` + `streamlit run app.py`）。
 > 打开后点击侧边栏 **🚀 一键加载演示数据**，无需 API Key 即可体验全部离线链路。
+>
+> **可选依赖**（不装也能跑，会自动走降级链路）：
+> ```bash
+> pip install matplotlib graphviz      # 拓扑图更好的渲染效果（未安装时降级为零依赖 DOT→SVG）
+> pip install playwright && playwright install chromium   # 仅 scripts/resnap.py 截图脚本需要
+> ```
 
-**Docker 方式**：
+### 路径二：Docker（最省事，环境 100% 可复现）
 
 ```bash
-cp .env.example .env                   # 填入任一 Provider 的 API Key
-docker compose up -d                   # 访问 http://localhost:8501
+cp .env.example .env                   # 按需填入任一 Provider 的 API Key（也可留空跑离线链路）
+docker compose up -d                   # 首次构建约 3–6 分钟
+docker compose logs -f ai4s-agent      # 等到出现 "You can now view your Streamlit app"
+# 访问 http://localhost:8501
 ```
+
+### 路径三：在线访问（评审专用，无需安装）
+
+<!-- TODO: 部署后把下面两行替换为真实地址，详见 docs/在线演示部署指南.md -->
+- 主用地址：`【占位符】https://待部署域名`（部署步骤见 `docs/在线演示部署指南.md` 第三节）
+- **无需注册登录，无需自备 API Key**：打开即可用；点侧边栏 `🚀 一键加载演示数据` 即可体验离线全链路。
 
 ---
 
@@ -186,18 +214,71 @@ python scripts/apptest_check.py            # Streamlit 全页面渲染检查
 
 ---
 
-## 🔑 配置
+## 🔑 配置与环境变量
 
-复制 `.env.example` 为 `.env`，填一个 Provider 的 Key 即可（也可在应用侧边栏直接切换 + 填入）：
+复制根目录 `.env.example` 为 `.env`，填一个 Provider 的 Key 即可；也可在侧边栏实时切换并手填。
+
+> 本模板已按代码中实际读取位置逐个核对，**共覆盖 23 个环境变量**（`config.py` 14 个、
+> `core/providers.py` 2 个、`core/llm.py` 1 个、`services/state.py` 1 个、
+> `services/extern.py` 2 个、`HF_ENDPOINT` 1 个、`AI4S_DESKTOP` 1 个；另 `APPDATA` 为系统自带无需配置）。
+> 每个变量均带注释说明用途与读取位置。
+
+最简配置：
 
 ```env
 LLM_PROVIDER=zhipu            # zhipu | deepseek | qwen | openai | ollama
 ZHIPU_API_KEY=你的Key         # 智谱免费 Key：open.bigmodel.cn
 ```
 
-> ⚠️ 安全设计：API Key 只经环境变量 / 侧边栏会话注入，不写入代码与前端；
-> `.env` 已在 `.gitignore` 与 `.dockerignore` 中排除，不会进入仓库与镜像；
+Provider 名与环境变量名的对应（`core/providers.py` 的 `key_env` 字段，**填错变量名是最常见的"页面说没 Key"的原因**）：
+
+| 侧边栏平台 | `LLM_PROVIDER` | 读哪个变量 |
+|---|---|---|
+| 智谱 GLM（默认，唯一带视觉模型 `glm-4v`） | `zhipu` | `ZHIPU_API_KEY` |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
+| 通义千问（DashScope 兼容模式） | `qwen` | `DASHSCOPE_API_KEY` |
+| OpenAI | `openai` | `OPENAI_API_KEY` |
+| 本地 Ollama（免密钥，先 `ollama serve` + `ollama pull qwen2.5:7b`） | `ollama` | 无需真实 Key |
+
+常用可调项（`config.py:74-80`）：`CHUNK_SIZE`(1200)、`CHUNK_OVERLAP`(150)、`DENSE_K`(12)、
+`SPARSE_K`(12)、`FINAL_K`(6)、`DEDUP_THRESHOLD`(0.90)、`AGENT_MAX_ITERS`(8)。
+
+> ⚠️ 安全设计（赛题要求「API 密钥不得出现在公开仓库」）：API Key 只经环境变量 / 侧边栏会话注入，
+> 不写入代码与前端；`.env` 已在 `.gitignore` 与 `.dockerignore` 中排除，不会进入仓库与镜像；
 > 所有模型调用走后端代理。无 Key 时离线链路（解析/检索/图谱/去重/追踪）全部可用。
+> 公网部署的安全加固与评审交付清单见 `docs/在线演示部署指南.md`。
+
+## 🧰 依赖清单
+
+`requirements.txt`（13 个核心包，均为硬依赖）：
+
+| 包 | 用途 | 主要引用位置 |
+|---|---|---|
+| `streamlit>=1.63,<1.64` | 交互层（锁定版本保证可复现） | `app.py`、`ui/` |
+| `PyMuPDF>=1.24.3` | PDF 几何解析（双栏判栏 / 图注 / 表格 / 标题树） | `services/parsing.py` |
+| `chromadb>=0.5` | 向量库 | `core/`、`storage/chroma` |
+| `openai>=1.40` | OpenAI 兼容协议的统一客户端 | `core/llm.py` |
+| `pandas>=2.0` / `numpy>=1.26` | 表格与数值计算 | `services/writing.py`、`ui/` |
+| `plotly>=5.20` | 六类学术图表渲染 | `services/writing.py`、`ui/page_writing.py` |
+| `networkx>=3.2` | 图论指标（PageRank / 中心性 / 社区发现） | `services/graph.py` |
+| `arxiv>=2.1` | arXiv 检索 | `services/extern.py`、`tools/definitions.py` |
+| `pillow>=10` | 图像抽取与处理 | `services/parsing.py` |
+| `python-dotenv>=1.0` | 加载 `.env` | `config.py` |
+| `rank-bm25>=0.2.2` | BM25Plus 稀疏检索 | `services/rag.py` |
+| `psutil>=5.9` | 内存监控与压测 | `ui/common.py`、`scripts/` |
+
+**可选依赖（未安装时自动降级，不影响主流程）**：
+
+| 包 | 影响的功能 | 未安装时的降级行为 |
+|---|---|---|
+| `matplotlib` | Graphviz 拓扑图渲染第 2 级 | 降级为零依赖 DOT→SVG（`services/wcopilot_dotrender.py`） |
+| `graphviz` + `dot` 可执行文件 | Graphviz 渲染第 1 级 | 同上，两级降级 |
+| `playwright` | 仅 `scripts/resnap.py` 批量截图脚本 | 该脚本不可用，其余功能不受影响 |
+| `pywebview`（`webview`） | 仅桌面壳 `desktop/window.py` | Web 模式完全不受影响 |
+
+> ⚠️ **已知待办（本次未修改 `requirements.txt`）**：上方 2 个可选包目前不在 `requirements.txt` 中。
+> 如需最佳拓扑图渲染效果，请在执行 `pip install -r requirements.txt` 后追加
+> `pip install matplotlib graphviz`。
 
 ---
 
@@ -236,36 +317,107 @@ ai_research_agent/
 
 ## 🎬 演示与文档
 
-- 技术文档：`docs/技术文档.pdf`（同内容源文件 `docs/technical_doc.md` / `docs/技术文档.html`）
-- 界面截图：`docs/shots/`（`p0`=文献库、`p1`=Agent、`p2`=问答溯源、`p3`=阅读翻译、`p4`=图谱、`p5`=写作、`p6`=检索追踪、`p7`=架构、`p8`=创新亮点；文件名与页面顺序**不**一一对应）
-- 演示视频脚本：`docs/演示视频脚本.md`
+| 材料 | 路径 | 说明 |
+|---|---|---|
+| 技术文档 | `docs/技术文档.pdf`（源：`docs/technical_doc.md` / `docs/技术文档.html`） | 25 页，赛题要求 PDF ≤30 页 |
+| **演示视频脚本** | `docs/演示视频脚本.md` | 7 分 20 秒逐镜脚本，含分镜表、录制参数、10 条翻车预案 |
+| **在线部署指南** | `docs/在线演示部署指南.md` | Docker / 云服务器 / Streamlit Cloud 三条路径 + 安全配置 + 排查表 |
+| **团队信息** | `docs/团队信息.md` | 队伍 / 成员分工矩阵 / 指导教师 / 项目时间线 |
+| 界面截图 | `docs/shots/` | `p0`=文献库、`p1`=Agent、`p2`=问答溯源、`p3`=阅读翻译、`p4`=图谱、`p5`=写作、`p6`=检索追踪、`p7`=架构、`p8`=创新亮点；**文件名与页面顺序不一一对应** |
+| 评审过程报告 | `docs/review/` | 各轮自检、评审意见与修复记录 |
+
+> ⚠️ 截图目录是 **`docs/shots/`**（不是 `docs/screenshots/`）；该目录已在 `.gitignore` 中**显式保留**，
+> 以保证推送到 GitHub 后文档图片不裂图。
 
 ---
 
 ## 👥 团队信息
 
-<!-- TODO: 提交前填写 -->
+<!-- TODO: 提交前填写；完整占位模板见 docs/团队信息.md（两处请保持一致） -->
 
-- 参赛队伍：__________
-- 组别：__________
-- 队员与分工：
-  - ______（文档感知与长文档模块）：__________
-  - ______（抗幻觉 RAG 模块）：__________
-  - ______（图谱挖掘模块）：__________
-  - ______（学术 Copilot 模块）：__________
-  - ______（UI 与演示路径）：__________
-  - ______（性能 / LLM 统一 / 交付）：__________
-- 指导教师：__________
+| 项目 | 内容 |
+|---|---|
+| **参赛队伍名称** | `【占位符】__________` |
+| **组别** | `【占位符】____`（本科组 / 研究生组 / 高职组，须与报名表单一致） |
+| **所属高校 / 院系** | `【占位符】__________` |
+| **代码仓库** | `【占位符】https://github.com/___/ai_research_agent`（须为 Public） |
+| **在线演示地址** | `【占位符】https://___`（见上方「路径三：在线访问」） |
+
+**成员与分工**（按七大代码模块：Agent 内核 / 文档感知 / 抗幻觉 RAG / 图谱挖掘 / 学术 Copilot / UI / 测试交付）：
+
+| # | 姓名 | 学校 / 专业 | 组别 | 负责模块 | 主要交付物 |
+|---|---|---|---|---|---|
+| 1 | `【占位符】`（队长） | `【占位符】` | `【占位符】` | Agent 内核 + 总体架构 | `core/`（agent / planner / router / memory / guardrails / sandbox / trace） |
+| 2 | `【占位符】` | `【占位符】` | `【占位符】` | 多模态文档感知与长文档工程化 | `services/parsing.py`、`services/library.py` |
+| 3 | `【占位符】` | `【占位符】` | `【占位符】` | 抗幻觉 RAG | `services/rag.py`、`query_expansion.py` |
+| 4 | `【占位符】` | `【占位符】` | `【占位符】` | 引用图谱与综述 | `services/graph.py`、`citation_quality.py` |
+| 5 | `【占位符】` | `【占位符】` | `【占位符】` | 学术 Copilot（写作 / 翻译 / 可视化） | `services/writing.py`、`translate.py` |
+| 6 | `【占位符】` | `【占位符】` | `【占位符】` | 前端交互与桌面壳 | `ui/`（9 页）、`app.py`、`desktop/` |
+| 7 | `【占位符】` | `【占位符】` | `【占位符】` | 测试、压测与交付材料 | `tests/`、`scripts/`、`docs/`、`Dockerfile` |
+
+- **指导教师**：`【占位符】__________`（若无，请明确写"无指导教师"）
+- **联系方式（队长）**：`【占位符】手机 / 邮箱`
+- 分工矩阵完整版、项目时间线、人员与代码目录对应关系见 **[`docs/团队信息.md`](docs/团队信息.md)**
+
+> 注明：若实际人数与上述 7 个模块不一致，请自行合并或拆分对应行，保持"每个模块有且仅有一名主要负责人"。
 
 ---
 
-## 🤝 AI 协同声明与局限
+## 🤝 AI 协同说明（赛题 3.4 条）
 
-- 本项目使用 AI 辅助编程（符合赛规）：核心架构（Agent 内核、检索管线、图谱算法、Guardrails）
-  与关键取舍由参赛成员设计与掌控。
-- 诚实声明的当前局限（详见技术文档第 8 章）：引用含金量依赖 OpenAlex 等外部 API，被限流时降级并明确标注
-  "数据可能不准确"，不编造数字；Python 沙箱为子进程 + AST 白名单的软隔离；中文纯句的引用一致性校验
-  存在盲区（无法判定时如实提示而非谎报通过）；OCR 依赖多模态 API，离线以原生文本层为准。
+> 赛题规定：允许使用 AI 辅助编程，但须清晰说明 AI 的协同贡献与 Prompt 调优策略。以下为简要版，
+> 完整说明见 `docs/技术文档.pdf` 第 8 章。
+
+### 1. 使用方式声明
+
+本项目在**开发过程中使用了大模型作为辅助编程工具**，用于代码草稿生成、重构建议、
+文档润色与测试用例扩展。**所有生成代码均经人工逐行审阅、修改并在真实环境中验证后入库。**
+
+### 2. AI 实际承担的工作
+
+| 类别 | 具体占比 | 说明 |
+|---|---|---|
+| 样板 / 胶水代码、表单与错误提示文案 | 高（约 60–70%） | 9 个页面的 `st.empty/spinner/expander` 骨架、统一的中文友好错误提示（`ui/common.py:friendly_error`） |
+| 单元测试与边界用例扩展 | 高（约 60%） | `tests/` 18 项用例的初始草稿，人工补充断言与真实数据 |
+| 文档初稿（README / 技术文档 / 脚本） | 中（约 40–50%） | 结构与措辞建议，实测数字一律由人工实跑填入 |
+| 算法与核心链路代码 | **低（< 20%）** | 仅用于局部实现建议与代码风格统一，核心逻辑由人工设计 |
+
+### 3. 人工主导的架构决策与技术判断（非 AI 产出）
+
+以下关键取舍由参赛成员独立设计、在真实环境反复验证后确定，**是本作品的核心贡献**：
+
+1. **抗幻觉四道防线**：拒答闸门阈值 `RELEVANCE_FLOOR=0.35`（`services/rag.py:16`）、
+   引用一致性重叠率口径、`MAX_REPAIR=1` 的修复环上限（`:17`，防死循环同时控成本）。
+   阈值是跑完全部测试用例后调出来的，不是默认值。
+2. **双栏判栏的四条件与"横跨否决"规则**（`services/parsing.py:123`）：修复前单栏语料误判率 19.1%，
+   加入横跨否决后降到 **0%**（本 README「关键实测数字」一节可复跑）。这是从真实 PDF 几何统计中归纳出的判据。
+3. **引用图谱的真实引用还原**：References 标题锚点 + IDF 加权倒排候选 + 语义兜底三级策略
+   （`services/graph.py:82/161/202`），明确拒绝用"标题相似度"冒充真实引用关系；
+   无真实边时宁可在界面标注"🎭 演示模式示意图谱"，也不糊弄。
+4. **长文档工程化**：分批解析（`PDF_BATCH_SIZE=20`）、单页 30s 超时跳过并精确记录失败页、
+   损坏/截断/加密 PDF 三重拦截（`services/library.py:206/253/430`）——目标是"坏页不拖垮整本书"。
+5. **降级优先的设计哲学**：任何外部依赖（LLM / OpenAlex / GitHub / Graphviz / TikZ 编译器）失败时，
+   必须有明确的中文降级提示与兜底路径，**绝不静默失败、绝不用编造数据掩盖失败**。
+6. **全部实测数字的复跑验证**：本 README「关键实测数字」表中每一项都在指定环境下实跑得到，
+   并提供 `scripts/verify_official.py` 一键复现。
+
+### 4. Prompt 调优策略
+
+| 策略 | 做法示例 |
+|---|---|
+| **约束前置** | 要求模型"不得编造任何文献、页码与数字；拿不到就说没有"，并把该约束写进系统提示而非后处理 |
+| **给足上下文** | 提问时附上真实代码片段、报错堆栈、相关常量定义，而非只丢一句"帮我改 bug" |
+| **角色与格式约定** | 指定"你是 Streamlit 工程专家，输出须含错误边界 / 中文友好提示 / 不新增依赖" |
+| **小步迭代 + 立即验证** | 一次只让模型改一个函数，改完立刻跑对应单元测试与 AppTest，失败就把真实报错喂回去 |
+| **反幻觉硬约束** | 涉及输出 References 的 Prompt 一律白名单化：只允许引用给定的真实条目清单 |
+| **温度控制** | 生成 JSON / 结构化结果时 `temperature=0.0`，生成自然语言时 `0.1`（见 `core/llm.py`） |
+
+### 5. 诚实声明的当前局限
+
+- 引用含金量依赖 OpenAlex / S2 / Crossref 外部 API，被限流时会降级并明确标注"数据可能不准确"，**不编造数字**；
+- Python 沙箱为「子进程 + AST 白名单」的软隔离，非容器/命名空间级强隔离；
+- 中文纯句的引用一致性校验存在盲区（跨语言重叠率计算受限），无法判定时**如实提示而非谎报通过**；
+- OCR 依赖多模态 API，离线环境以原生文本层为准，扫描件识别率受 Provider 视觉能力影响。
 
 ## 📄 License
 

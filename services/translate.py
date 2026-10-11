@@ -12,8 +12,17 @@
   A2 同步滚动不同步          -> 按比例（scrollTop/(scrollHeight-clientHeight)）同步 + isSyncing + rAF
   A3 划词翻译选区未清空      -> SELECTION_JS：捕获即 clearSelection + hash 去重 + 长度<2 忽略
   A4 原位 PDF 中文乱码       -> pymupdf/fitz 兼容 Font("china-s") + insert_textbox + 负值回退
+本轮（考生7）新增（模块三：正文引用标记 ↔ References 双向无损跳转）：
+  T1 真实 References 索引 build_reference_index()（优先复用 services.writing
+     .extract_references_from_pdf，失败降级 services.parsing.split_reference_entries）
+  T1 双向无损跳转 citation_links_html()：正文 [n] → <a href="#ref-n">；参考文献
+     条目 <div id="ref-n"> + 「↩ 回到正文」按钮循环切换第 k/m 处引用
+  T2 native_page_html(..., highlight=标题) 让标题树点击后可在原生渲染里高亮定位
+  T3 protect_math()/restore_math()/math_safe_translate()：翻译前把 $..$、\(..\)、
+     LaTeX 命令、key=value 数值占位，翻译后原样还原（公式与数值不被翻译）
 """
 import importlib
+import re
 
 try:  # PyMuPDF >= 1.24 推荐 import pymupdf；老版本只有 fitz。二者 API 一致
     import pymupdf as fitz
@@ -163,8 +172,13 @@ def _esc(s):
     return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def _block_html(block, rel_x, y, max_w):
-    """把一个 dict block 渲染成绝对定位的 .blk（内部行用常规流，避免块内重叠）。"""
+def _block_html(block, rel_x, y, max_w, highlight=None):
+    """把一个 dict block 渲染成绝对定位的 .blk（内部行用常规流，避免块内重叠）。
+
+    T2：highlight 为标题文本时，命中的 span 加 class="mk"（黄色高亮），
+    供「标题树点击 → 原生渲染定位并高亮该标题」使用；highlight 为空则行为不变。
+    """
+    hl = str(highlight or "").strip().lower()
     lines_html = []
     for line in block.get("lines", []) or []:
         spans = [s for s in (line.get("spans", []) or []) if str(s.get("text", "")).strip()]
@@ -200,9 +214,11 @@ def _block_html(block, rel_x, y, max_w):
                 style += "font-weight:700;"
             if flags & 1:       # 斜体
                 style += "font-style:italic;"
+            s_text = str(s.get("text", ""))
+            mk = " mk" if (hl and hl in s_text.lower()) else ""
             inner.append(
-                '<span style="font-size:%.1fpx;color:%s;%s">%s</span>'
-                % (sfs, rgb, style, _esc(s.get("text", ""))))
+                '<span class="sp%s" style="font-size:%.1fpx;color:%s;%s">%s</span>'
+                % (mk, sfs, rgb, style, _esc(s_text)))
         lines_html.append('<div class="ln" style="font-size:%.1fpx;line-height:%.2fpx;">%s</div>'
                           % (fs, lh, "".join(inner)))
     if not lines_html:
@@ -371,10 +387,10 @@ border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;}
 """
 
 
-def native_page_html(doc, page_num):
+def native_page_html(doc, page_num, highlight=None):
     """文本块+坐标→HTML：双栏 PDF 按栏分组进独立容器，块宽限制在栏宽内（A1）。
 
-    返回 (html, pw, ph) —— 与旧签名一致。
+    返回 (html, pw, ph) —— 与旧签名一致；highlight 为 T2 新增的可选标题高亮词。
     """
     page = doc[page_num - 1]
     pw, ph = float(page.rect.width), float(page.rect.height)
@@ -406,7 +422,7 @@ def native_page_html(doc, page_num):
                 if max_w < 12.0:                     # 块起点已越出栏右边界：夹回栏内
                     rel_x = 0.0
                     max_w = max(12.0, c1 - c0 - 2.0)
-            html = _block_html(block, rel_x, y0, max_w)
+            html = _block_html(block, rel_x, y0, max_w, highlight=highlight)
             if html:
                 layers[css_layer].append(html)
         except Exception:
@@ -452,6 +468,10 @@ white-space:normal;overflow-wrap:break-word;word-break:break-word;user-select:te
 .ln{{white-space:pre-wrap;}}
 .blk:hover{{background:#fff3b0;}}
 .blk span{{user-select:text;}}
+/* T2：标题树点击后，命中的标题文字高亮（3 秒后由 JS 淡出） */
+.mk{{background:#ffe08a;border-radius:2px;box-shadow:inset 0 -2px 0 #f0ad2e;}}
+@keyframes ai4smkf{{0%{{background:#ffcf4d;}}100%{{background:#ffe08a;}}}}
+.mk{{animation:ai4smkf 3s ease-out 1;}}
 </style></head><body><div id="tip">{tip}</div>
 <div id="page">{body}</div>{sel}{hgt}</body></html>""".format(
         pw=pw, ph=ph, tip=_esc(tip), body=body_layers,
@@ -749,3 +769,536 @@ border-radius:10px;}}
 #box p:hover{{background:#fffbe6;}}
 </style></head><body><div id="tip">{t}</div><div id="box">{b}</div>{s}{h}</body></html>""".format(
         t=_esc(title), b=body, s=SELECTION_JS, h=_HEIGHT_JS)
+
+
+# =====================================================================
+# 模块三 T1：正文引用标记 ↔ References 双向无损跳转
+# =====================================================================
+# 支持的正文引用标记形态：[11] / [1,2] / [11, 12] / [3-7] / (Smith et al., 2020)
+_CITE_NUM = r"\d{1,3}"
+_BRACKET_CITE_RE = re.compile(
+    r"\[(" + _CITE_NUM + r"(?:\s*(?:,|，|;)\s*" + _CITE_NUM + r")*"
+    r"|" + _CITE_NUM + r"\s*[-\u2013\u2014]\s*" + _CITE_NUM + r")\]")
+_PAREN_CITE_RE = re.compile(
+    r"\(([A-Z][A-Za-z\-\u2019']+(?:\s+(?:et\s+al\.?|and\s+[A-Z][A-Za-z\-\u2019']+))?"
+    r"\s*,?\s*((?:19|20)\d{2})[a-z]?)\)")
+_RANGE_CITE_RE = re.compile(r"^(\d{1,3})\s*[-\u2013\u2014]\s*(\d{1,3})$")
+_MAX_RANGE_SPAN = 40      # [a-b] 跨度超过该值视为误匹配（页码/章节号），不建链
+
+
+def _attr(s):
+    """HTML 属性值转义（比 _esc 多处理引号）。"""
+    return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;"))
+
+
+def _safe_int(v, default=0):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _ref_guess_title(text):
+    """没有结构化 title 时，从条目原文里猜一个标题（取第一个长度合理的句子）。"""
+    try:
+        s = re.sub(r"^\s*\[\d{1,4}\]\s*", "", str(text or "")).strip()
+        s = re.sub(r"^\s*\d{1,4}[.)]\s*", "", s).strip()
+        for seg in re.split(r"(?<=[a-zA-Z0-9])\.\s+", s)[:4]:
+            seg = seg.strip()
+            if 12 <= len(seg) <= 180:
+                return seg
+        return s[:120]
+    except Exception:
+        return str(text or "")[:120]
+
+
+def build_reference_index(doc, max_entries=600):
+    """从 PDF 真实抽取 References 并建立编号索引（不猜测）。
+
+    优先复用 services.writing.extract_references_from_pdf（考生4，字段级解析）；
+    失败时降级 services.parsing.split_reference_entries（考生1，文本切分）。
+
+    返回 (refs, meta)：
+        refs = [(num, text, title), ...]（按编号升序，编号去重）
+        meta = {"source": str, "status": "ok"|"fallback"|"empty", "message": str}
+    """
+    refs = []
+    meta = {"source": "", "status": "empty", "message": "未抽取到参考文献条目"}
+    try:
+        from services import writing
+        items = writing.extract_references_from_pdf(doc) or []
+        for it in items:
+            if isinstance(it, dict):
+                num = _safe_int(it.get("id"), 0)
+                title = str(it.get("title") or "").strip()
+                raw = str(it.get("raw") or "").strip()
+                if not raw:
+                    raw = " ".join(str(x) for x in (it.get("authors"), title,
+                                                    it.get("venue"), it.get("year")) if x).strip()
+                refs.append((num if num > 0 else len(refs) + 1, raw, title))
+            else:
+                refs.append((len(refs) + 1, str(it), ""))
+        if refs:
+            meta = {"source": "services.writing.extract_references_from_pdf",
+                    "status": "ok", "message": ""}
+    except Exception as e:
+        refs = []
+        meta["message"] = "结构化抽取异常：%s: %s" % (type(e).__name__, str(e)[:120])
+    if not refs:
+        try:
+            from services import parsing
+            raw = parsing.extract_references_raw(doc) or ""
+            m = re.search(r"(?im)^[ \t]*(references|bibliography|works\s+cited|"
+                          r"\u53c2\u8003\u6587\u732e)[ \t]*$", raw)
+            if m:
+                raw = raw[m.end():]
+            for i, entry in enumerate(parsing.split_reference_entries(raw) or [], 1):
+                refs.append((i, str(entry), ""))
+            if refs:
+                meta = {"source": "services.parsing.split_reference_entries（降级）",
+                        "status": "fallback", "message": "结构化抽取不可用，改用文本切分降级"}
+        except Exception as e:
+            refs = []
+            meta["message"] = "降级抽取同样失败：%s: %s" % (type(e).__name__, str(e)[:120])
+
+    # 编号归一：条目原文开头自带 [n] 时以真实编号为准
+    norm = []
+    for num, text, title in refs[:int(max_entries)]:
+        text = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not text:
+            continue
+        m = re.match(r"^\s*\[(\d{1,4})\]", text)
+        if m:
+            num = _safe_int(m.group(1), num)
+        norm.append((_safe_int(num, len(norm) + 1), text,
+                     str(title or "").strip() or _ref_guess_title(text)))
+    best = {}
+    for num, text, title in norm:
+        old = best.get(num)
+        if old is None or len(text) > len(old[1]):
+            best[num] = (num, text, title)
+    out = sorted(best.values(), key=lambda x: x[0])
+    if not out:
+        meta["status"] = "empty"
+    return out, meta
+
+
+def find_reference_start_page(doc, back_scan=40):
+    """从后往前找 References/Bibliography 标题所在页（1-based）；找不到返回 None。"""
+    try:
+        total = int(getattr(doc, "page_count", 0) or 0)
+    except Exception:
+        return None
+    if total <= 0:
+        return None
+    lo = max(1, total - int(back_scan) + 1)
+    for pno in range(total, lo - 1, -1):
+        try:
+            txt = doc[pno - 1].get_text() or ""
+        except Exception:
+            continue
+        if re.search(r"(?im)^[ \t]*(references|bibliography|works\s+cited|"
+                     r"\u53c2\u8003\u6587\u732e)[ \t]*$", txt):
+            return pno
+    return None
+
+
+def _cite_spans(text):
+    """扫描一段正文里的引用标记，返回 [(start, end, kind, payload), ...]（不重叠、按位置升序）。"""
+    spans = []
+    try:
+        s = str(text or "")
+        for m in _BRACKET_CITE_RE.finditer(s):
+            spans.append((m.start(), m.end(), "bracket", m.group(1)))
+        taken = [(a, b) for (a, b, _k, _p) in spans]
+        for m in _PAREN_CITE_RE.finditer(s):
+            if any(a <= m.start() < b for (a, b) in taken):
+                continue
+            spans.append((m.start(), m.end(), "paren", m.group(1)))
+    except Exception:
+        return []
+    spans.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+    return spans
+
+
+def _split_cite_numbers(payload):
+    """[11] → [11]；[1,2] → [1,2]；[3-7] → [3,7]（只取两端，保持原文形态不被改写）。"""
+    nums = []
+    try:
+        for part in re.split(r"\s*(?:,|，|;)\s*", str(payload or "").strip()):
+            part = part.strip()
+            if not part:
+                continue
+            m = _RANGE_CITE_RE.match(part)
+            if m:
+                a, b = _safe_int(m.group(1), 0), _safe_int(m.group(2), 0)
+                if a <= 0 or b <= 0:
+                    continue
+                if a > b:
+                    a, b = b, a
+                if (b - a) > _MAX_RANGE_SPAN:      # 多半是页码/章节号，不建链
+                    continue
+                nums.extend([a] if a == b else [a, b])
+                continue
+            m2 = re.match(r"^(\d{1,3})$", part)
+            if m2:
+                nums.append(_safe_int(m2.group(1), 0))
+    except Exception:
+        return []
+    out, seen = [], set()
+    for n in nums:
+        if n > 0 and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _author_year_ref(ref_items, surname, year):
+    """按（姓氏, 年份）在 References 里定位编号；命中不了返回 None（宁可不建链也不错链）。"""
+    try:
+        yr = str(year or "").strip()
+        sn = str(surname or "").strip().lower()
+        if not yr:
+            return None
+        for num, text in ref_items:
+            low = str(text).lower()
+            if yr in low and (not sn or sn in low):
+                return num
+        return None
+    except Exception:
+        return None
+
+
+def _render_cite(raw, nums, counter, ref_tip, stats):
+    """把 [11] / [1,2] / [3-7] 里的每个数字包成独立可点击锚点，原文字符一字不改。"""
+    html = []
+    pos = 0
+    try:
+        for m in re.finditer(r"\d{1,3}", str(raw or "")):
+            n = _safe_int(m.group(0), 0)
+            if n not in nums:
+                continue
+            k = counter.get(n, 0) + 1
+            counter[n] = k
+            stats["occurrences"] += 1
+            tip = ref_tip.get(n, "")
+            html.append(_esc(raw[pos:m.start()]))
+            html.append('<a class="cit" id="cit-%d-%d" href="#ref-%d" data-ref="%d" '
+                        'data-idx="%d" title="%s" data-tip="%s">%s</a>'
+                        % (n, k, n, n, k, _attr(tip), _attr(tip), _esc(m.group(0))))
+            pos = m.end()
+        html.append(_esc(raw[pos:]))
+    except Exception:
+        return _esc(raw)
+    return "".join(html)
+
+
+def _link_citations(text, ref_text, ref_tip, counter, stats):
+    """把一段正文里的引用标记替换成锚点；匹配不上 References 的标记保持纯文本（不可点击）。"""
+    out = []
+    pos = 0
+    try:
+        s = str(text or "")
+        for span in _cite_spans(s):
+            a, b, kind, payload = span[0], span[1], span[2], span[3]
+            if a < pos or b > len(s):
+                continue
+            out.append(_esc(s[pos:a]))
+            nums = []
+            if kind == "bracket":
+                nums = [n for n in _split_cite_numbers(payload) if n in ref_text]
+            else:
+                yr = re.search(r"((?:19|20)\d{2})", str(payload))
+                sn = re.match(r"\s*([A-Za-z\-\u2019']+)", str(payload))
+                n = _author_year_ref(sorted(ref_text.items()),
+                                     sn.group(1) if sn else "", yr.group(1) if yr else "")
+                if n:
+                    nums = [n]
+            stats["markers"] += 1
+            if nums:
+                stats["linked"] += 1
+                out.append(_render_cite(s[a:b], nums, counter, ref_tip, stats))
+            else:
+                stats["unlinked"] += 1
+                out.append(_esc(s[a:b]))       # 优雅降级：标记照常显示，不可点击
+            pos = b
+        out.append(_esc(s[pos:]))
+    except Exception:
+        return _esc(text)
+    return re.sub(r"\s*\n\s*", " ", "".join(out))
+
+
+# ---- 双向跳转 JS：锚点滚动 + 临时 class 高亮（几秒后淡出），不刷新页面、不重置状态 ----
+_CITE_JUMP_JS = """
+<script>
+(function(){
+  function el(id){ try{ return document.getElementById(id); }catch(e){ return null; } }
+  var timers = {};
+  function flash(node){
+    if(!node) return;
+    try{
+      node.classList.remove('hit');
+      void node.offsetWidth;
+      node.classList.add('hit');
+      if(timers[node.id]) clearTimeout(timers[node.id]);
+      timers[node.id] = setTimeout(function(){ try{ node.classList.remove('hit'); }catch(e){} }, 2600);
+    }catch(e){}
+  }
+  function goto(id){
+    var t = el(id);
+    if(!t) return false;
+    try{ t.scrollIntoView({behavior:'smooth', block:'center'}); }
+    catch(e){ try{ t.scrollIntoView(true); }catch(e2){} }
+    flash(t);
+    return true;
+  }
+  function closest(node, sel){
+    try{ return (node && node.closest) ? node.closest(sel) : null; }catch(e){ return null; }
+  }
+  /* 悬停 tooltip：显示该条参考文献标题前 60 字 */
+  var tip = null;
+  function tipEl(){
+    if(tip) return tip;
+    try{
+      tip = document.createElement('div');
+      tip.className = 'ctip';
+      document.body.appendChild(tip);
+    }catch(e){ tip = null; }
+    return tip;
+  }
+  document.addEventListener('click', function(e){
+    var a = closest(e.target, '.cit');
+    if(a){
+      e.preventDefault();
+      var n = a.getAttribute('data-ref');
+      var k = a.getAttribute('data-idx');
+      if(!n) return;
+      goto('ref-' + n);
+      /* 同步该文献「↩ 回到正文」的游标：下次点击从当前这处的下一处开始 */
+      var b = document.querySelector('.back[data-ref="' + n + '"]');
+      if(b && k){ b.setAttribute('data-idx', k); }
+      return;
+    }
+    var b2 = closest(e.target, '.back');
+    if(b2){
+      e.preventDefault();
+      var n2 = parseInt(b2.getAttribute('data-ref'), 10);
+      var total = parseInt(b2.getAttribute('data-total'), 10) || 1;
+      var idx = (parseInt(b2.getAttribute('data-idx'), 10) || 0) + 1;
+      if(idx > total){ idx = 1; }
+      b2.setAttribute('data-idx', idx);
+      if(goto('cit-' + n2 + '-' + idx)){
+        b2.textContent = '\\u21a9 \\u7b2c ' + idx + '/' + total + ' \\u5904\\u5f15\\u7528\\uff08\\u70b9\\u51fb\\u7ee7\\u7eed\\uff09';
+      }else{
+        b2.textContent = '\\u21a9 \\u65e0\\u53ef\\u7528\\u5f15\\u7528\\u4f4d\\u7f6e';
+      }
+      return;
+    }
+  }, false);
+  document.addEventListener('mouseover', function(e){
+    var a = closest(e.target, '.cit');
+    if(!a) return;
+    var t = tipEl();
+    if(!t) return;
+    var txt = a.getAttribute('data-tip') || '';
+    if(!txt){ t.style.display='none'; return; }
+    t.textContent = '\\u3010' + a.getAttribute('data-ref') + '\\u3011 ' + txt;
+    t.style.display = 'block';
+    try{
+      var r = a.getBoundingClientRect();
+      var w = 320;
+      var left = Math.max(4, Math.min(r.left, (window.innerWidth || 900) - w - 8));
+      t.style.left = left + 'px';
+      t.style.top = (r.bottom + 6) + 'px';
+    }catch(e){}
+  }, false);
+  document.addEventListener('mouseout', function(e){
+    var a = closest(e.target, '.cit');
+    if(a && tip){ try{ tip.style.display = 'none'; }catch(e){} }
+  }, false);
+  window.ai4sGotoRef = goto;
+})();
+</script>
+"""
+
+_CITE_JUMP_CSS = """
+* {box-sizing:border-box;}
+html,body{margin:0;background:#f5f7fa;font-family:'Microsoft YaHei','Segoe UI',sans-serif;}
+#bar{position:fixed;top:6px;left:8px;right:8px;z-index:8;background:rgba(43,87,154,.92);color:#fff;
+font:12px/1.5 'Microsoft YaHei',sans-serif;padding:5px 12px;border-radius:12px;}
+#wrap{display:flex;gap:10px;padding:40px 8px 14px;height:720px;}
+.pane{flex:1 1 50%;overflow-y:auto;background:#fff;border:1px solid #e3e8ef;border-radius:10px;
+padding:10px 12px 24px;}
+#refsPane{background:#fbfcfe;}
+.pgn{font-size:11.5px;color:#7a869a;border-bottom:1px dashed #dde3ec;margin:12px 0 6px;padding-bottom:3px;}
+.pgn:first-child{margin-top:0;}
+p.bp{font-size:13.2px;line-height:1.85;color:#26313f;margin:0 0 10px;text-align:justify;user-select:text;}
+a.cit{color:#2f6fd0;text-decoration:none;font-weight:700;padding:0 1px;border-radius:3px;cursor:pointer;}
+a.cit:hover{background:#dbe8fa;text-decoration:underline;}
+.ref{position:relative;padding:8px 10px 8px 46px;border-bottom:1px solid #eef1f5;font-size:12.6px;
+line-height:1.7;color:#26313f;}
+.ref .rn{position:absolute;left:8px;top:8px;color:#2f6fd0;font-weight:700;}
+.ref .rt{user-select:text;}
+.ref .rb{margin-top:4px;}
+a.back{display:inline-block;font-size:11.5px;padding:2px 9px;border:1px solid #3b6fb6;border-radius:11px;
+background:#eef4fc;color:#173a63;text-decoration:none;cursor:pointer;}
+a.back:hover{background:#dbe8fa;}
+.noback{font-size:11.5px;color:#98a2b3;}
+@keyframes ai4sflash{0%{background:#ffd85e;}60%{background:#fff3b0;}100%{background:transparent;}}
+.hit{animation:ai4sflash 2.6s ease-out 1;border-radius:4px;}
+.ctip{position:fixed;z-index:99;display:none;max-width:320px;background:#173a63;color:#fff;
+font-size:11.5px;line-height:1.6;padding:6px 9px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.22);
+pointer-events:none;}
+.empty{color:#98a2b3;font-size:12.5px;padding:12px;}
+"""
+
+
+def citation_links_html(body_pages, refs, tip_len=60):
+    """生成「正文 ↔ References」双向无损跳转视图（左：正文，右：参考文献）。
+
+    正向：正文 [n] → <a class="cit" href="#ref-n" id="cit-n-k">，点击滚动+高亮第 n 条
+    反向：第 n 条 → 「↩ 回到正文」，同一文献被多次引用时循环切换第 1/m、2/m … 处
+
+    body_pages : [(page_no, page_text), ...]
+    refs       : build_reference_index 的返回 [(num, text, title), ...]
+    返回 (html, stats)
+    """
+    ref_text, ref_tip = {}, {}
+    for item in (refs or []):
+        try:
+            n = _safe_int(item[0], 0)
+            text = re.sub(r"\s+", " ", str(item[1] or "")).strip()
+        except Exception:
+            continue
+        if n <= 0 or not text:
+            continue
+        ref_text[n] = text
+        ref_tip[n] = (str(item[2] if len(item) > 2 else "" or "").strip() or text)[:int(tip_len)]
+
+    counter = {}
+    stats = {"pages": 0, "markers": 0, "linked": 0, "unlinked": 0,
+             "occurrences": 0, "refs": len(ref_text), "refs_in_body": 0}
+
+    body_parts = []
+    for item in (body_pages or []):
+        try:
+            pno = _safe_int(item[0], 0)
+            raw = str(item[1] or "")
+        except Exception:
+            continue
+        stats["pages"] += 1
+        paras = [p for p in re.split(r"\n\s*\n+", raw) if p.strip()] or [raw]
+        inner = "".join('<p class="bp">%s</p>'
+                        % _link_citations(p, ref_text, ref_tip, counter, stats)
+                        for p in paras)
+        body_parts.append('<div class="pgn">\u7b2c %d \u9875</div>%s' % (pno, inner))
+    if not body_parts:
+        body_parts.append('<p class="empty">\uff08\u672c\u6b21\u9875\u7a97\u53e3\u5185\u65e0\u53ef\u63d0\u53d6\u6b63\u6587\uff09</p>')
+    stats["refs_in_body"] = sum(1 for n in ref_text if counter.get(n, 0) > 0)
+
+    ref_parts = []
+    for num, text, _title in sorted(((r[0], r[1], r[2] if len(r) > 2 else "") for r in (refs or [])),
+                                    key=lambda x: _safe_int(x[0], 0)):
+        n = _safe_int(num, 0)
+        if n <= 0:
+            continue
+        total = counter.get(n, 0)
+        if total:
+            back = ('<a class="back" href="#cit-%d-1" data-ref="%d" data-total="%d" '
+                    'data-idx="0">\u21a9 \u56de\u5230\u6b63\u6587\uff08%d \u5904\uff09</a>'
+                    % (n, n, total, total))
+        else:
+            back = ('<span class="noback">\u21a9 \u6b63\u6587\u672a\u68c0\u7d22\u5230\u8be5\u6807\u8bb0'
+                    '\uff08\u53ef\u80fd\u4ee5 [a-b] \u533a\u95f4\u5f62\u5f0f\u5f15\u7528\uff09</span>')
+        ref_parts.append('<div class="ref" id="ref-%d"><span class="rn">[%d]</span>'
+                         '<span class="rt">%s</span><div class="rb">%s</div></div>'
+                         % (n, n, _esc(ref_text.get(n, text)), back))
+    if not ref_parts:
+        ref_parts.append('<p class="empty">\uff08\u672a\u628a\u5230 References \u6761\u76ee\uff09</p>')
+
+    html = (
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' + _CITE_JUMP_CSS
+        + '</style></head><body>'
+        '<div id="bar">\u6b63\u6587\u5f15\u7528\u6807\u8bb0 \u2194 References \u53cc\u5411\u65e0\u635f\u8df3\u8f6c'
+        ' \u00b7 \u70b9\u51fb [n] \u5b9a\u4f4d\u6587\u732e\uff0c\u70b9\u51fb \u21a9 \u5faa\u73af\u56de\u8df3\u6b63\u6587'
+        '</div><div id="wrap">'
+        '<div class="pane" id="bodyPane">' + "".join(body_parts) + '</div>'
+        '<div class="pane" id="refsPane">' + "".join(ref_parts) + '</div>'
+        '</div>' + _CITE_JUMP_JS + _HEIGHT_JS + '</body></html>')
+    return html, stats
+
+
+# =====================================================================
+# 模块三 T3：公式 / 代码 / 数值保护（翻译前占位，翻译后无损还原）
+# =====================================================================
+_MATH_TOKEN_FMT = "@@FM%d@@"
+_MATH_RE = re.compile(
+    r"\$\$[\s\S]{1,400}?\$\$"                                      # 行间公式 $$..$$
+    r"|\$[^\$\n]{1,200}?\$"                                        # 行内公式 $..$
+    r"|\\\((?:[^\\]|\\(?!\)))*?\\\)"                               # \(..\)
+    r"|\\\[(?:[^\\]|\\(?!\]))*?\\\]"                               # \[..\]
+    r"|\\[a-zA-Z]{1,}(?:\s*(?:\{[^{}]{0,80}\}|_[^{}\s]+|\^[^{}\s]+))*"          # \beta_1 / \frac{a}{b}
+    r"(?:\s*[-+*/=]\s*(?:[A-Za-z0-9.]+"
+    r"|\\[a-zA-Z]+(?:\s*(?:\{[^{}]{0,80}\}|_[^{}\s]+|\^[^{}\s]+))*))*"
+    r"|\b[A-Za-z][A-Za-z0-9_.\-]{0,24}\s*=\s*[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?%?"  # BLEU=28.4
+    r"|\b\d+(?:\.\d+)?\s*%"                                        # 28.4%
+    r"|\b\d+\.\d+\b"                                               # 0.9 / 3.14
+)
+_RESTORE_RE = re.compile(r"@\s*@\s*FM\s*(\d+)\s*@\s*@")
+
+
+def protect_math(text):
+    """翻译前：把公式/LaTeX/数值表达式替换为占位符。
+
+    返回 (masked_text, store)；store 为原始片段列表，供 restore_math 还原。
+    任何异常都退化为「原样返回 + 空 store」，绝不冒泡。
+    """
+    store = []
+    try:
+        def _sub(m):
+            store.append(m.group(0))
+            return _MATH_TOKEN_FMT % (len(store) - 1)
+        return _MATH_RE.sub(_sub, str(text or "")), store
+    except Exception:
+        return str(text or ""), []
+
+
+def restore_math(text, store):
+    """翻译后：把占位符还原成原始公式片段（兼容模型把空格插进占位符的情况）。"""
+    if not store:
+        return str(text or "")
+    try:
+        def _sub(m):
+            try:
+                i = int(m.group(1))
+            except (TypeError, ValueError):
+                return m.group(0)
+            return store[i] if 0 <= i < len(store) else m.group(0)
+        return _RESTORE_RE.sub(_sub, str(text or ""))
+    except Exception:
+        return str(text or "")
+
+
+def math_safe_translate(ctx, text, call=None):
+    """带公式保护的翻译：protect → 调模型 → restore。
+
+    call 默认为 services.writing.translate_to_chinese(ctx, masked)；
+    失败返回 ("", 错误信息)，与页面其它翻译路径口径一致。
+    """
+    try:
+        src = str(text or "")
+        if not src.strip():
+            return "", "内容为空"
+        masked, store = protect_math(src)
+        fn = call
+        if fn is None:
+            from services import writing as _w
+            fn = _w.translate_to_chinese
+        out = fn(ctx, masked)
+        out = "" if out is None else str(out)
+        if not out.strip():
+            return "", "模型返回空内容"
+        return restore_math(out, store), ""
+    except Exception as e:
+        return "", "%s: %s" % (type(e).__name__, str(e)[:120])
