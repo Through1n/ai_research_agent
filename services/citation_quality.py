@@ -8,11 +8,24 @@
 - venue_tier 使用内置离线等级字典（CCF-A/B/C + 预印本 + 水刊黑名单），未命中返回"未知"并说明；
 - assess_reference 综合 (a) 真实被引数 (b) venue 等级 (c) 是否仅在 Related Work 凑数
   (d) 与引用方正文的主题相关性，输出 {level, real_citations, venue_tier, reasons}；
-- 内存缓存 + 失败 TTL，避免同一条参考文献反复打网络。
+- **内存 + 磁盘双层缓存**（storage/cache/citation_cache.json，已被 .gitignore 忽略），
+  成功 7 天、失败 1 小时、限流类失败 5 分钟，避免同一条参考文献反复打网络反而加剧限流。
+
+抗限流（本轮修复重点，实测 OpenAlex / Semantic Scholar 均为 IP 级 429）：
+- `429 / 5xx / 网络超时` 走**退避重试**（最多 2 次，间隔 2s→5s 递增），
+  并优先采用响应头 `Retry-After`（clamp 到 ≤ 8s；**超过 8s 视为长时间封禁，立即放弃并降级**——
+  实测 OpenAlex 曾返回 `Retry-After: 25066`≈6.96 小时，若照等会把 UI 卡死）；
+- `404/400` 等非重试错误直接抛出，立即降级；
+- 单次 `fetch_citation_count` 有 20s 总预算，任一步骤预算不足即抛 `_BudgetExceeded`，绝不卡死 UI；
+- 全局节流 `MIN_REQUEST_INTERVAL` 对**三级 API 统一生效**；某源一旦 429，本次调用内不再对其发请求；
+- 三级全挂时返回 None，并通过 `citation_status()` / `fetch_error()` 给出 `error_kind`
+  （`rate_limited` / `network_error` / `budget_exhausted` / `not_found`），
+  让 UI 能区分「查不了（限流/网络）」与「查不到（该论文确无被引记录）」。
 
 向后兼容：score_reference / score_references（纯离线规则版）签名与返回结构保持不变，
 tools/definitions.py 的 t_citation_quality 仍可调用。
 """
+import os
 import re
 import json
 import time
@@ -23,7 +36,9 @@ import urllib.error
 
 # ---------------- 常量（如需调整只改这里） ----------------
 HTTP_TIMEOUT = 8              # 每个 API 单次请求超时（秒）
-FAILURE_TTL = 300             # 失败缓存的有效期（秒），过期后允许重试
+FAILURE_TTL = 3600            # 失败缓存的有效期（秒），过期后允许重试（要求：1 小时）
+RATE_LIMIT_TTL = 300          # 限流/网络类失败缓存更短（5 分钟），限流一解除就能重新取真值
+SUCCESS_TTL = 7 * 24 * 3600   # 成功缓存有效期（秒）：7 天
 TITLE_MATCH_MIN = 0.60        # 返回条目与查询标题的最低相似度，低于此值视为未命中
 TITLE_STRONG_MIN = 0.85       # 「高置信标题匹配」阈值：达到此值时进入「被引数优先」选优
 # 低置信判据：当选中的被引数 < 候选池最大被引数的 2%、自身 < 10 且池里存在 >=1000 的记录，
@@ -38,9 +53,26 @@ AUTHOR_BONUS_MAX = 0.15
 USER_AGENT = "AI4S-Research-Agent/1.0 (academic citation quality check)"
 OPENALEX_MAILTO = ""          # 可选：填入邮箱可进 OpenAlex polite pool（提高限流额度）
 
+# ---- 429 / 5xx 智能退避（T1）----
+RETRY_MAX = 2                 # 单次请求最多重试次数（不含首次请求）
+RETRY_BACKOFF = (2.0, 5.0)    # 退避间隔递增；用完最后一个值后沿用
+RETRY_AFTER_MAX = 8.0         # 响应头 Retry-After 的采纳上限（秒）
+TOTAL_BUDGET = 20.0           # 单次 fetch_citation_count 的总时间预算（秒），防止卡死 UI
+MIN_SAFE_REQUEST_TIME = 1.0   # 剩余预算低于此值就不再发起新请求
+
+# ---- 磁盘持久化缓存（T2）----
+# storage/ 已被 .gitignore 忽略，落盘安全；写失败一律静默，绝不影响主流程。
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "storage", "cache")
+_CACHE_FILE = os.path.join(_CACHE_DIR, "citation_cache.json")
+MAX_CACHE_ENTRIES = 2000      # 磁盘缓存条目上限，超出按时间淘汰最旧的
+
 # ---------------- 缓存 ----------------
-_CACHE = {}      # norm_title -> {"ts":float, "ok":bool, "data":dict|None, "err":str}
+# 一级：进程内内存（热路径）；二级：storage/cache/citation_cache.json（跨进程/跨重启）
+_CACHE = {}      # norm_title -> {"ts":float, "ok":bool, "data":dict|None, "err":str, "error_kind":str}
 _TITLE_CACHE = {}  # 归一化标题缓存
+_DISK_CACHE = {}   # 磁盘缓存的内存镜像（懒加载一次，之后只写不读盘）
+_DISK_LOADED = [False]
 
 
 def _norm(s):
@@ -52,54 +84,274 @@ def _norm(s):
     return v
 
 
+# ---------------- 错误分类（T5：区分「查不了」与「查不到」）----------------
+class _BudgetExceeded(Exception):
+    """本次 fetch_citation_count 的时间预算已用尽（不做无谓等待，直接降级）。"""
+
+
+_ERROR_KIND_LABEL = {
+    "rate_limited":     "数据源限流 HTTP 429",
+    "server_error":     "数据源服务端错误 HTTP 5xx",
+    "network_error":    "网络不可用/超时",
+    "budget_exhausted": "本次查询时间预算耗尽",
+    "not_found":        "三级数据源均未匹配到该标题（可能确无被引记录）",
+    "unknown":          "未知错误",
+}
+# 瞬时性故障：可重试、且缓存 TTL 更短（限流一解除就该重新取真值）
+_TRANSIENT_KINDS = ("rate_limited", "server_error", "network_error", "budget_exhausted")
+# 可重试的故障类型（404/400 等不在其中，直接降级）
+_RETRYABLE_KINDS = ("rate_limited", "server_error", "network_error")
+# 汇总 error_kind 时的优先级：瞬时故障优先于 not_found（被限流时不能断定"查不到"）
+_KIND_PRIORITY = ("rate_limited", "server_error", "network_error",
+                  "budget_exhausted", "unknown", "not_found")
+
+
+def _classify_error(exc):
+    """把异常归类为 error_kind 字符串。"""
+    if isinstance(exc, _BudgetExceeded):
+        return "budget_exhausted"
+    if isinstance(exc, urllib.error.HTTPError):
+        code = getattr(exc, "code", 0) or 0
+        if code == 429:
+            return "rate_limited"
+        if 500 <= code < 600:
+            return "server_error"
+        return "not_found"          # 404/400/403…：目标不存在或请求本身有问题，不重试
+    if isinstance(exc, (urllib.error.URLError, OSError, TimeoutError)):
+        return "network_error"
+    if isinstance(exc, json.JSONDecodeError):
+        return "network_error"      # 200 但不是 JSON（多为网关/劫持页）
+    return "unknown"
+
+
+def _retry_after(exc):
+    """读取 HTTPError 的 Retry-After（秒）；缺失或非数字（HTTP-date 形式）返回 None。"""
+    try:
+        h = getattr(exc, "headers", None)
+        v = (h.get("Retry-After") or h.get("retry-after")) if h else None
+        return max(0.0, float(str(v).strip())) if v is not None else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _dominant_kind(kinds):
+    """多个错误里挑一个最具代表性的 error_kind（瞬时故障优先）。"""
+    for k in _KIND_PRIORITY:
+        if k in kinds:
+            return k
+    return "not_found"
+
+
+# ---------------- 磁盘持久化缓存 ----------------
+def _load_disk_cache():
+    """懒加载磁盘缓存到 _DISK_CACHE；损坏/不可读时清空重建，绝不抛给主流程。"""
+    if _DISK_LOADED[0]:
+        return _DISK_CACHE
+    _DISK_LOADED[0] = True
+    try:
+        if os.path.isfile(_CACHE_FILE):
+            with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                now = time.time()
+                for k, v in data.items():
+                    if isinstance(v, dict) and isinstance(v.get("ts"), (int, float)):
+                        if now - v["ts"] < SUCCESS_TTL:     # 顺带清理过期条目
+                            _DISK_CACHE[k] = v
+    except Exception:
+        _DISK_CACHE.clear()          # 缓存损坏 → 丢弃重建
+    return _DISK_CACHE
+
+
+def _save_disk_cache():
+    """整表落盘（原子写）；任何异常静默吞掉，缓存失败不能影响主流程。"""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        if len(_DISK_CACHE) > MAX_CACHE_ENTRIES:
+            for k in sorted(_DISK_CACHE, key=lambda x: _DISK_CACHE[x].get("ts", 0))[
+                    :len(_DISK_CACHE) - MAX_CACHE_ENTRIES]:
+                _DISK_CACHE.pop(k, None)
+        tmp = _CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_DISK_CACHE, f, ensure_ascii=False)
+        os.replace(tmp, _CACHE_FILE)
+    except Exception:
+        pass
+
+
+def _entry_ttl(entry):
+    """成功 7 天；失败 1 小时；限流/网络类失败只有 5 分钟（避免一次限流锁死负面结果）。"""
+    if entry.get("ok"):
+        return SUCCESS_TTL
+    if entry.get("error_kind") in _TRANSIENT_KINDS:
+        return RATE_LIMIT_TTL
+    return FAILURE_TTL
+
+
+def _entry_valid(entry):
+    try:
+        return (time.time() - float(entry.get("ts", 0))) < _entry_ttl(entry)
+    except (TypeError, ValueError):
+        return False
+
+
 def _cache_get(key):
+    """一级内存 → 二级磁盘；**命中即完全跳过网络请求**。"""
     hit = _CACHE.get(key)
     if not hit:
+        try:
+            hit = _load_disk_cache().get(key)
+        except Exception:
+            hit = None
+        if hit:
+            _CACHE[key] = hit       # 回填一级缓存，后续热路径不再读盘
+    if not hit or not _entry_valid(hit):
         return None
-    if hit["ok"]:
-        return hit
-    if time.time() - hit["ts"] < FAILURE_TTL:
-        return hit          # 近期失败，直接复用降级结论，避免雪崩
-    return None
+    return hit
 
 
-def _cache_put(key, ok, data=None, err=""):
-    _CACHE[key] = {"ts": time.time(), "ok": ok, "data": data, "err": err}
+def _cache_put(key, ok, data=None, err="", error_kind=""):
+    entry = {"ts": time.time(), "ok": bool(ok), "data": data, "err": err or "",
+             "error_kind": error_kind or "",
+             "cited_by_count": (data or {}).get("count") if ok else None,
+             "source": (data or {}).get("source", "") if ok else "",
+             "title_matched": (data or {}).get("matched_title", "") if ok else ""}
+    _CACHE[key] = entry
+    try:
+        _load_disk_cache()
+        _DISK_CACHE[key] = entry
+        _save_disk_cache()
+    except Exception:
+        pass
+
+
+def _lookup_entry(key):
+    """取缓存条目（**不做 TTL 校验**，供诊断用）。"""
+    e = _CACHE.get(key)
+    if not e:
+        try:
+            e = _load_disk_cache().get(key)
+        except Exception:
+            e = None
+    return e if isinstance(e, dict) else None
+
+
+def _err_text(entry):
+    kind = entry.get("error_kind") or "unknown"
+    label = _ERROR_KIND_LABEL.get(kind, _ERROR_KIND_LABEL["unknown"])
+    return "%s：%s" % (label, entry.get("err") or "未知原因")
 
 
 def fetch_error(title):
-    """查询某标题最近一次抓取失败的原因（供 UI/日志展示，不做任何猜测性补全）。"""
-    hit = _CACHE.get(_norm(title))
-    if hit and not hit["ok"]:
-        return hit["err"] or "未知原因"
+    """查询某标题最近一次抓取失败的原因（供 UI/日志展示，不做任何猜测性补全）。
+
+    返回串以 error_kind 的可读标签开头（如「数据源限流 HTTP 429：…」），
+    便于 UI 区分「查不了（限流/网络）」与「查不到（无被引记录）」。
+    """
+    entry = _lookup_entry(_norm(title))
+    if entry and not entry.get("ok"):
+        return _err_text(entry)
     return ""
 
 
-def clear_cache():
+def citation_status(title):
+    """最近一次查询的完整诊断，供 UI 区分失败性质。
+
+    返回 {"found": bool, "error_kind": str, "label": str, "message": str,
+          "ts": float, "expired": bool}
+    """
+    entry = _lookup_entry(_norm(title))
+    if not entry:
+        return {"found": False, "error_kind": "", "label": "", "message": "尚未查询过该标题",
+                "ts": 0.0, "expired": True}
+    if entry.get("ok"):
+        return {"found": True, "error_kind": "", "label": "", "message": "",
+                "ts": entry.get("ts", 0.0), "expired": not _entry_valid(entry)}
+    kind = entry.get("error_kind") or "unknown"
+    return {"found": False, "error_kind": kind,
+            "label": _ERROR_KIND_LABEL.get(kind, _ERROR_KIND_LABEL["unknown"]),
+            "message": entry.get("err") or "", "ts": entry.get("ts", 0.0),
+            "expired": not _entry_valid(entry)}
+
+
+def clear_cache(include_disk=False):
+    """清空一级内存缓存；include_disk=True 时连同磁盘缓存文件一并删除。"""
     _CACHE.clear()
+    if include_disk:
+        _DISK_CACHE.clear()
+        try:
+            if os.path.isfile(_CACHE_FILE):
+                os.remove(_CACHE_FILE)
+        except OSError:
+            pass
 
 
 # ---------------- HTTP ----------------
-# 同一进程内相邻两次 HTTP 请求的最小间隔（秒）。
+# 同一进程内相邻两次 HTTP 请求的最小间隔（秒）。节流器在 _throttle() 里，
+# **三级 API（OpenAlex / Semantic Scholar / Crossref）共用同一个**，不存在只对某级生效的问题。
 # 实测：不做节流时连续查多条参考文献会被 OpenAlex 直接 429 限流，导致整批降级到下一级数据源。
-MIN_REQUEST_INTERVAL = 0.5
+MIN_REQUEST_INTERVAL = 1.2
 _LAST_REQUEST = [0.0]
+# 当前 fetch_citation_count 的绝对截止时间戳（0 表示不限制）；由 fetch_citation_count 设置/还原
+_BUDGET_DEADLINE = [0.0]
 
 
-def _http_json(url, timeout=HTTP_TIMEOUT, headers=None):
-    """GET 一个 JSON 接口，统一 UA/超时/**节流**/异常；失败抛异常由上层捕获。"""
+def _remaining_budget():
+    """返回剩余预算（秒）；无预算限制时返回 None。"""
+    d = _BUDGET_DEADLINE[0]
+    return None if d <= 0 else d - time.time()
+
+
+def _throttle():
     wait = MIN_REQUEST_INTERVAL - (time.time() - _LAST_REQUEST[0])
     if wait > 0:
         time.sleep(wait)
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
-                                                   "Accept": "application/json",
-                                                   **(headers or {})})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read().decode("utf-8", errors="ignore")
-        return json.loads(raw)
-    finally:
-        _LAST_REQUEST[0] = time.time()
+
+
+def _http_json(url, timeout=HTTP_TIMEOUT, headers=None):
+    """GET 一个 JSON 接口：统一 UA / 超时 / 全局节流 / **429·5xx 智能退避重试**。
+
+    - 只有 429、5xx、网络超时/连接错误才重试，最多 RETRY_MAX 次，间隔按 RETRY_BACKOFF 递增；
+    - 响应头 `Retry-After` ≤ RETRY_AFTER_MAX(8s) 时优先采用；
+      **超过 8s 视为长时间封禁，立即放弃重试并降级**（实测 OpenAlex 返回过
+      `Retry-After: 25066`≈6.96 小时，照等会把 UI 卡死，且等了也大概率仍是 429）；
+    - 404/400/403 等非重试错误、以及 JSON 解析失败，直接抛出由上层降级；
+    - 任一步骤剩余预算不足即抛 _BudgetExceeded，保证单次调用不卡死。
+    """
+    attempt = 0
+    while True:
+        rem = _remaining_budget()
+        if rem is not None and rem <= MIN_SAFE_REQUEST_TIME:
+            raise _BudgetExceeded("剩余引用查询预算 %.1fs，不足以发起新请求" % max(rem, 0.0))
+        _throttle()
+        rem = _remaining_budget()               # 节流本身也耗时，节流后必须复核
+        if rem is not None and rem <= MIN_SAFE_REQUEST_TIME:
+            raise _BudgetExceeded("节流后剩余预算 %.1fs，放弃本次请求" % max(rem, 0.0))
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
+                                                       "Accept": "application/json",
+                                                       **(headers or {})})
+            with urllib.request.urlopen(req, timeout=min(timeout, rem if rem else timeout)) as r:
+                raw = r.read().decode("utf-8", errors="ignore")
+            return json.loads(raw)
+        except Exception as e:
+            kind = _classify_error(e)
+            if attempt >= RETRY_MAX or kind not in _RETRYABLE_KINDS \
+                    or isinstance(e, json.JSONDecodeError):
+                raise
+            wait = RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)]
+            ra = _retry_after(e)
+            if ra is not None:
+                if ra > RETRY_AFTER_MAX:
+                    raise               # 长时间封禁：不再无谓等待，交给上层降级
+                wait = ra
+            rem2 = _remaining_budget()
+            if rem2 is not None and wait >= rem2:
+                raise _BudgetExceeded("退避等待 %.1fs 超出剩余预算 %.1fs" % (wait, max(rem2, 0.0)))
+            time.sleep(wait)
+            attempt += 1
+        finally:
+            _LAST_REQUEST[0] = time.time()
 
 
 # ---------------- 标题清洗与候选生成 ----------------
@@ -152,6 +404,15 @@ def _candidate_titles(raw):
 
 def _sim(a, b):
     return difflib.SequenceMatcher(None, _norm(a), _norm(b)).ratio()
+
+
+def _token_order_same(a, b):
+    """归一化后的词序列是否**逐词一致**（词序敏感）。
+
+    difflib 对「Is Attention All You Need?」 vs 「Attention Is All You Need」给出 0.88 的高分，
+    但两者词序不同、实为两篇不同的论文；仅靠相似度阈值无法识别，故用词序做二次校验。
+    """
+    return _norm(a).split() == _norm(b).split()
 
 
 def _score_components(title, cand, year=None, authors=None):
@@ -373,7 +634,18 @@ def _semanticscholar_lookup(title, year=None, authors=None):
 
 
 def _crossref_lookup(title, year=None, authors=None):
-    """Crossref：/works?query.bibliographic=... ，取 is-referenced-by-count（第三级降级）。"""
+    """Crossref：/works?query.bibliographic=...&rows=5 ，取 is-referenced-by-count（第三级降级）。
+
+    与上一级的差别（必须显式告知调用方，绝不能当真实被引数直接展示）：
+    - 一次取回 **rows=5 条候选**，再用 `_pick_best`（`_sim` 标题相似度 + 被引数选优）挑最匹配的，
+      而不是盲信首条——实测 "Attention Is All You Need" 的 Crossref 首条是
+      《Is Attention All You Need?》（另一篇论文，被引 55）；
+    - 字段 `is-referenced-by-count` 只统计 **Crossref 注册范围内**的引用，量级远小于
+      OpenAlex / Semantic Scholar（同一篇论文常差 2~3 个数量级），故**无条件**打
+      `low_confidence=True` 并在 confidence_reasons 里说明口径差异；
+    - 若最佳候选与查询标题**词序不一致**（如上面这个例子），额外给出"很可能是另一篇论文"的告警；
+    - 最佳候选相似度低于 TITLE_MATCH_MIN 时返回 None，保持诚实，绝不编造。
+    """
     url = ("https://api.crossref.org/works?" +
            urllib.parse.urlencode({"query.bibliographic": title[:180], "rows": 5,
                                    "select": "title,is-referenced-by-count,container-title,issued,author"}))
@@ -392,11 +664,26 @@ def _crossref_lookup(title, year=None, authors=None):
     hit = _pick_best([c for c in cands if isinstance(c.get("count"), int)], title, year, authors)
     if not hit:
         return None
-    return {"count": int(hit["count"]), "source": "crossref", "matched_title": hit["title"],
+    reasons = list(hit.get("confidence_reasons") or [])
+    reasons.append(
+        "Crossref 仅统计其注册范围内的引用（is-referenced-by-count），量级远小于 "
+        "OpenAlex / Semantic Scholar，数值偏低属正常，**不可当作该论文的被引总数**")
+    matched = hit["title"]
+    # 词序不一致 → 正据表明命中的是另一篇论文，其被引数不可归属给查询标题（置位后上层不据此计分）
+    attribution_unconfirmed = not _token_order_same(title, matched)
+    if attribution_unconfirmed:
+        reasons.append(
+            f"匹配到的《{matched[:60]}》与查询标题**词序不一致**（相似度 {hit['match_score']}），"
+            f"很可能不是同一篇论文，其被引数不可归属给查询标题")
+    return {"count": int(hit["count"]), "cited_by_count": int(hit["count"]),
+            "source": "crossref", "matched_title": matched,
+            "title_attribution_unconfirmed": attribution_unconfirmed,
             "match_score": hit["match_score"], "year": hit["year"], "venue": hit["venue"],
-            "authors": hit["authors"], "low_confidence": bool(hit.get("low_confidence")),
-            "confidence_reasons": list(hit.get("confidence_reasons") or []),
-            "pool_max_count": hit.get("pool_max_count"), "strong_match": hit.get("strong_match")}
+            "authors": hit["authors"],
+            "low_confidence": True,          # 无条件：口径本身就不完整
+            "confidence_reasons": reasons,
+            "pool_max_count": hit.get("pool_max_count"), "strong_match": hit.get("strong_match"),
+            "pool_size": hit.get("pool_size")}
 
 
 _LOOKUPS = (
@@ -406,15 +693,39 @@ _LOOKUPS = (
 )
 
 
+def _finalize(res, query_used, degraded_kind=""):
+    """统一给成功结果补字段：查询串、`cited_by_count` 别名、降级标记。"""
+    res["query_used"] = query_used
+    res.setdefault("cited_by_count", res.get("count"))
+    if degraded_kind:
+        res["source_degraded"] = True
+        res["low_confidence"] = True
+        res["error_kind"] = degraded_kind
+        res["confidence_reasons"] = list(res.get("confidence_reasons") or []) + [
+            "上游数据源本次不可用（%s），已降级到 %s；其统计口径与 OpenAlex 不同"
+            "（常显著偏低）且可能未收录 arXiv 预印本，数值仅供参考"
+            % (_ERROR_KIND_LABEL.get(degraded_kind, degraded_kind), res.get("source", "未知"))]
+    else:
+        res.setdefault("error_kind", "")
+    return res
+
+
 def fetch_citation_count(title, authors=None, year=None, use_cache=True):
     """取一条文献的真实被引次数。
 
     三级降级：OpenAlex → Semantic Scholar → Crossref，每级 8s 超时；每级按顺序试各标题变体。
-    返回 {"count":int,"source":str,"matched_title":str,"match_score":float,"year","venue","authors",
-    "low_confidence":bool,"confidence_reasons":[...]}；
+    返回 {"count":int,"cited_by_count":int,"source":str,"matched_title":str,"match_score":float,
+    "year","venue","authors","low_confidence":bool,"confidence_reasons":[...],"error_kind":str}；
     **三级全部失败（或标题匹配度不足）返回 None**，原因可用 fetch_error(title) 读取——不编造任何数字。
-    若主数据源 OpenAlex 因网络错误（如 HTTP 429）不可用而降级到下一级，结果会打上
-    ``source_degraded`` + ``low_confidence`` 并在 confidence_reasons 里写明口径差异。
+
+    抗限流行为：429/5xx/网络错误先**退避重试**（≤2 次，2s→5s 递增，尊重 Retry-After 但封顶 8s），
+    仍失败才降级；整个调用受 TOTAL_BUDGET(20s) 总预算约束，绝不卡死；某源一旦被限流，
+    本次调用内不再对它发请求（直接跳到下一级）。
+
+    **失败契约（供 UI 区分）**：返回 None 时用 `citation_status(title)` 取
+    ``{"found":False,"error_kind":...,"label":...,"message":...}``，
+    error_kind ∈ {rate_limited, server_error, network_error, budget_exhausted, not_found}；
+    前四者属「**查不了**」（限流/网络，可重试），not_found 才是「**查不到**」。
     """
     if not title or not str(title).strip():
         return None
@@ -422,61 +733,90 @@ def fetch_citation_count(title, authors=None, year=None, use_cache=True):
     if use_cache:
         hit = _cache_get(key)
         if hit:
-            return hit["data"] if hit["ok"] else None
-    errs = []
-    # ① 精确匹配优先：原文里带 DOI 时先走 OpenAlex /works/doi:<DOI>（内部会用标题复核，防止错指）
-    ids = _extract_ids(title)
-    if ids["doi"]:
-        for q in _candidate_titles(title):
-            try:
-                res = _openalex_exact_lookup(ids, q)
+            return hit["data"] if hit["ok"] else None      # 缓存命中：完全跳过网络请求
+
+    prev_deadline = _BUDGET_DEADLINE[0]
+    _BUDGET_DEADLINE[0] = time.time() + TOTAL_BUDGET
+    errs, kinds = [], []
+    dead = set()               # 本次调用内已被限流/5xx 判定为不可用的数据源
+    degraded_kind = ""         # 导致降级的瞬时故障类型
+    try:
+        def _record(name, exc, host=""):
+            """记一条失败；429/5xx 属**主机级**故障 → 该主机本次调用内不再发请求。"""
+            kind = _classify_error(exc)
+            kinds.append(kind)
+            code = getattr(exc, "code", None)
+            errs.append(f"{name}: HTTP {code}" if code else
+                        f"{name}: {type(exc).__name__}: {str(exc)[:70]}")
+            if kind in ("rate_limited", "server_error"):
+                dead.add(host or name)
+            return kind
+
+        def _note_degraded(kind):
+            nonlocal degraded_kind
+            if kind in _TRANSIENT_KINDS and not degraded_kind:
+                degraded_kind = kind
+
+        cands = _candidate_titles(title)
+        ids = _extract_ids(title)
+        # ① 精确匹配优先：原文里带 DOI 时先走 OpenAlex /works/doi:<DOI>（内部会用标题复核，防止错指）
+        if ids["doi"]:
+            for q in cands:
+                if "openalex" in dead:
+                    break
+                try:
+                    res = _openalex_exact_lookup(ids, q)
+                except Exception as e:
+                    _note_degraded(_record("openalex-doi", e, host="openalex"))
+                    continue
                 if res is not None:
-                    res["query_used"] = q
-                    _cache_put(key, True, data=res)
+                    _cache_put(key, True, data=_finalize(res, q, degraded_kind))
                     return res
                 errs.append("openalex-doi: 「%s」精确命中但标题未通过复核，已弃用" % ids["doi"][:36])
-            except Exception as e:
-                errs.append(f"openalex-doi: {type(e).__name__}: {str(e)[:70]}")
-    # ① arXiv ID 精确优先：Semantic Scholar /paper/arXiv:<ID>（同样要做标题复核）
-    if ids.get("arxiv"):
-        for q in _candidate_titles(title):
-            try:
-                res = _semanticscholar_exact_lookup(ids, q)
+        # ① arXiv ID 精确优先：Semantic Scholar /paper/arXiv:<ID>（同样要做标题复核）
+        if ids.get("arxiv"):
+            for q in cands:
+                if "semanticscholar" in dead:
+                    break
+                try:
+                    res = _semanticscholar_exact_lookup(ids, q)
+                except Exception as e:
+                    _note_degraded(_record("semanticscholar-arxiv", e, host="semanticscholar"))
+                    continue
                 if res is not None:
-                    res["query_used"] = q
-                    _cache_put(key, True, data=res)
+                    _cache_put(key, True, data=_finalize(res, q, degraded_kind))
                     return res
                 errs.append("semanticscholar-arxiv: arXiv:%s 精确命中但标题未通过复核或该源无此文，已弃用"
                             % ids["arxiv"])
-            except Exception as e:
-                errs.append(f"semanticscholar-arxiv: {type(e).__name__}: {str(e)[:70]}")
-    # ② 标题模糊匹配三级降级（内部已是「被引数优先」选优）
-    degraded = False            # 主数据源 OpenAlex 是否因网络错误而不可用
-    for name, fn in _LOOKUPS:
-        for q in _candidate_titles(title):
-            try:
-                res = fn(q, year, authors)
-                if res is not None:
-                    res["query_used"] = q
-                    if degraded:
-                        # 主数据源挂了才轮到这一级：口径不同且常缺 arXiv 预印本，必须显式提示
-                        res["source_degraded"] = True
-                        res["low_confidence"] = True
-                        res["confidence_reasons"] = list(res.get("confidence_reasons") or []) + [
-                            f"主数据源 OpenAlex 本次不可用，已降级到 {res['source']}；"
-                            f"其统计口径与 OpenAlex 不同（常显著偏低）且可能未收录 arXiv 预印本，数值仅供参考"]
-                    _cache_put(key, True, data=res)
-                    return res
-                errs.append(f"{name}: 「{q[:40]}」无相似度≥{TITLE_MATCH_MIN} 的匹配")
-            except urllib.error.HTTPError as e:
-                errs.append(f"{name}: HTTP {e.code}")
-                if name == _LOOKUPS[0][0]:
-                    degraded = True
-            except Exception as e:
-                errs.append(f"{name}: {type(e).__name__}: {str(e)[:80]}")
-                if name == _LOOKUPS[0][0]:
-                    degraded = True
-    _cache_put(key, False, err="；".join(errs) or "全部数据源不可用")
+        # ② 标题模糊匹配三级降级（内部已是「被引数优先」选优）
+        # 给每一级**均分剩余预算**：否则前两级各烧掉 ~10s 退避重试后，
+        # 唯一可用的第三级 Crossref 会因预算耗尽而根本没机会发请求。
+        gdl = _BUDGET_DEADLINE[0]
+        n_src = len(_LOOKUPS)
+        for idx, (name, fn) in enumerate(_LOOKUPS):
+            if name in dead:
+                continue
+            rem = gdl - time.time()
+            if rem > 0:
+                _BUDGET_DEADLINE[0] = min(gdl, time.time() + rem / max(1, n_src - idx))
+            for q in cands:
+                if name in dead:
+                    break
+                try:
+                    res = fn(q, year, authors)
+                except Exception as e:
+                    _note_degraded(_record(name, e))
+                    continue
+                if res is None:
+                    errs.append(f"{name}: 「{q[:40]}」无相似度≥{TITLE_MATCH_MIN} 的匹配")
+                    continue
+                _cache_put(key, True, data=_finalize(res, q, degraded_kind))
+                return res
+    finally:
+        _BUDGET_DEADLINE[0] = prev_deadline
+
+    ek = _dominant_kind(kinds)
+    _cache_put(key, False, err="；".join(errs) or "全部数据源不可用", error_kind=ek)
     return None
 
 
@@ -663,34 +1003,55 @@ def assess_reference(entry, citing_paper_text=None, use_network=True):
     real = fetch_citation_count(query, authors=authors, year=year) if (use_network and query) else None
     cnt = real["count"] if real else None
     if cnt is None:
+        st = citation_status(query)
+        ek = st.get("error_kind") or "unknown"
+        evidence["citation_error_kind"] = ek
         reasons.append(f"真实被引数：未能取到（{fetch_error(query) or '未联网或标题匹配不足'}），"
                        f"该维度不计分、不猜测")
+        if ek in _TRANSIENT_KINDS:
+            reasons.append(f"该次失败属**「查不了」**（{st.get('label', ek)}）而非「查不到」，"
+                           f"不代表该论文没有被引记录，网络恢复后可重试")
     else:
         evidence["citation_source"] = real["source"]
         evidence["matched_title"] = real["matched_title"]
         evidence["match_score"] = real["match_score"]
-        if cnt >= 500:
-            d = 45; desc = "极高被引"
-        elif cnt >= 100:
-            d = 40; desc = "高被引"
-        elif cnt >= 30:
-            d = 30; desc = "中高被引"
-        elif cnt >= 10:
-            d = 20; desc = "中等被引"
-        elif cnt >= 1:
-            d = 10; desc = "低被引"
-        else:
-            d = 0; desc = "零被引"
-        score += d
-        reasons.append(f"真实被引 {cnt} 次（{real['source']}，匹配《{real['matched_title'][:60]}》"
-                       f"相似度 {real['match_score']}）→ {desc} (+{d})")
-        if real.get("venue") and not venue.strip(" .,"):
-            venue = real["venue"]          # entry 未给 venue 时用 API 返回的来源名
-        if real.get("low_confidence"):
-            evidence["low_confidence"] = True
-            evidence["confidence_reasons"] = real.get("confidence_reasons", [])
+        if real.get("error_kind"):
+            evidence["citation_error_kind"] = real["error_kind"]   # 降级而来：上游曾限流/网络故障
+        if real.get("title_attribution_unconfirmed"):
+            # 命中的是另一篇标题近似的论文（Crossref 高频出现）：它的被引数**不属于本篇**。
+            # 照样计分等于把别的论文的含金量算到本篇头上，违反"绝不编造"底线 → 不计分、只留证据。
+            evidence["title_attribution_unconfirmed"] = True
+            evidence["raw_candidate"] = {"count": cnt, "source": real.get("source"),
+                                         "matched_title": real.get("matched_title")}
             for r in real.get("confidence_reasons", []):
                 reasons.append(f"⚠️ 低置信：{r}（请在 UI 层提示「数据可能不准确」）")
+            reasons.append(f"⚠️ 匹配到的《{str(real.get('matched_title', ''))[:60]}》经词序校验"
+                           f"很可能**不是同一篇论文**，其被引数 {cnt} **不计入本篇**；"
+                           f"真实被引维度不计分、不猜测")
+            cnt = None
+        else:
+            if cnt >= 500:
+                d = 45; desc = "极高被引"
+            elif cnt >= 100:
+                d = 40; desc = "高被引"
+            elif cnt >= 30:
+                d = 30; desc = "中高被引"
+            elif cnt >= 10:
+                d = 20; desc = "中等被引"
+            elif cnt >= 1:
+                d = 10; desc = "低被引"
+            else:
+                d = 0; desc = "零被引"
+            score += d
+            reasons.append(f"真实被引 {cnt} 次（{real['source']}，匹配《{real['matched_title'][:60]}》"
+                           f"相似度 {real['match_score']}）→ {desc} (+{d})")
+            if real.get("venue") and not venue.strip(" .,"):
+                venue = real["venue"]          # entry 未给 venue 时用 API 返回的来源名
+            if real.get("low_confidence"):
+                evidence["low_confidence"] = True
+                evidence["confidence_reasons"] = real.get("confidence_reasons", [])
+                for r in real.get("confidence_reasons", []):
+                    reasons.append(f"⚠️ 低置信：{r}（请在 UI 层提示「数据可能不准确」）")
 
     # (b) venue 等级
     vd = venue_detail(venue)

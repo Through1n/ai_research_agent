@@ -471,12 +471,31 @@ new vis.Network(document.getElementById('net'),{{nodes:nodes,edges:edges}},{{
 
 
 def _node_year(ctx, n):
-    """从 ctx.papers[n] 取年份并转 int；失败返回 None。"""
+    """从 ctx.papers[n] 取年份并转 int；失败返回 None。
+
+    arXiv 回退：入库时元数据常缺 ``year`` 字段（实测 1706.03762v7.pdf、
+    1810.04805v2.pdf 的 ``year`` 均为空串），而赛题要求综述「结合时间线」
+    与前沿度「时间衰减」。arXiv 编号前 4 位即 YYMM，可直接推断：
+    ``1706.03762`` → 2017、``1810.04805`` → 2018。无此回退时综述会退化成
+    「由于没有具体的年份数据，我们无法按照时间线来描述研究脉络」。
+    """
     raw = ctx.papers[n].get("year", "")
     try:
         return int(str(raw)[:4])
     except (TypeError, ValueError):
-        return None
+        pass
+    # 回退：arXiv 编号 YYMM.NNNNN / archive.YYMMNNN
+    aid = str(ctx.papers[n].get("arxiv_id", "") or "").strip()
+    m = re.match(r"^(?:[a-z\-]+(?:\.[A-Za-z]{2})?/)?(\d{2})(\d{2})[.\d]", aid)
+    if m:
+        try:
+            yy, mm = int(m.group(1)), int(m.group(2))
+        except (TypeError, ValueError):
+            return None
+        if 1 <= mm <= 12:
+            # arXiv 1991 年起步：YY>=91 属上世纪，否则属本世纪
+            return 1900 + yy if yy >= 91 else 2000 + yy
+    return None
 
 
 def _communities(G):
