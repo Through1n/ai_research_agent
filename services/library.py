@@ -10,12 +10,46 @@ import numpy as np
 
 from core.llm import call_llm_with_retry
 from services import parsing
-from config import UPLOAD_DIR
+from config import UPLOAD_DIR, PDF_DIR, STORAGE_DIR
 
 
 PDF_BATCH_SIZE = 20
 PDF_PAGE_TIMEOUT_SECONDS = 30
 PDF_PROGRESS_INTERVAL = 50
+
+# R9 官方测试 PDF 重建清单：scripts/setup_real_library.py 与 UI「一键重建文献库」
+# 共用同一份元数据与同一套 rebuild_from_pdf_dir 代码路径，保证任何人可复现。
+# 顺序即入库顺序：先 v7 后 v1，可在查重日志复现 v1/v7 语义查重命中。
+OFFICIAL_PDF_METADATA = {
+    "1706.03762v7.pdf": {
+        "title": "Attention Is All You Need",
+        "authors": "Ashish Vaswani; Noam Shazeer; Niki Parmar; Jakob Uszkoreit; "
+                   "Llion Jones; Aidan N. Gomez; Lukasz Kaiser; Illia Polosukhin",
+        "arxiv_id": "1706.03762", "version": "v7", "year": "2017",
+    },
+    "1706.03762v1.pdf": {
+        "title": "Attention Is All You Need",
+        "authors": "Ashish Vaswani; Noam Shazeer; Niki Parmar; Jakob Uszkoreit",
+        "arxiv_id": "1706.03762", "version": "v1", "year": "2017",
+    },
+    "1810.04805v2.pdf": {
+        "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+        "authors": "Jacob Devlin; Ming-Wei Chang; Kenton Lee; Kristina Toutanova",
+        "arxiv_id": "1810.04805", "version": "v2", "year": "2018",
+    },
+    # 扫描件：无文本层，走多模态 OCR（需要有效视觉模型 Key）
+    "1706.03762v1_img.pdf": {
+        "title": "Attention Is All You Need",
+        "authors": "Ashish Vaswani; Noam Shazeer; Niki Parmar; Jakob Uszkoreit",
+        "arxiv_id": "1706.03762", "version": "v1", "year": "2017",
+    },
+    # 官方教材：541 页 / 22MB，分 20 页批 + 单页 30s 超时入库
+    "UnderstandingDeepLearning_02_09_26_C.pdf": {
+        "title": "Understanding Deep Learning",
+        "authors": "Simon J.D. Prince", "arxiv_id": "", "version": "", "year": "2026",
+    },
+}
+OFFICIAL_LIBRARY_PDFS = list(OFFICIAL_PDF_METADATA)
 
 
 def cosine(a, b):
@@ -352,12 +386,16 @@ def _extract_page_from_raw(raw, page_index, use_ocr, llm, doc_cache=None):
     local_doc = None
     owned = False
     try:
-        if isinstance(doc_cache, dict):
+        if isinstance(doc_cache, dict) and not doc_cache.get("abandoned"):
             local_doc = doc_cache.get("doc")
             if local_doc is None:
                 local_doc = parsing.open_doc(raw)
                 doc_cache["doc"] = local_doc
         else:
+            # 批次已因单页超时被放弃（abandoned）：绝不再与卡死的超时线程共用
+            # 同一文档实例，改为逐页开独立文档（owned=True，用完即关）。
+            # 2026-10 R9 修复：旧代码在 abandoned 后仍复用 doc_cache["doc"]，
+            # 后续页与超时线程并发访问同一 PyMuPDF 文档，可能整批连环失败。
             local_doc = parsing.open_doc(raw)
             owned = True
         page = local_doc[page_index]
@@ -580,7 +618,10 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
                     full_text_buffer.write("\n\n")
                 full_text_buffer.write(text)
             done = page_index + 1
-            if done % PDF_PROGRESS_INTERVAL == 0 or done == total:
+            # 小文档（≤100 页）每页上报进度，保证扫描件 OCR 等慢页也有真实进度；
+            # 大文档保持每 50 页，避免高频回调拖慢 UI。（R9）
+            interval = 1 if total <= 2 * PDF_PROGRESS_INTERVAL else PDF_PROGRESS_INTERVAL
+            if done % interval == 0 or done == total:
                 _notify_pdf_progress(progress_cb, done, total,
                                      f"已处理 {done}/{total} 页")
 
@@ -735,6 +776,34 @@ def commit(ctx, prepared, title=None, authors=None, arxiv_id=None, version=None,
     return paper
 
 
+def _real_pdf_page_count(filename):
+    """按 上传目录 → 官方 pdf 目录 解析同名 PDF 的真实页数；找不到返回 0。
+
+    2026-10 R9：add_text_corpus（内置演示语料）原先用 ``full_text.split("\\n\\n")``
+    的段数估算页数（v7 得 15，与真实 PDF 页数无关），导致页数字失真。现在只要
+    磁盘上存在同名 PDF（storage/uploads 或 pdf/），一律以 PDF 真实页数为准。
+    """
+    try:
+        for base in (UPLOAD_DIR, PDF_DIR):
+            try:
+                candidate = base / filename
+            except Exception:
+                continue
+            try:
+                if not candidate.exists():
+                    continue
+                doc = parsing.open_doc(str(candidate))
+                try:
+                    return int(doc.page_count)
+                finally:
+                    doc.close()
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return 0
+
+
 def add_text_corpus(ctx, filename, full_text, meta=None):
     """用于内置演示语料：直接以文本入库（语义去重同样生效）。"""
     meta = meta or {}
@@ -743,15 +812,212 @@ def add_text_corpus(ctx, filename, full_text, meta=None):
     dup_name, dup_sim, dup_ev = (check_duplicate(ctx, embedding, arxiv_id=meta.get("arxiv_id"),
                                                  fingerprints=fingerprints, title=meta.get("title"))
                                  if embedding is not None else (None, 0.0, ""))
+    # 页数优先取同名真实 PDF 的页数；无 PDF 时才退回归一化段数估算（R9 T3）
+    page_count = _real_pdf_page_count(filename) or \
+        len([p for p in full_text.split("\n\n") if p.strip()]) or 1
     prepared = {
         "filename": filename, "scanned": False,
-        "page_count": len([p for p in full_text.split("\n\n") if p.strip()]) or 1,
+        "page_count": page_count,
         "page_texts": [full_text], "full_text": full_text, "embedding": embedding,
         "fingerprints": fingerprints,
         "dup_name": dup_name, "dup_sim": dup_sim, "dup_evidence": dup_ev,
     }
     return commit(ctx, prepared, title=meta.get("title"), authors=meta.get("authors"),
                   arxiv_id=meta.get("arxiv_id"), version=meta.get("version"), year=meta.get("year"))
+
+
+def _reset_library(ctx):
+    """清空文献库（papers/chunks/likes + 向量库），供全新重建使用。"""
+    try:
+        ids = ctx.collection.get().get("ids", [])
+        if ids:
+            ctx.collection.delete(ids=ids)
+    except Exception:
+        pass
+    ctx.papers, ctx.paper_order, ctx.chunks, ctx.likes = {}, [], [], {}
+    ctx.rebuild_bm25()
+    ctx.save_library()
+
+
+def _backup_storage(storage_dir=None):
+    """重建前把 library.json 与 chroma/ 备份到 storage/backup_<时间戳>/（最佳努力）。
+
+    chroma/ 可能被进程持有导致拷贝失败——不影响重建（向量按 id 覆盖重写），
+    失败原因写入 warnings 供调用方展示。
+    """
+    import shutil
+    from pathlib import Path
+
+    base = Path(storage_dir) if storage_dir else STORAGE_DIR
+    backup_dir = base / ("backup_" + time.strftime("%Y%m%d_%H%M%S"))
+    copied, warnings = [], []
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return "", [], [f"创建备份目录失败：{exc}"]
+    lib = base / "library.json"
+    if lib.exists():
+        try:
+            shutil.copy2(lib, backup_dir / "library.json")
+            copied.append("library.json")
+        except Exception as exc:
+            warnings.append(f"library.json 备份失败：{exc}")
+    chroma = base / "chroma"
+    if chroma.exists():
+        try:
+            shutil.copytree(chroma, backup_dir / "chroma")
+            copied.append("chroma/")
+        except Exception as exc:
+            warnings.append(f"chroma/ 备份失败（向量将按 id 覆盖重写，不影响重建）：{exc}")
+    return str(backup_dir), copied, warnings
+
+
+def library_health(ctx):
+    """文献库健康诊断（首跑自愈 R9）：识别「空库 / 内容退化」两种不可用状态。
+
+    退化判定：有文献但每篇 chunk 数中位数 < 3，或超过一半 chunk 集中在第 1 页。
+    典型成因是演示文本语料覆盖了真实 PDF 入库结果——用户只能检索到首页片段，
+    问答/图谱/写作/对比质量极差。返回 dict 供 UI 展示醒目提示与一键重建入口。
+    """
+    try:
+        papers = list(getattr(ctx, "files", []) or [])
+    except Exception:
+        papers = []
+    per_paper = {}
+    for fn in papers:
+        try:
+            per_paper[fn] = sum(1 for c in ctx.chunks if c.get("source") == fn)
+        except Exception:
+            per_paper[fn] = 0
+    total_chunks = len(ctx.chunks)
+    try:
+        page1 = sum(1 for c in ctx.chunks if int(c.get("page") or 1) <= 1)
+    except Exception:
+        page1 = total_chunks
+    ratio1 = (page1 / total_chunks) if total_chunks else 0.0
+    counts = sorted(per_paper.values())
+    if counts:
+        mid = len(counts) // 2
+        median = counts[mid] if len(counts) % 2 else (counts[mid - 1] + counts[mid]) / 2.0
+    else:
+        median = 0.0
+    reasons = []
+    if not papers:
+        reasons.append("文献库为空")
+    else:
+        if median < 3:
+            reasons.append(f"每篇文献 chunk 数中位数仅 {median:g}（健康库应 ≥ 3）")
+        if total_chunks and ratio1 > 0.5:
+            reasons.append(f"{ratio1:.0%} 的 chunk 集中在第 1 页，后续页面内容缺失")
+    return {
+        "papers": len(papers), "chunks": total_chunks,
+        "chunks_per_paper": per_paper, "median_chunks_per_paper": median,
+        "page1_ratio": ratio1,
+        "empty": not papers, "degraded": bool(papers) and bool(reasons),
+        "unhealthy": (not papers) or bool(reasons),
+        "reasons": reasons,
+    }
+
+
+def rebuild_from_pdf_dir(ctx, pdf_dir=None, filenames=None, reset_first=False,
+                         progress_cb=None, page_error_cb=None):
+    """从 PDF 目录重建文献库：UI「一键重建」与 scripts/setup_real_library.py 的唯一代码路径。
+
+    - 仅重建 ``filenames``（默认官方 5 件，见 OFFICIAL_LIBRARY_PDFS），按
+      OFFICIAL_PDF_METADATA 补标题/作者等元数据，其余字段仍按文件名/正文推断；
+    - 同名文献直接覆盖（commit 先删同名旧块再 upsert），不影响用户其它上传；
+    - ``reset_first=True`` 先清空全库并自动备份 storage/（脚本全新重建用）；
+    - 进度经 ``progress_cb(done, total, msg)`` 上报（done/total 为跨文件累计页数，
+      预扫描各 PDF 真实页数得到总数）；单页失败经 ``page_error_cb(page, reason)`` 上报；
+    - 返回实测报告：每篇页数/是否扫描件/chunk 数/覆盖页范围/失败页/耗时。
+    """
+    from pathlib import Path
+
+    base_dir = Path(pdf_dir) if pdf_dir else PDF_DIR
+    names = list(filenames) if filenames else list(OFFICIAL_LIBRARY_PDFS)
+    report = {"results": [], "skipped": [], "backup": "", "backup_files": [],
+              "backup_warnings": [], "elapsed": 0.0, "total_chunks": 0, "ok": True}
+    t0 = time.time()
+
+    if reset_first:
+        backup_dir, copied, warnings = _backup_storage(STORAGE_DIR)
+        report["backup"], report["backup_files"], report["backup_warnings"] = \
+            backup_dir, copied, warnings
+        _reset_library(ctx)
+
+    # 预扫描各 PDF 真实页数：累计进度条需要真实总数（打开失败在此阶段跳过）
+    page_totals = {}
+    for name in names:
+        path = base_dir / name
+        if not path.exists():
+            report["skipped"].append({"filename": name, "error": f"文件不存在：{path}"})
+            report["ok"] = False
+            continue
+        try:
+            doc = parsing.open_doc(str(path))
+            try:
+                page_totals[name] = int(doc.page_count)
+            finally:
+                doc.close()
+        except Exception as exc:
+            report["skipped"].append({"filename": name, "error": f"打开失败：{exc}"})
+            report["ok"] = False
+    grand_total = max(sum(page_totals.values()), 1)
+    done_pages = 0
+
+    for name in names:
+        if name not in page_totals:
+            continue
+        path = base_dir / name
+        meta = OFFICIAL_PDF_METADATA.get(name, {})
+        file_total = page_totals[name]
+        file_t0 = time.time()
+        failed_here = []
+
+        def _cb(done, total, msg, _name=name, _base=done_pages, _ftotal=file_total,
+                _t0=file_t0):
+            _notify_pdf_progress(
+                progress_cb, _base + done, grand_total,
+                f"{_name} {msg}（本篇 {done}/{_ftotal} 页，已用 {time.time() - _t0:.0f}s，"
+                f"失败 {len(failed_here)} 页）")
+
+        def _perr(page_index, reason, _name=name):
+            failed_here.append({"page": page_index + 1, "error": str(reason)[:200]})
+            _notify_page_error(page_error_cb, page_index, reason)
+
+        prepared = prepare_pdf(ctx, path=str(path), filename=name,
+                               progress_cb=_cb, on_page_error=_perr)
+        done_pages += file_total
+        elapsed = time.time() - file_t0
+        if prepared.get("error"):
+            report["results"].append({
+                "filename": name, "ok": False, "error": prepared.get("error", ""),
+                "reason": prepared.get("reason", ""),
+                "page_count": int(prepared.get("page_count") or 0),
+                "scanned": bool(prepared.get("scanned")), "chunks": 0, "pages": [],
+                "failed_pages": prepared.get("failed_pages") or failed_here,
+                "elapsed": elapsed, "dup_name": None, "dup_sim": 0.0,
+            })
+            report["ok"] = False
+            continue
+        paper = commit(ctx, prepared, title=meta.get("title"), authors=meta.get("authors"),
+                       arxiv_id=meta.get("arxiv_id"), version=meta.get("version"),
+                       year=meta.get("year"))
+        chunks = [c for c in ctx.chunks if c.get("source") == name]
+        pages = sorted({int(c.get("page") or 0) for c in chunks}
+                       | {int(c.get("page_end") or 0) for c in chunks})
+        report["results"].append({
+            "filename": name, "ok": True, "error": "",
+            "reason": "", "page_count": int(paper.get("page_count") or 0),
+            "scanned": bool(paper.get("scanned")), "chunks": len(chunks),
+            "pages": pages, "failed_pages": prepared.get("failed_pages") or failed_here,
+            "elapsed": elapsed, "dup_name": prepared.get("dup_name"),
+            "dup_sim": float(prepared.get("dup_sim") or 0.0),
+        })
+
+    report["elapsed"] = time.time() - t0
+    report["total_chunks"] = len(ctx.chunks)
+    return report
 
 
 def remove_paper(ctx, filename, delete_vector=True):

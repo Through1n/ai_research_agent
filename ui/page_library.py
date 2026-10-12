@@ -1,5 +1,6 @@
-"""页面 1：文献库管理。语义查重与版本决策、元数据/排版识别、细粒度结构（标题树/表格/图表/公式/参考文献/附录）。"""
+"""页面 1：文献库管理。语义查重与版本决策、元数据/排版识别、细粒度结构（标题树/表格/图表/公式/参考文献/附录）、首跑自愈。"""
 import os
+import time
 
 import pandas as pd
 import streamlit as st
@@ -12,6 +13,8 @@ from ui.sidebar import set_flash
 
 # 细粒度结构一次最多展示的图表数量（避免超大 PDF 把页面拖垮）
 MAX_FIG_SHOW = 8
+# 失败页清单最多展示条数（避免超长列表把页面拖垮）
+MAX_FAILED_SHOW = 50
 
 
 def _init():
@@ -31,11 +34,151 @@ def _struct_error_hint(what, e):
                    actions=["重新上传完整 PDF", "或改用「📁 文献库管理」中已有纸质元数据进行演示"])
 
 
+def _show_prepare_warnings(prepared):
+    """入库前如实展示解析告警：失败页清单、截断警示、扫描件 OCR 状态（R9 T4）。"""
+    failed = prepared.get("failed_pages") or []
+    if failed:
+        pages = "、".join(f"p{fp.get('page')}" for fp in failed[:12])
+        st.warning(f"⚠️ 有 {len(failed)} 页解析失败（其余页正常入库）：{pages}"
+                   + ("…" if len(failed) > 12 else ""))
+        with st.expander("🔧 失败页原因（供排查）", expanded=False):
+            for fp in failed[:MAX_FAILED_SHOW]:
+                st.caption(f"第 {fp.get('page')} 页：{str(fp.get('error', ''))[:160]}")
+    if prepared.get("truncated"):
+        st.warning(f"⚠️ PDF 疑似不完整：声称 {prepared.get('expected_pages', '?')} 页，"
+                   f"成功提取 {prepared.get('extracted_pages', '?')} 页；已按可提取部分入库，"
+                   f"建议核对原文件是否完整。")
+    if prepared.get("scanned"):
+        if prepared.get("ocr_error"):
+            st.warning(f"🧾 检测为扫描件；OCR 存在失败：{str(prepared['ocr_error'])[:120]}")
+        else:
+            st.info("🧾 检测为扫描件，已通过多模态 OCR 提取文本。")
+
+
+def _render_library_health(ctx):
+    """首跑自愈（R9 T2）：库空或 chunk 覆盖异常时给醒目提示 + 一键重建入口。
+
+    异常判定在 services/library.py:library_health（每篇 chunk 中位数 < 3，
+    或超过一半 chunk 集中在第 1 页即视为退化——典型成因是演示文本语料
+    覆盖了真实 PDF 入库结果，用户只能检索到首页片段）。
+    """
+    try:
+        health = library.library_health(ctx)
+    except Exception:
+        return
+    if not health.get("unhealthy"):
+        return
+    if health.get("empty"):
+        st.warning("📭 文献库为空：问答/图谱/写作/对比页将无可检索内容。"
+                   "可从上方上传 PDF，或用下方按钮一键重建官方测试文献库。")
+    else:
+        st.error("⚠️ 检测到文献库内容异常退化（不是空库，但几乎检索不到正文）："
+                 + "；".join(health["reasons"]) + "。")
+        st.caption("🩺 典型成因：「一键加载演示数据」的示例文本覆盖了真实 PDF 的入库结果，"
+                   "每篇只剩首条片段；问答/图谱/对比页目前只能基于这些片段作答，质量很差。")
+        if health.get("chunks_per_paper"):
+            rows = [{"文献": fn, "chunk 数": n,
+                     "状态": "⚠️ 异常" if n < 3 else "✅ 正常"}
+                    for fn, n in health["chunks_per_paper"].items()]
+            pretty_table(rows, title="🩺 当前库 chunk 覆盖明细", max_rows=MAX_FAILED_SHOW)
+    st.caption("🛠️ 一键重建：从 pdf/ 官方测试件走完整入库路径（分 20 页批 + 单页 30s 超时 + "
+               "扫描件 OCR），同名文献自动覆盖，不影响你的其它上传。")
+    if st.button("🔧 一键重建文献库（pdf/ 官方测试件，含 541 页教材）", key="lib_rebuild"):
+        _run_rebuild(ctx)
+
+
+def _show_rebuild_report(report):
+    """重建实测表 + 失败页清单 + 备份信息。"""
+    rows = []
+    for r in report.get("results", []):
+        pages = r.get("pages") or []
+        cover = f"{pages[0]}–{pages[-1]}（{len(pages)} 页）" if pages else "—"
+        rows.append({
+            "文献": r.get("filename", "?"),
+            "PDF 页数": r.get("page_count", 0),
+            "扫描件": "是（OCR）" if r.get("scanned") else "否",
+            "chunk 数": r.get("chunks", 0),
+            "覆盖页": cover,
+            "失败页": len(r.get("failed_pages") or []),
+            "耗时(s)": round(float(r.get("elapsed") or 0.0), 1),
+            "结果": "✅ 已入库" if r.get("ok") else f"❌ {str(r.get('error', ''))[:60]}",
+        })
+    if rows:
+        pretty_table(rows, title="🛠️ 重建实测结果", max_rows=MAX_FAILED_SHOW)
+    all_failed = []
+    for r in report.get("results", []):
+        for fp in r.get("failed_pages") or []:
+            all_failed.append({"文献": r.get("filename", "?"), "页": fp.get("page"),
+                               "原因": str(fp.get("error", ""))[:80]})
+    if all_failed:
+        st.warning(f"⚠️ 共 {len(all_failed)} 页解析失败（不影响其它页入库）：")
+        pretty_table(all_failed[:MAX_FAILED_SHOW], title="失败页清单", max_rows=MAX_FAILED_SHOW)
+    else:
+        st.success("✅ 全部页面解析成功，无失败页。")
+    for s in report.get("skipped") or []:
+        st.caption(f"⏭️ 跳过 {s.get('filename')}：{s.get('error')}")
+    if report.get("backup"):
+        st.caption(f"🗂️ 重建前已自动备份至 {report['backup']}"
+                   f"（{', '.join(report.get('backup_files') or []) or '无'}）")
+    for w in report.get("backup_warnings") or []:
+        st.caption(f"⚠️ {w}")
+
+
+def _run_rebuild(ctx):
+    """一键重建：真实进度（累计页/总页、已用时间、失败页累计）+ 实测结果表（R9 T2）。"""
+    bar = st.progress(0.0)
+    note = st.empty()
+    failed = []
+    t0 = time.time()
+
+    def cb(done, total, msg):
+        try:
+            bar.progress(min(max(done / max(total, 1), 0.0), 1.0))
+            note.caption(f"🛠️ {msg} · 累计 {done}/{total} 页 · 已用 {time.time() - t0:.0f}s · "
+                         f"失败页累计 {len(failed)}")
+        except Exception:
+            pass
+
+    def on_page_error(page_index, reason):
+        failed.append({"page": page_index + 1, "error": str(reason)[:200]})
+
+    try:
+        report = library.rebuild_from_pdf_dir(ctx, progress_cb=cb, page_error_cb=on_page_error)
+    except Exception as e:
+        try:
+            bar.empty()
+            note.empty()
+        except Exception:
+            pass
+        friendly_error("重建文献库", e,
+                       reasons=["pdf/ 目录缺少官方测试件", "磁盘空间不足 / 向量库写入失败",
+                                "扫描件 OCR 需要可用的多模态模型 Key"],
+                       actions=["确认 pdf/ 下 5 个官方 PDF 存在后重试",
+                                "在左侧「接入方式」填入有效 Key 后重试（扫描件 OCR 需要）"])
+        return
+    try:
+        bar.progress(1.0)
+        note.caption(f"✅ 重建完成，总耗时 {float(report.get('elapsed') or 0):.0f}s")
+    except Exception:
+        pass
+    _show_rebuild_report(report)
+    if report.get("ok"):
+        set_flash("success", f"✅ 文献库已重建：{len(report.get('results') or [])} 篇，"
+                             f"共 {report.get('total_chunks', 0)} 个 chunk")
+    else:
+        set_flash("warning", "⚠️ 重建存在失败项，详见上方实测表（其余文献不受影响）")
+    st.rerun()
+
+
 def render(ctx):
     _init()
     page_header("📁 文献库管理",
                 "基于内容 embedding 的语义去重（识别 arXiv v1/v7）、版本管理、细粒度多模态解析。",
                 icon="📁")
+
+    # ---------------- 首跑自愈：库空/退化检测 + 一键重建（R9 T2） ----------------
+    _render_library_health(ctx)
+    st.markdown("---")
 
     # ---------------- 上传 & 语义查重 ----------------
     st.subheader("⬆️ 上传 PDF（自动语义查重 / 扫描件 OCR）")
@@ -66,18 +209,16 @@ def render(ctx):
                     st.warning("⚠️ 解析返回数据异常，未入库。请重试或换一个 PDF。")
                 elif prepared.get("error"):
                     friendly_error("PDF 解析", prepared.get("error"),
-                                   reasons=["PDF 损坏 / 加密 / 非标准排版"],
+                                   reasons=["PDF 损坏 / 加密 / 非标准排版",
+                                            "扫描件但未配置可用的多模态模型 Key"],
                                    actions=["换一个 PDF 重试", "或先加载演示数据继续演示"])
-                elif prepared.get("scanned"):
-                    st.info("🧾 检测为扫描件，已通过多模态 OCR 提取文本。")
+                else:
+                    # 失败页 / 截断 / 扫描件 OCR 状态如实展示后再决定入库（R9 T4）
+                    _show_prepare_warnings(prepared)
                     if prepared.get("dup_name"):
                         st.session_state.pending = prepared
                     else:
                         _commit(ctx, prepared)
-                elif prepared.get("dup_name"):
-                    st.session_state.pending = prepared
-                else:
-                    _commit(ctx, prepared)
             except Exception as e:
                 try:
                     bar.empty()
@@ -388,11 +529,14 @@ def render(ctx):
 
 
 def _commit(ctx, prepared):
-    """入库统一封装：异常友好化，成功统一成功提示。"""
+    """入库统一封装：异常友好化，成功统一成功提示（含失败页数，R9 T4）。"""
     try:
         p = library.commit(ctx, prepared)
         n = len([c for c in ctx.chunks if c.get("source") == p.get("filename")])
-        set_flash("success", f"✅ 已入库：{p.get('title','')}（{p.get('page_count','?')} 页，{n} 个分块）")
+        fp = len(prepared.get("failed_pages") or [])
+        tail = f"，{fp} 页解析失败" if fp else ""
+        set_flash("success", f"✅ 已入库：{p.get('title','')}（{p.get('page_count','?')} 页，"
+                             f"{n} 个分块{tail}）")
         st.rerun()
     except Exception as e:
         friendly_error("入库", e, reasons=["向量库写入失败 / 磁盘空间不足"],

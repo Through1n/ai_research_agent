@@ -33,12 +33,35 @@ def open_doc(path_or_bytes, filetype="pdf"):
     return fitz.open(path_or_bytes)
 
 
-def detect_scanned(doc, sample=3):
+def detect_scanned(doc, sample=6):
+    """扫描件检测：均匀采样最多 ``sample`` 页，采样页中 ≥80% 几乎无文本层才判扫描件。
+
+    2026-10 R9：旧版只采样前 3 页（任一样本页字符数 < 100 即判扫描件），
+    教材/报告类文档封面+目录文本很少会被误判为扫描件，从而触发 541 页全量
+    OCR（极慢且消耗视觉额度）。改为跨文档均匀采样（含首页/中间/末页）后，
+    只有整篇都无文本层的真扫描件才会走 OCR；单页文档退化为按该页判定。
+    """
     try:
-        chars = sum(len(doc[i].get_text().strip()) for i in range(min(sample, doc.page_count)))
-        return chars < 100
+        total = int(doc.page_count)
     except Exception:
         return False
+    if total <= 0:
+        return False
+    count = max(1, min(int(sample or 6), total))
+    if count == 1:
+        indexes = [0]
+    else:
+        step = (total - 1) / (count - 1)
+        indexes = sorted({int(round(i * step)) for i in range(count)})
+    poor = 0
+    for index in indexes:
+        try:
+            if len(doc[index].get_text().strip()) < 100:
+                poor += 1
+        except Exception:
+            poor += 1
+    threshold = (4 * len(indexes) + 4) // 5   # ceil(0.8 * len(indexes))
+    return poor >= threshold
 
 
 def is_ocr_error_text(text):
