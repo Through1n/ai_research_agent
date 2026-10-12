@@ -259,15 +259,21 @@ def render(ctx):
         except Exception:
             pass
 
-        qp = st.query_params
-        if "p" in qp:
-            try:
-                _raw = qp["p"]
-                idx = int(_raw[0] if isinstance(_raw, (list, tuple)) else _raw)
-                if 0 <= idx < len(MENU):
-                    st.session_state["menu"] = MENU[idx]
-            except (TypeError, ValueError, IndexError):
-                pass
+        # URL 深链（?p=索引）只在会话首次进入时应用一次。
+        # 旧实现每次 rerun 都无条件用它覆盖 session_state，而一旦选中过页面
+        # ?p= 就常驻 URL —— 于是用户切到别的页后，下一次 rerun 又被拽回旧页
+        # （表现为"点了导航没反应/自动跳回去"）。
+        if "_nav_url_applied" not in st.session_state:
+            st.session_state["_nav_url_applied"] = True
+            qp = st.query_params
+            if "p" in qp:
+                try:
+                    _raw = qp["p"]
+                    idx = int(_raw[0] if isinstance(_raw, (list, tuple)) else _raw)
+                    if 0 <= idx < len(MENU):
+                        st.session_state["menu"] = MENU[idx]
+                except (TypeError, ValueError, IndexError):
+                    pass
 
         def _pick(item):
             """统一选中入口：写 session_state + 同步 URL 参数（替代旧 on_change）。"""
@@ -282,20 +288,50 @@ def render(ctx):
             cur = MENU[0]
             st.session_state["menu"] = cur
 
-        menu = st.radio("🧭 功能导航", MENU_MAIN,
-                        index=MENU_MAIN.index(cur) if cur in MENU_MAIN else 0,
-                        label_visibility="collapsed")
-        if menu != cur:
-            _pick(menu)
-            cur = menu
+        # ── 「用户真的点了」判定（导航分主区 / 折叠区两个 radio）─────────
+        # 陷阱：st.radio 无论如何都会返回一个值（缺省取首项）。旧代码用
+        # `about != cur` 判定，而 cur 属于主区时 about 恒为 MENU_ABOUT[0]，
+        # 于是首次渲染就被判成"用户点了关于页"——应用一打开直接落在
+        # 「🏗️ A. 系统架构设计」，首页和三步引导条全部失效。
+        # 修法：给 radio 加 key，比较「本轮 widget 值」与「上一轮渲染值」，
+        # 只有真正变化才算用户点击（首轮 prev 为 None，不触发）。
+        # ⚠️ 快照必须存在 widget 自己的 key 之外：用户一点击，Streamlit 在脚本重跑
+        # 之前就把 `_nav_main` 更新成了新值，读它做对比等于自己跟自己比，永远相等。
+        # 故用独立的影子键记录"上一轮渲染值"，并在本轮末尾回写。
+        # ── 导航：主区 radio + 折叠区按钮 ───────────────────────────────
+        prev_main = st.session_state.get("_nav_main_shadow")
+        nav_changed = st.session_state.get("_nav_ready", False)
+
+        # 停在折叠区页面时，清掉主区 radio 的残留选中值：不清的话，用户点击那个被
+        # 悄悄保留的项等于点了"已选中项"，widget 值无变化 → 检测不到点击 → 点不动。
+        # 只在"值未变化"（说明不是用户刚点的）时清理，避免把新点击吃掉。
+        raw_main = st.session_state.get("_nav_main")
+        if cur in MENU_ABOUT and raw_main is not None and raw_main == prev_main:
+            st.session_state["_nav_main"] = None
+
+        main_val = st.radio("🧭 功能导航", MENU_MAIN,
+                            index=MENU_MAIN.index(cur) if cur in MENU_MAIN else None,
+                            key="_nav_main",
+                            label_visibility="collapsed")
+        # 仅非首轮判定点击：首轮没有历史值，任何返回值都不是用户动作。
+        if nav_changed and main_val is not None and main_val != prev_main:
+            _pick(main_val)
+            cur = main_val
+
+        # 折叠区用按钮：radio 无论如何都有选中态，两组 radio 共用同一个导航状态
+        # 时必然互相打架（且 Streamlit 禁止在实例化后回填 widget key 来纠正）。
+        # 按钮无状态，"点了"就是"点了"。
         with st.expander("ℹ️ 关于本系统"):
-            about = st.radio("关于本系统", MENU_ABOUT,
-                             index=MENU_ABOUT.index(cur) if cur in MENU_ABOUT else 0,
-                             label_visibility="collapsed")
-            if about != cur:
-                _pick(about)
-                cur = about
-                menu = about
+            for item in MENU_ABOUT:
+                if st.button(item, key="_nav_about_%s" % item,
+                             use_container_width=True,
+                             disabled=(item == cur)):
+                    _pick(item)
+                    cur = item
+
+        st.session_state["_nav_ready"] = True
+        st.session_state["_nav_main_shadow"] = main_val
+        menu = cur
 
         # 任务中心：后台任务的实时节点进度（问题五/六），任何页面都可见
         try:

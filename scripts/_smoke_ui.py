@@ -21,19 +21,37 @@ os.chdir(ROOT)
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
+# 菜单常量以 ui/sidebar.py 为唯一真源，**不在本文件复制一份**。
+# 背景：此前这里硬编码了 MENU 副本，Round 9「术语中文化」重命名菜单项后，
+# 脚本的副本与线上长期不一致 → 导航定位失败 → 9 条按钮断言全部被"跳过" →
+# 冒烟输出 ✅ 却是假绿。复制常量等于埋一颗必然引爆的雷。
+from ui.sidebar import MENU  # noqa: E402
+
 HEAVY = "--heavy" in sys.argv
 
-MENU = [
-    "🤖 0. Agent 总助手",
-    "📁 1. 文献库管理",
-    "💬 2. 跨文献问答与溯源",
-    "📖 3. 版式阅读与智能翻译",
-    "🔍 4. 论文自动检索与追踪",
-    "🕸️ 5. 引用图谱与综述",
-    "✍️ 6. 写作辅助与可视化",
-    "🏗️ 系统架构设计",
-    "💡 技术创新亮点",
-]
+
+def _app_route_keys():
+    """静态解析 app.py 的 _PAGES 路由键（不执行 app.py，避免副作用）。"""
+    import ast
+    try:
+        with open(os.path.join(ROOT, "app.py"), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+                for t in node.targets:
+                    if isinstance(t, ast.Name) and t.id == "_PAGES":
+                        return [k.value for k in node.value.keys
+                                if isinstance(k, ast.Constant)]
+    except Exception:
+        pass
+    return []
+
+
+ROUTES = _app_route_keys()
+
+# 路由键 → 菜单文案。测试只依赖 app.py 里的路由键（emoji），不复制菜单文案，
+# 菜单重命名 / 分组调整都不会再把测试变成假绿。
+MENU_BY_ROUTE = {r: m for m in MENU for r in ROUTES if m.startswith(r)}
 
 
 def _new():
@@ -52,24 +70,47 @@ def _report(tag, at, dt, problems):
     return errs
 
 
-def _menu_radio(at):
-    """定位导航菜单 radio（第一个 radio 是「接入方式」，需按 options 精确匹配）。"""
+def _menu_radio(at, label):
+    """定位「含有该菜单项」的 radio。
+
+    不再假设导航只有唯一一个 radio：重构后导航拆成了主区 radio +
+    「ℹ️ 关于本系统」折叠区里的第二个 radio，旧写法 `options == MENU` 恒不成立。
+    按「选项包含目标项」匹配，后续再拆分组也不至于静默失效。
+    """
     for r in at.radio:
         try:
-            if list(r.options) == MENU:
+            if label in list(r.options):
                 return r
         except Exception:
             continue
     return None
 
 
-def _goto(at, label):
-    r = _menu_radio(at)
-    if r is None:
-        print("  ⚠ 未找到导航菜单 radio")
-        return False
-    r.set_value(label).run()
-    return True
+def _goto(at, label, problems=None):
+    """切换到指定菜单项。定位失败必须记为问题——宁可报错，不可静默跳过。"""
+    r = _menu_radio(at, label)
+    if r is not None:
+        r.set_value(label).run()
+        # 结算回合：真实浏览器在"点击 → 重跑"之后还会完成一次渲染，中间态才对用户可见。
+        # 少这一步，导航清理逻辑与下一次点击会被压进同一次 run，测出浏览器上不存在的假故障。
+        at.run()
+        return True
+    # 折叠区「关于本系统」是按钮导航（radio 有选中态，与共享导航状态冲突）
+    for b in at.button:
+        if b.label.strip() == label.strip():
+            try:
+                b.click().run()
+                at.run()      # 同上：补一次结算渲染回合
+                return True
+            except Exception as e:      # 例如正好停在当页被 disabled
+                if problems is not None:
+                    problems.append((label, "导航按钮不可点击：%s" % e))
+                return False
+    msg = "菜单项不可达（导航定位失败）：%s" % label
+    print("  ✗ " + msg)
+    if problems is not None:
+        problems.append((label, msg))
+    return False
 
 
 def _click(at, label):
@@ -79,6 +120,12 @@ def _click(at, label):
             b.click().run()
             return True
     return False
+
+
+def _miss(problems, tag, msg):
+    """统一的「断言未执行」记账入口。"""
+    print("  ✗ " + msg)
+    problems.append((tag, msg))
 
 
 def _inject():
@@ -124,16 +171,17 @@ def phase_fault(problems):
     print("\n[4] 故障注入：验证降级提示而非 Traceback")
     import time
     _inject()
+    _search, _lib, _graph = "🔍", "📁", "🕸️"
     cases = [
-        ("🔍 4. 论文自动检索与追踪", "🔍 搜索 arXiv"),
-        ("🔍 4. 论文自动检索与追踪", "🔍 PubMed"),
-        ("🔍 4. 论文自动检索与追踪", "🔍 DuckDuckGo"),
-        ("🔍 4. 论文自动检索与追踪", "✨ 刷新并推荐"),
-        ("🔍 4. 论文自动检索与追踪", "🔄 运行一次追踪"),
-        ("🔍 4. 论文自动检索与追踪", "🚀 批量下载入库"),
-        ("📁 1. 文献库管理", "🔍 对比 1706.03762 版本差异"),
-        ("🕸️ 5. 引用图谱与综述", "🕸️ 构建引用图谱"),
-        ("🕸️ 5. 引用图谱与综述", "📝 一键生成领域综述"),
+        (_search, "🔍 搜索 arXiv"),
+        (_search, "🔍 PubMed"),
+        (_search, "🔍 DuckDuckGo"),
+        (_search, "✨ 刷新并推荐"),
+        (_search, "🔄 运行一次追踪"),
+        (_search, "🚀 批量下载入库"),
+        (_lib, "🔍 对比 1706.03762 版本差异"),
+        (_graph, "🕸️ 构建引用图谱"),
+        (_graph, "📝 一键生成领域综述"),
     ]
     input_seed = {
         "aq": "transformer",            # arXiv 检索关键词
@@ -143,16 +191,21 @@ def phase_fault(problems):
         "qrefs": "[1] Vaswani et al. Attention is all you need.",  # 引用含金量
         "trk_topics": "cs.AI, cs.CL",   # 订阅话题
     }
-    for i, (page, btn) in enumerate(cases):
+    for i, (route, btn) in enumerate(cases):
+        page = MENU_BY_ROUTE.get(route)
+        if page is None:
+            _miss(problems, route, "路由键 %s 无对应菜单项" % route)
+            continue
         try:
             at, _ = _new()
             _click(at, "🚀 一键加载演示数据（v1/v7/BERT）")
-            _goto(at, page)
+            if not _goto(at, page, problems):
+                continue
             _seed_inputs(at, input_seed)
             t0 = time.time()
             hit = _click(at, btn)
             if not hit:
-                print(f"  ⚠ 未找到按钮（跳过）：{btn}")
+                _miss(problems, btn, "按钮未找到（断言未执行）：%s @ %s" % (btn, page))
                 continue
             dt = time.time() - t0
             errs = [str(e.value)[:200] for e in at.exception]
@@ -176,13 +229,51 @@ def main():
     print("AI4S UI 冒烟测试 (AppTest in-process)　heavy=%s" % HEAVY)
     print("=" * 72)
 
+    # ---------- 0. 覆盖检查：每个菜单项都必须有对应页面路由 ----------
+    print("\n[0] 覆盖检查")
+    orphan = [m for m in MENU if not any(m.startswith(r) for r in ROUTES)]
+    if orphan:
+        _miss(problems, "覆盖检查", "菜单项无页面路由（点了会落到空路由页）：%s" % orphan)
+    else:
+        print(f"  ✅ {len(MENU)} 个菜单项全部有路由；解析到 {len(ROUTES)} 条 _PAGES 键")
+
+    # ---------- 0b. 导航回归：落地页正确 + 每项都能真正切换到位 ----------
+    # 曾经的教训：「逐个 radio 能不能找到」和「页面有没有真的切过去」是两回事。
+    # 渲染异常为 0 不代表路由正确 —— 首渲染跳错页、点了导航不切换，at.exception
+    # 都是空的。这里直接断言 session_state["menu"] 落到预期值。
+    print("\n[0b] 导航回归")
+    try:
+        at, _ = _new()
+
+        def _cur_menu(at_):
+            try:
+                return at_.session_state["menu"]
+            except Exception:
+                return None
+
+        landed = _cur_menu(at)
+        if landed != MENU[0]:
+            _miss(problems, "落地页", "首次渲染落在 %r，应为 %r" % (landed, MENU[0]))
+        else:
+            print("  ✅ 首次渲染落地页 = %s" % MENU[0])
+        for label in MENU:
+            if not _goto(at, label, problems):
+                continue
+            got = _cur_menu(at)
+            if got != label:
+                _miss(problems, "导航切换", "选中 %r 但 menu=%r" % (label, got))
+        if not [p for p in problems if p[0] == "导航切换"]:
+            print("  ✅ %d 项导航均真正切换到位" % len(MENU))
+    except Exception as e:
+        _miss(problems, "导航回归", str(e)[:200])
+
     # ---------- 1. 各页面独立渲染 ----------
     print("\n[1] 逐页渲染（空库状态）")
     for i, label in enumerate(MENU):
         try:
             at, dt = _new()
-            _goto(at, label)
-            _report(label, at, dt, problems)
+            if _goto(at, label, problems):
+                _report(label, at, dt, problems)
         except Exception as e:
             print(f"  [{label}] 冒烟脚本自身异常：{str(e)[:200]}")
             problems.append((label, str(e)))
@@ -192,15 +283,14 @@ def main():
     try:
         at, dt = _new()
         if not _click(at, "🚀 一键加载演示数据（v1/v7/BERT）"):
-            print("  ⚠ 未找到「一键加载演示数据」按钮")
-            problems.append(("sidebar", "未找到演示数据按钮"))
+            _miss(problems, "sidebar", "未找到「一键加载演示数据」按钮")
         else:
             print(f"  加载耗时 {dt:.1f}s")
         for label in MENU:
             at.run()
             t0 = time.time()
-            _goto(at, label)
-            _report(label, at, time.time() - t0, problems)
+            if _goto(at, label, problems):
+                _report(label, at, time.time() - t0, problems)
     except Exception as e:
         print("  演示数据阶段异常：" + str(e)[:200])
         traceback.print_exc()
@@ -210,21 +300,26 @@ def main():
     if HEAVY:
         print("\n[3] 本地重操作（无外网依赖，先加载演示数据）")
         heavy_ops = [
-            ("🕸️ 5. 引用图谱与综述", "🕸️ 构建引用图谱"),
-            ("🕸️ 5. 引用图谱与综述", "🎭 演示模式示意图谱"),
-            ("🕸️ 5. 引用图谱与综述", "📝 一键生成领域综述"),
-            ("📁 1. 文献库管理", "🧩 全方位解析（标题树/表格/图表）"),
+            ("🕸️", "🕸️ 构建引用图谱"),
+            ("🕸️", "🎭 演示模式示意图谱"),
+            ("🕸️", "📝 一键生成领域综述"),
+            ("📁", "🧩 全方位解析（标题树/表格/图表）"),
         ]
-        for page, btn in heavy_ops:
+        for route, btn in heavy_ops:
+            page = MENU_BY_ROUTE.get(route)
+            if page is None:
+                _miss(problems, route, "路由键 %s 无对应菜单项" % route)
+                continue
             try:
                 at, _ = _new()
                 if not _click(at, "🚀 一键加载演示数据（v1/v7/BERT）"):
-                    print("  ⚠ 演示数据按钮未找到")
+                    _miss(problems, "sidebar", "演示数据按钮未找到")
                     continue
-                _goto(at, page)
+                if not _goto(at, page, problems):
+                    continue
                 t0 = time.time()
                 if not _click(at, btn):
-                    print(f"  ⚠ 未找到按钮：{btn}")
+                    _miss(problems, btn, "按钮未找到（断言未执行）：%s @ %s" % (btn, page))
                     continue
                 dt = time.time() - t0
                 at.run()                      # 再跑一轮，检查结果渲染是否稳定
