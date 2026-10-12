@@ -696,6 +696,10 @@ def answer(ctx, question, use_rerank=False, history=None, source_filter=None,
     # 越界角标已被 sanitize_citations 确定性修复（重定位/重编号/标注），
     # 对应的过期 range 报错从 issues 中移除，保留"引用整理"记录说明做过什么。
     issues = [i for i in issues if "超出有效来源范围" not in i]
+    # 用户在问题里自己给出的数字（如"2031 年"）不属于模型编造，不应计入 unverified，
+    # 否则拒答场景会出现"核验说明…2031"这类把提问者自身用词标为未验证的噪声。
+    if unverified and question:
+        unverified = [u for u in unverified if str(u) not in question]
     if unverified:
         text = (text.rstrip()
                 + "\n\n> ⚠️ 核验说明：以下内容未在来源文本中找到对应依据，请谨慎对待："
