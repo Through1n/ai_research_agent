@@ -270,16 +270,28 @@ def render(ctx):
 
     if c2.button("📝 一键生成领域综述"):
         if llm_guard(ctx, "领域综述生成"):
-            with st.spinner(step_text("📝 正在生成领域综述")):
+            # 话术 3：该步压测 31.90s，静态 spinner 全程文案不变，演示时观感等同卡死。
+            # 改用 st.status 并把 generate_review 上报的阶段实时反映到标题上。
+            with st.status(step_text("📝 正在生成领域综述"), expanded=True) as status:
+
+                def _rev_progress(stage):
+                    try:
+                        status.update(label=f"📝 正在生成领域综述 · {stage}")
+                    except Exception:
+                        pass
+
                 try:
                     # 复用已构建的真实图谱（演示图谱不复用），避免重复解析引用关系
                     pack = st.session_state.get("graph_pack") or {}
                     G = pack.get("G") if isinstance(pack, dict) else None
                     if G is None or pack.get("demo"):
+                        _rev_progress("⓪ 解析引用关系建图…")
                         G, _ = g.build_graph(ctx)
                     metrics = g.analyze(G)
                     corner, edge = g.classify_papers(G, metrics)
-                    st.session_state["review"] = g.generate_review(ctx, G, metrics, corner) or ""
+                    st.session_state["review"] = g.generate_review(
+                        ctx, G, metrics, corner, progress_cb=_rev_progress) or ""
+                    status.update(label="✅ 领域综述已生成", state="complete")
                     st.success("✅ 领域综述已生成")
                 except Exception as e:
                     friendly_error("生成综述", e,

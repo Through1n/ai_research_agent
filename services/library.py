@@ -5,6 +5,7 @@ import queue
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 
@@ -16,6 +17,10 @@ from config import UPLOAD_DIR, PDF_DIR, STORAGE_DIR
 PDF_BATCH_SIZE = 20
 PDF_PAGE_TIMEOUT_SECONDS = 30
 PDF_PROGRESS_INTERVAL = 50
+# 扫描件 OCR 并发度：视觉模型调用是网络 I/O 密集型，串行会逐页累加耗时
+# （话术 2 压测实测：15 页 111.87s，约 7.5s/页）。并发后近似降到 1/N。
+# 取 3 而非更大：兼顾提速与该视觉接口的限流（超并发会触发 429 退避，反而更慢）。
+OCR_PARALLEL = 3
 
 # R9 官方测试 PDF 重建清单：scripts/setup_real_library.py 与 UI「一键重建文献库」
 # 共用同一份元数据与同一套 rebuild_from_pdf_dir 代码路径，保证任何人可复现。
@@ -596,34 +601,67 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
         batch_end = min(batch_start + PDF_BATCH_SIZE, total)
         batch_texts = []
         doc_cache = {}
-        for page_index in range(batch_start, batch_end):
-            text, heading_data, error = _extract_page_with_timeout(
-                raw, page_index, use_ocr, getattr(ctx, "llm", None), timeout_per_page,
-                doc_cache=doc_cache,
-            )
+        page_indexes = list(range(batch_start, batch_end))
+        # 小文档（≤100 页）每页上报进度，保证扫描件 OCR 等慢页也有真实进度；
+        # 大文档保持每 50 页，避免高频回调拖慢 UI。（R9）
+        # 话术 3：大文档进度粒度由固定 50 页改为自适应约 50 档
+        # （541 页实测由 11 次回调提升到约 54 次，几乎不再出现长时间无反馈的观感卡顿）。
+        interval = 1 if total <= 2 * PDF_PROGRESS_INTERVAL else max(10, total // 50)
+        results = {}
+        done_cnt = 0
+
+        def _handle(pi, text, heading_data, error):
+            """单页结果统一处理：错误归类 + 进度上报，按页号存回 results 保证顺序。"""
+            nonlocal ocr_error, done_cnt
             if not error and parsing.is_ocr_error_text(text):
                 error = str(text).strip("[]")[:300]
                 if not ocr_error:
                     ocr_error = str(text)
             if error:
                 reason = str(error)[:300]
-                failed_pages.append({"page": page_index + 1, "error": reason})
-                _notify_page_error(on_page_error, page_index, reason)
-                text = ""
-                heading_data = {"lines": [], "text": ""}
-            batch_texts.append(text or "")
+                failed_pages.append({"page": pi + 1, "error": reason})
+                _notify_page_error(on_page_error, pi, reason)
+                text, heading_data = "", {"lines": [], "text": ""}
+            results[pi] = (text or "", heading_data or {"lines": [], "text": ""})
+            done_cnt += 1
+            shown = min(batch_start + done_cnt, total)
+            if done_cnt % interval == 0 or done_cnt == len(page_indexes):
+                _notify_pdf_progress(progress_cb, shown, total,
+                                     f"已处理 {shown}/{total} 页")
+
+        if use_ocr and len(page_indexes) > 1:
+            # 扫描件 OCR 并发（话术 3）：视觉调用是网络 I/O 密集型，串行逐页累加。
+            # 每页传 doc_cache=None，让各线程开独立文档实例，
+            # 避免多线程并发访问同一个 PyMuPDF 文档（非线程安全）。
+            with ThreadPoolExecutor(max_workers=OCR_PARALLEL) as pool:
+                futures = {
+                    pool.submit(_extract_page_with_timeout, raw, pi, use_ocr,
+                                getattr(ctx, "llm", None), timeout_per_page, None): pi
+                    for pi in page_indexes
+                }
+                for fut in as_completed(futures):
+                    pi = futures[fut]
+                    try:
+                        text, heading_data, error = fut.result()
+                    except Exception as exc:
+                        text, heading_data, error = "", {"lines": [], "text": ""}, str(exc)[:300]
+                    _handle(pi, text, heading_data, error)
+        else:
+            for page_index in page_indexes:
+                text, heading_data, error = _extract_page_with_timeout(
+                    raw, page_index, use_ocr, getattr(ctx, "llm", None), timeout_per_page,
+                    doc_cache=doc_cache,
+                )
+                _handle(page_index, text, heading_data, error)
+
+        for pi in page_indexes:
+            text, heading_data = results[pi]
+            batch_texts.append(text)
             heading_pages.append(heading_data)
             if text:
                 if full_text_buffer.tell() > 0:
                     full_text_buffer.write("\n\n")
                 full_text_buffer.write(text)
-            done = page_index + 1
-            # 小文档（≤100 页）每页上报进度，保证扫描件 OCR 等慢页也有真实进度；
-            # 大文档保持每 50 页，避免高频回调拖慢 UI。（R9）
-            interval = 1 if total <= 2 * PDF_PROGRESS_INTERVAL else PDF_PROGRESS_INTERVAL
-            if done % interval == 0 or done == total:
-                _notify_pdf_progress(progress_cb, done, total,
-                                     f"已处理 {done}/{total} 页")
 
         _close_batch_doc(doc_cache)
         page_texts.extend(batch_texts)

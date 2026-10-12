@@ -719,11 +719,22 @@ def _structure_appendix(ctx, st):
     return "\n".join(lines)
 
 
-def generate_review(ctx, G, metrics, cornerstone):
+def generate_review(ctx, G, metrics, cornerstone, progress_cb=None):
     """基于图谱结构（社区发现 → 簇代表 → 时间线 → 引用骨干边 → 中心性 Top）驱动的中文综述。
 
     签名与返回类型（str/Markdown）向后兼容；图谱为空时退回摘要拼接的旧行为。
+    progress_cb: 可选阶段进度回调（话术 3：压测实测本步 31.90s 且此前全程无进度提示，
+                 演示时观感等同卡死，故拆成"结构解析 / 正文生成"两段上报）。
     """
+
+    def _say(stage):
+        if progress_cb:
+            try:
+                progress_cb(stage)
+            except Exception:
+                pass
+
+    _say("① 解析引用图谱结构（社区发现 / 时间线 / 骨干边）…")
     st = review_structure(ctx, G, metrics, cornerstone)
 
     # ---- 图谱不可用：退回旧版摘要拼接（保持原行为，但走统一 LLM 入口） ----
@@ -742,6 +753,7 @@ def generate_review(ctx, G, metrics, cornerstone):
         return out
 
     cluster_block, timeline_block, backbone_block, bridge_block, pr_block = _structure_blocks(ctx, st)
+    _say("② 生成综述正文（大模型撰写中，约需 20~40 秒）…")
     corner_block = "\n".join(
         f"- 《{ctx.papers[n].get('title', n)}》({_node_year(ctx, n) or '年份未知'}) "
         f"{str(ctx.papers[n].get('abstract', ''))[:200]}" for n in (cornerstone or [])) or "（无）"
