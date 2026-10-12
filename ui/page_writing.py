@@ -19,7 +19,7 @@ import re
 import time
 
 import streamlit as st
-from ui.common import embed_html, page_header
+from ui.common import embed_html, page_header, show_error
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -89,7 +89,7 @@ def _render_plan_chart(df, plan):
             return
         st.plotly_chart(fig, width="stretch")
     except Exception as e:
-        st.error(f"自动图表渲染失败（{plan.get('title', kind)}）：{type(e).__name__}: {str(e)[:160]}")
+        show_error("渲染图表（%s）" % plan.get('title', kind), e)
 
 
 def _csv_section(ctx):
@@ -103,7 +103,7 @@ def _csv_section(ctx):
             st.session_state.auto_captions = {}
             st.session_state.caption = ""
         except Exception as e:
-            st.error(f"CSV 解析失败：{type(e).__name__}: {str(e)[:160]}")
+            show_error("解析 CSV", e)
     if st.button("📂 载入示例数据 demo_data/data.csv"):
         try:
             from config import DEMO_DIR
@@ -117,7 +117,7 @@ def _csv_section(ctx):
             else:
                 st.warning("未找到示例 CSV。")
         except Exception as e:
-            st.error(f"载入示例数据失败：{str(e)[:160]}")
+            show_error("载入示例数据", e)
 
     df = st.session_state.get("df")
     if df is None:
@@ -131,7 +131,7 @@ def _csv_section(ctx):
         try:
             plan = writing.infer_chart_plan(df)
         except Exception as e:
-            st.error(f"图表推荐失败：{type(e).__name__}: {str(e)[:160]}")
+            show_error("推荐图表", e)
             plan = []
         st.session_state.chart_plan = plan
     if plan:
@@ -199,7 +199,7 @@ def _csv_section(ctx):
                     st.plotly_chart(px.parallel_coordinates(df, dimensions=nums, template=tpl),
                                     width="stretch")
         except Exception as e:
-            st.error(f"自定义图表渲染失败：{type(e).__name__}: {str(e)[:160]}")
+            show_error("渲染自定义图表", e)
         if st.button("🤖 自动提炼 Figure Caption（自定义图）"):
             if not writing.llm_available(ctx):
                 st.warning("未配置 API Key，无法生成 Figure Caption。")
@@ -279,7 +279,7 @@ def _outline_section(ctx):
             try:
                 refs_text, refs_list, source = writing.reference_whitelist(ctx, preferred)
             except Exception as e:
-                st.error(f"References 白名单抽取失败：{type(e).__name__}: {str(e)[:160]}")
+                show_error("抽取 References 白名单", e)
                 return
         if not refs_list:
             st.session_state.outline = writing.EMPTY_LIBRARY_HINT
@@ -303,7 +303,7 @@ def _outline_section(ctx):
         try:
             res = writing.finalize_outline(raw, refs_list, source, elapsed_sec=time.time() - t0)
         except Exception as e:
-            st.error(f"大纲后处理失败：{type(e).__name__}: {str(e)[:160]}")
+            show_error("处理大纲", e)
             return
         st.session_state.outline = res.get("text", "") or ""
         st.session_state.outline_meta = res
@@ -461,7 +461,7 @@ def _diagram_section(ctx):
                 with st.spinner("🎨 正在生成拓扑图代码…"):
                     st.session_state.diagram = (kind, writing.diagram(ctx, kind, topic))
             except Exception as e:
-                st.error(f"生成失败：{type(e).__name__}: {str(e)[:160]}")
+                show_error("生成综述", e)
     dia = st.session_state.get("diagram")
     if not dia:
         return
@@ -483,7 +483,7 @@ def _diagram_section(ctx):
             st.caption("Python Matplotlib 代码已生成；可在「🤖 Agent 总助手」的代码执行沙箱中"
                        "运行后查看出图结果。")
     except Exception as e:
-        st.error(f"拓扑图渲染失败：{type(e).__name__}: {str(e)[:160]}")
+        show_error("渲染拓扑图", e)
 
 
 # ---------------------------------------------------------------- 翻译
@@ -504,7 +504,7 @@ def _translate_section(ctx):
                     else:
                         st.session_state.trres = writing.translate_to_chinese(ctx, text) or ""
             except Exception as e:
-                st.error(f"翻译失败：{str(e)[:160]}")
+                show_error("翻译正文", e)
     if st.session_state.get("trres"):
         st.markdown(st.session_state["trres"])
 

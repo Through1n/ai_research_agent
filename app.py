@@ -6,9 +6,27 @@
 演示加固：依赖导入 / 容器初始化 / 侧边栏 / 页面路由全部有异常兜底，
 任何单页异常都不会把整个应用打成红色 Traceback（见 ui/common.py safe_render）。
 """
+import os
+import time
 import traceback
 
 import streamlit as st
+
+LOG_DIR = "logs"
+LOG_FILE = os.path.join(LOG_DIR, "errors.log")
+
+
+def _log_error(what, exc):
+    """异常落盘（不依赖 ui.common，供依赖导入失败等早期场景使用）。"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write("[%s] %s | %s: %s\n%s\n%s\n" % (
+                time.strftime("%Y-%m-%d %H:%M:%S"), what, type(exc).__name__, exc,
+                tb[-4000:], "-" * 60))
+    except Exception:
+        pass
 
 st.set_page_config(page_title="AI4S 科研助手 Agent", page_icon="🔬", layout="wide")
 
@@ -21,10 +39,11 @@ try:
                     page_search, page_graph, page_writing, page_misc)
     from ui import desktop_chrome
 except Exception as e:                                   # pragma: no cover
-    st.error(f"❌ 依赖模块加载失败：{str(e)[:200]}")
+    _log_error("加载依赖模块", e)
+    st.error("⚠️ 操作失败：加载依赖模块。依赖未安装或版本不匹配，应用无法启动。")
     st.caption("🩺 可能原因：依赖未安装或版本不匹配（requirements.txt）。")
     st.caption("🛠️ 怎么办：在项目环境执行 `pip install -r requirements.txt` 后重启。")
-    with st.expander("🔧 技术细节（供排查）", expanded=False):
+    with st.expander("🔍 查看技术细节"):
         st.code(traceback.format_exc(limit=6))
     st.stop()
 
@@ -66,10 +85,11 @@ ensure_state({
 try:
     ctx = get_container()
 except Exception as e:                                   # pragma: no cover
-    st.error(f"❌ 服务容器初始化失败：{str(e)[:200]}")
+    _log_error("初始化服务容器", e)
+    st.error("⚠️ 操作失败：初始化服务容器。存储目录不可写或已损坏，应用无法启动。")
     st.caption("🩺 可能原因：向量库目录不可写 / storage 损坏 / 磁盘权限不足。")
     st.caption("🛠️ 怎么办：删除 storage/chroma 目录后重启即可自动重建。")
-    with st.expander("🔧 技术细节（供排查）", expanded=False):
+    with st.expander("🔍 查看技术细节"):
         st.code(traceback.format_exc(limit=6))
     st.stop()
 
@@ -77,7 +97,8 @@ except Exception as e:                                   # pragma: no cover
 try:
     menu = render_sidebar(ctx)
 except Exception as e:                                   # pragma: no cover
-    st.sidebar.error(f"⚠️ 侧边栏渲染异常：{str(e)[:160]}")
+    _log_error("渲染侧边栏", e)
+    st.sidebar.error("⚠️ 操作失败：渲染侧边栏。已回退到默认页面，主体功能仍可使用。")
     st.sidebar.caption("🛠️ 怎么办：已回退到默认页面，主体功能仍可使用。")
     menu = "🤖 0. Agent 总助手"
 

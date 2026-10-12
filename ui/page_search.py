@@ -4,7 +4,7 @@ import streamlit as st
 
 from services import extern
 from tools import definitions as df
-from ui.common import (ensure_state, page_header, net_error, friendly_error, pretty_table,
+from ui.common import (ensure_state, page_header, net_error, friendly_error, show_error, pretty_table,
                        empty_state, llm_guard, long_block, step_text)
 
 # 推荐列表最多展示条数
@@ -365,6 +365,6 @@ def render(ctx):
         try:
             fn(ctx)
         except Exception as e:
-            st.error(f"⚠️ 区块渲染异常，已跳过该模块：{str(e)[:160]}")
+            show_error("渲染该区块", e)
             st.caption("🛠️ 怎么办：其余检索模块不受影响，可继续使用。")
         st.markdown("---")

@@ -17,7 +17,7 @@ import html as _html
 
 import streamlit as st
 from services import rag
-from ui.common import require_library, page_header
+from ui.common import require_library, page_header, show_error
 
 
 EX = ["这篇论文提出了什么模型？", "训练用了什么 GPU？数量和型号？",
@@ -262,7 +262,7 @@ def render(ctx):
                                         compare_papers=list(compare_papers) or None,
                                         progress=_progress)
                 except Exception as e:
-                    st.error(f"问答失败：{str(e)[:200]}")
+                    show_error("生成回答", e)
                     result = None
                 finally:
                     try:

@@ -15,6 +15,8 @@ memory_mb / require_library / resolve_pdf / embed_html）全部保留，签名�
 以免破坏其他页面（page_qa / page_reading / page_writing）的既有调用。
 """
 import json
+import os
+import time
 import traceback
 from html import escape as _escape
 
@@ -146,13 +148,78 @@ def empty_state(text: str, hints=(), icon: str = "📭"):
         st.caption("👉 " + "；".join(f"**{h}**" if not h.startswith(("👉", "·")) else h for h in hints))
 
 
-def friendly_error(what: str, exc, reasons=(), actions=()):
-    """失败统一话术：错误 + 可能原因 + 怎么办（演示加固：绝不出现红色 Traceback）。"""
-    st.error(f"❌ {what}失败：{str(exc)[:180]}")
+# ==================== 异常统一包装（话术：统一所有页面的异常输出） ====================
+LOG_DIR = "logs"
+LOG_FILE = os.path.join(LOG_DIR, "errors.log")
+
+
+def log_exception(what, exc, extra=""):
+    """把异常完整写入 logs/errors.log —— 包装只改展示方式，绝不吞掉异常。"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write("[%s] %s | %s: %s\n%s\n%s\n" % (
+                time.strftime("%Y-%m-%d %H:%M:%S"), what, type(exc).__name__, exc,
+                extra or "", tb[-4000:]))
+    except Exception:
+        pass
+    return None
+
+
+def friendly_hint(exc):
+    """异常 → 一句用户能看懂的话（不暴露内部实现细节）。"""
+    name = type(exc).__name__.lower()
+    msg = str(exc)
+    low = msg.lower()
+    if isinstance(exc, TimeoutError) or "timeout" in low or "timed out" in low:
+        return "网络请求超时，请稍后重试"
+    if "401" in msg or "403" in msg or "unauthor" in low or "invalid api key" in low:
+        return "API Key 无效或已过期，请在左侧重新填写后重试"
+    if "429" in msg or "rate limit" in low or "quota" in low:
+        return "请求过于频繁或额度不足，请稍后再试"
+    if isinstance(exc, ConnectionError) or "connection" in low:
+        return "网络连接失败，请检查网络后重试"
+    if "json" in low or "expecting value" in low:
+        return "返回内容格式异常，请重试一次"
+    if isinstance(exc, FileNotFoundError) or "no such file" in low:
+        return "所需文件不存在或已被移动"
+    if isinstance(exc, PermissionError):
+        return "没有访问该文件的权限"
+    if isinstance(exc, KeyError):
+        return "数据结构中缺少必要字段，请刷新页面后重试"
+    if isinstance(exc, ValueError):
+        return "输入内容格式不符合要求，请检查后重试"
+    if "error" in name:
+        return "发生内部错误，请重试或换一种操作方式"
+    return "发生内部错误，请重试或换一种操作方式"
+
+
+def show_error(what, exc, hint="", reasons=(), actions=(), log=True):
+    """统一的异常展示：⚠️ 操作失败 前缀 + 人话说明 + 技术细节折叠 + 落盘日志。
+
+    what   —— 用户视角的操作名，如「生成回答」「打开 PDF」
+    exc    —— 捕获到的异常对象
+    hint   —— 可选，覆盖自动推断的人话说明
+    """
+    if log:
+        log_exception(what, exc)
+    st.error("⚠️ 操作失败：%s。%s" % (what, hint or friendly_hint(exc)))
     if reasons:
         st.caption("🩺 可能原因：" + "；".join(str(r) for r in reasons if r))
     if actions:
         st.caption("🛠️ 怎么办：" + "；".join(str(a) for a in actions if a))
+    with st.expander("🔍 查看技术细节"):
+        st.code("%s: %s" % (type(exc).__name__, exc))
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        if tb.strip():
+            st.code(tb[-3000:])
+    return None
+
+
+def friendly_error(what: str, exc, reasons=(), actions=()):
+    """失败统一话术（旧签名保留）：转为 show_error，保证全站前缀/折叠/日志一致。"""
+    return show_error(what, exc, reasons=reasons, actions=actions)
 
 
 _NET_REASONS = ["演示现场外网不可达或被代理拦截", "arXiv / PubMed 接口限流或临时不可用"]
@@ -290,12 +357,10 @@ def safe_render(fn, ctx, what="该功能"):
     try:
         fn(ctx)
     except Exception as e:
-        st.error(f"⚠️ 「{what}」页面暂时不可用：{str(e)[:200]}")
-        st.caption("🩺 可能原因：该项依赖的外部服务未就绪 / 数据尚未加载 / 网络受限。")
-        st.caption("🛠️ 怎么办：点击左侧「🚀 一键加载演示数据」后重试；"
-                   "或切换到其他页面继续演示，其余功能不受影响。")
-        with st.expander("🔧 技术细节（供排查）", expanded=False):
-            st.code(traceback.format_exc(limit=6))
+        show_error("渲染「%s」页面" % what, e,
+                   reasons=["该项依赖的外部服务未就绪 / 数据尚未加载 / 网络受限"],
+                   actions=["点击左侧「🚀 一键加载演示数据」后重试",
+                            "或切换到其他页面继续演示，其余功能不受影响"])
 
 
 def require_library(ctx):

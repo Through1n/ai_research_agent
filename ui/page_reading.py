@@ -46,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 
-from ui.common import embed_html, page_header
+from ui.common import embed_html, page_header, show_error
 
 from config import UPLOAD_DIR, PDF_DIR
 from services import parsing, writing
@@ -1212,7 +1212,7 @@ def render(ctx):
         try:
             doc = parsing.open_doc(path)
         except Exception as e:
-            st.error(f"❌ PDF 打开失败：{str(e)[:160]}")
+            show_error("打开 PDF", e)
             st.caption("🛠️ 怎么办：确认文件未损坏；或改用「📁 文献库管理」重新上传。")
             return
         tps = int(getattr(doc, "page_count", 0) or 0)
