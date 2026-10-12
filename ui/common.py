@@ -181,6 +181,65 @@ def llm_guard(ctx, action: str = "该操作") -> bool:
     return False
 
 
+# LLM 失败分类话术：命中 core/llm.py 落盘的 last_error 后按类型给人话指引
+_LLM_ERR_KINDS = (
+    ("key", ("401", "invalid_api_key", "令牌", "验证不正确", "api key", "apikey", "unauthorized"),
+     "API Key 无效或已过期",
+     ["Key 填写有误 / 已过期 / 被平台重置", "平台账号额度已用完"],
+     ["在左侧「接入方式」重新填写正确的 Key，再点「🔌 测试连通性」验证",
+      "切换到其他预设平台或本地 Ollama 继续演示"]),
+    ("rate", ("429", "rate limit", "too many requests", "限流", "频率"),
+     "触发平台限流（429）",
+     ["请求过于频繁，平台暂时限流", "当前 Key 的并发/额度已打满"],
+     ["等待 30 秒到 1 分钟后重试", "减少连续操作，或切换其他平台"]),
+    ("timeout", ("timeout", "timed out", "超时"),
+     "大模型调用超时",
+     ["平台响应慢或网络抖动（已自动重试 3 次）", "生成内容过长导致超时"],
+     ["重试一次；仍超时可换更短的问题", "检查网络/代理后重试"]),
+    ("network", ("connection", "connect", "network", "网络", "ssl", "proxy"),
+     "无法连接大模型服务",
+     ["本机网络不可达或代理拦截了出网请求", "自定义端点 Base URL 填写有误"],
+     ["检查网络/代理设置后重试", "自定义端点请核对 Base URL 与服务是否已启动"]),
+)
+
+
+def classify_llm_error(err) -> tuple:
+    """把原始错误文本分类为 (人话摘要, 可能原因 list, 怎么办 list)；未命中给通用兜底。"""
+    s = str(err or "")
+    low = s.lower()
+    for _kind, keys, what, reasons, actions in _LLM_ERR_KINDS:
+        if any(k in low for k in keys):
+            return what, list(reasons), list(actions)
+    return ("大模型调用失败", ["平台返回了未分类的错误"], ["重试一次"])
+
+
+def llm_failure_banner(ctx, action: str = "大模型调用"):
+    """把 ctx.llm.last_error 渲染成人话警告（框架层统一消费，惠及所有页面）。
+
+    背景：core/llm.py 调用失败（重试后仍失败，或 401/400 等不必重试的错误）
+    不抛异常，只把原因写进 llm.last_error 并返回伪响应——用户看到的是
+    「【LLM 暂时不可用…】」混在答案里，既不知道该怎么办，也不知道日志在哪。
+    本函数在主体区顶部按错误类型给出「人话 + 可能原因 + 怎么办 + 日志位置」。
+    last_error 在下一次调用成功时自动清空，横幅随之消失，无需手动关闭。
+    """
+    try:
+        err = getattr(getattr(ctx, "llm", None), "last_error", None)
+    except Exception:
+        err = None
+    if not err:
+        return
+    what, reasons, actions = classify_llm_error(err)
+    try:
+        from core.llm import FAIL_LOG_PATH_HINT
+    except Exception:
+        FAIL_LOG_PATH_HINT = "storage/llm_failures.log"
+    st.warning(f"⚠️ {action}失败：{what}（点击页面内其他功能仍可继续使用）")
+    st.caption("🩺 可能原因：" + "；".join(reasons))
+    st.caption("🛠️ 怎么办：" + "；".join(actions) + f"；完整错误已记录到 {FAIL_LOG_PATH_HINT}")
+    with st.expander("🔧 错误摘要（供排查，已自动脱敏）", expanded=False):
+        st.code(str(err)[:300])
+
+
 # ============================ UI 规范 5：长文本折叠 ============================
 def long_block(text, title: str = "查看完整内容", limit: int = LONG_TEXT_LIMIT,
                expander_label: str = "📄"):

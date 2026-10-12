@@ -5,6 +5,13 @@
 - 溯源卡片在本文件内自建增强版（不改 ui/common.py）：带 href="#p{page}" 锚点 + 跳转按钮；
 - 跳转写入 session_state["qa_jump_page"]（结构化）与 query_params（阅读页已实现的消费方）；
 - 支持"全部文献 / 单篇"范围锁定、多篇勾选对比、拒答闸门与可疑引用的可视化。
+
+Round 9 改动（S1）：
+- 缺陷 C：库内片段极少（< SMALL_LIBRARY_CHUNKS）时给出可操作的补充引导；
+- 缺陷 B：问答期间通过 progress 回调展示"检索→扩展→生成"阶段进度，
+  强命中时跳过查询扩展，用户更快看到首字/结果；
+- 抗幻觉：展示 result["unverified"]（答案中未在来源验证的数字/实体）与
+  引用净化记录；溯源卡片编号与答案角标由 rag.sanitize_citations 保证一一对应。
 """
 import html as _html
 
@@ -22,6 +29,33 @@ SNIPPET_LEN = 200            # 溯源卡片折叠区展示的原文片段长度�
 MAX_COMPARE_PAPERS = 5       # 多篇对比最多勾选篇数
 JUMP_KEY = "qa_jump_page"    # 跨页联动 session_state key
 READING_PAGE_IDX = 3         # 📖 版式阅读页在 MENU 中的索引（ui/sidebar.py MENU / app.py）
+SMALL_LIBRARY_CHUNKS = 8     # 与 services/rag.py 保持一致：片段少于此值给出补充引导
+
+# 查询扩展模式 → 人话说明（debug["expansion_mode"]）
+_EXPAND_MODE_LABELS = {
+    "llm": "LLM 查询扩展（弱命中触发）",
+    "cached": "查询扩展命中缓存（未重复调用 LLM）",
+    "skipped_strong_hit": "原查询已强命中，跳过查询扩展（节省一次 LLM 调用）",
+    "offline_strong_hit": "原查询已强命中，跳过 LLM 扩展；离线符号对齐变体仍参与检索（零成本）",
+    "offline_no_key": "未配置 Key，离线词表兜底",
+    "offline_key_issue": "Key 形态异常，已拦截并走离线词表兜底",
+    "offline_llm_failed": "LLM 扩展失败，离线词表兜底",
+}
+
+
+def _library_guidance(ctx):
+    """缺陷 C：库内片段极少时返回可操作引导文案；内容丰富返回 None。"""
+    try:
+        n = len(getattr(ctx, "chunks", []) or [])
+    except Exception:
+        n = 0
+    if n == 0:
+        return None  # require_library 已给出空库引导
+    if n < SMALL_LIBRARY_CHUNKS:
+        return (f"📌 **当前文献库仅 {n} 个片段**（{len(getattr(ctx, 'files', []) or [])} 篇），"
+                f"检索覆盖面有限，答案可能不完整。建议：① 到「📁 文献库管理」上传更多 PDF；"
+                f"② 或点击左侧「🚀 一键加载演示数据」；③ 或在该页重建索引后重试。")
+    return None
 
 
 def _init_state():
@@ -126,8 +160,25 @@ def _render_debug(run):
         st.caption(f"🧬 dense 路消费 {len(dense_ranks)} 个查询变体（含原查询），结果按 RRF(k=60) 合并")
     if d.get("source_filter"):
         st.caption(f"🔒 范围已锁定单篇：{d['source_filter']}")
+    cap = d.get("source_cap") or {}
+    if cap:
+        dist = "，".join(f"{k}×{v}" for k, v in (cap.get("per_source") or {}).items())
+        st.caption(f"⚖️ 来源多样性截断：融合池 {cap.get('pool', 0)} 条 → 入选 {cap.get('kept', 0)} 条"
+                   f"（{dist}）——防止大书淹没 top-k")
+    if (d.get("source_cap") or {}).get("dropped_stale"):
+        st.caption(f"🗑️ 同论文多版本去重：丢弃旧版本片段 {(d.get('source_cap') or {}).get('dropped_stale')} 条"
+                   "（最新版入池覆盖充分，旧版数值可能已被作者修订）")
     if d.get("per_paper"):
         st.caption("📚 对比模式每篇取到：" + "，".join(f"{k}×{v}条" for k, v in d["per_paper"].items()))
+    mode = d.get("expansion_mode")
+    if mode:
+        label = _EXPAND_MODE_LABELS.get(mode, mode)
+        note = f"（{d['expand_note']}）" if d.get("expand_note") else ""
+        st.caption(f"🧭 查询扩展：{label}{note}")
+    t = d.get("timings") or {}
+    if t:
+        st.caption(f"⏱️ 检索耗时：原查询双路 {t.get('phase1_ms', 0)}ms"
+                   f" + 扩展/变体 {t.get('expand_ms', 0)}ms")
     st.caption(f"🎯 最高相关度 {float(d.get('top_score') or 0):.2f}"
                f"（拒答阈值 {rag.RELEVANCE_FLOOR}）；自动修复次数 {int(d.get('repairs') or 0)}"
                f"（上限 {rag.MAX_REPAIR}）")
@@ -143,6 +194,11 @@ def render(ctx):
     if not require_library(ctx):
         return
     _init_state()
+
+    # ---------- 缺陷 C：库内内容极少时的可操作引导 ----------
+    guidance = _library_guidance(ctx)
+    if guidance:
+        st.info(guidance)
 
     # 跨页联动提示：本页写入，📖版式阅读页消费（见报告"跨文件约定"）
     pending = st.session_state.get(JUMP_KEY)
@@ -192,13 +248,27 @@ def render(ctx):
             st.warning("请先在左侧填入 API Key。")
         else:
             with st.spinner("正在检索、生成并校验答案…"):
+                stage_ph = st.empty()   # 阶段进度（rag.answer 的 progress 回调驱动）
+
+                def _progress(stage):
+                    try:
+                        stage_ph.caption(f"⏳ {stage}")
+                    except Exception:
+                        pass
+
                 try:
                     result = rag.answer(ctx, q.strip(), use_rerank=use_rerank,
                                         source_filter=source_filter,
-                                        compare_papers=list(compare_papers) or None)
+                                        compare_papers=list(compare_papers) or None,
+                                        progress=_progress)
                 except Exception as e:
                     st.error(f"问答失败：{str(e)[:200]}")
                     result = None
+                finally:
+                    try:
+                        stage_ph.empty()
+                    except Exception:
+                        pass
             if result:
                 st.session_state["qa_runs"].append({
                     "id": st.session_state["qa_run_seq"],
@@ -206,6 +276,7 @@ def render(ctx):
                     "a": result.get("answer", ""),
                     "sources": result.get("sources", []),
                     "issues": result.get("issues", []),
+                    "unverified": result.get("unverified", []),
                     "debug": result.get("debug", {}),
                     "refused": bool(result.get("refused")),
                     "top_score": result.get("top_score", 0.0),
@@ -229,6 +300,9 @@ def render(ctx):
             st.warning("⚠️ 幻觉防护校验未完全通过：\n" + "\n".join(f"- {x}" for x in run["issues"]))
         else:
             st.success("✅ 引用校验通过：角标均在有效来源范围内，且与来源文本存在实质词汇重叠")
+        if run.get("unverified"):
+            st.warning("⚠️ 以下内容未在来源文本中找到对应依据（已自动标注，请谨慎对待）：\n"
+                       + "\n".join(f"- {x}" for x in run["unverified"]))
         srcs = run.get("sources") or []
         if srcs:
             with st.expander(f"🔍 溯源（{len(srcs)} 条来源，点击可定位原文）", expanded=False):

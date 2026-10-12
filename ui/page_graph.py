@@ -26,7 +26,11 @@ def _title(ctx, n):
 
 
 def _metrics_rows(ctx, nodes, metrics):
-    """把图论指标拼成 DataFrame 行；任何字段缺失都按 0 处理，杜绝 KeyError。"""
+    """把图论指标拼成 DataFrame 行；任何字段缺失都按 0 处理，杜绝 KeyError。
+
+    年份列走 g._node_year：真实元数据优先、arXiv 编号回退次之，取不到写「未知」，
+    与综述时间线口径一致（绝不由界面层猜年份）。
+    """
     pr = (metrics or {}).get("pagerank", {}) or {}
     ind = (metrics or {}).get("indegree", {}) or {}
     bet = (metrics or {}).get("betweenness", {}) or {}
@@ -34,6 +38,7 @@ def _metrics_rows(ctx, nodes, metrics):
     return pd.DataFrame({
         "论文": [_title(ctx, n) for n in nodes],
         "文件名": list(nodes),
+        "年份": [g._node_year(ctx, n) or "未知" for n in nodes],
         "PageRank": [round(float(pr.get(n, 0)), 4) for n in nodes],
         "被引次数(入度)": [int(ind.get(n, 0)) for n in nodes],
         "中介中心性": [round(float(bet.get(n, 0)), 3) for n in nodes],
@@ -90,8 +95,10 @@ def _build_demo(ctx):
         sim, b = at(sims, 0, (0.0, None))
         if not b:
             continue
-        src, dst = (a, b) if str(ctx.papers.get(a, {}).get("year", "")) >= \
-            str(ctx.papers.get(b, {}).get("year", "")) else (b, a)
+        # 方向按年份从新到旧（近似「新论文参考旧工作」）；年份走 g._node_year
+        # （真实元数据/arXiv 回退），与综述时间线口径一致，缺失时按 0 处理
+        ya, yb = g._node_year(ctx, a) or 0, g._node_year(ctx, b) or 0
+        src, dst = (a, b) if ya >= yb else (b, a)
         if not G.has_edge(src, dst):
             G.add_edge(src, dst)
             ev = f"演示模式：主题相似度 {float(sim):.0%}（示意关系，非真实引用）"
@@ -104,8 +111,9 @@ def _build_demo(ctx):
 
 
 def _make_pack(G, edges, metrics, corner, edge, demo=False):
+    # G 一并放进 pack：综述/Future Work 按钮可复用已建好的图，省去重复解析（秒级）
     return {"html": None, "metrics": metrics, "corner": corner or [], "edge": edge or [],
-            "edges": edges or [], "nodes": list(G.nodes), "demo": demo}
+            "edges": edges or [], "nodes": list(G.nodes), "demo": demo, "G": G}
 
 
 def _render_pack(ctx, pack):
@@ -123,6 +131,15 @@ def _render_pack(ctx, pack):
     if not nodes:
         empty_state("图谱为空节点。", hints=["点击左侧「🚀 一键加载演示数据」", "或在📁文献库上传 PDF"])
         return
+
+    # 语料规模坦诚说明：逻辑节点远低于赛题「20 篇批量文献」时明确标注，
+    # 不把 2-3 节点小图上的社区/PageRank 结果冒充成大规模能力
+    if len(nodes) < g.SMALL_CORPUS_NODES:
+        st.warning(
+            f"⚠️ **语料规模坦诚说明**：本地语料经版本合并后仅 **{len(nodes)} 个逻辑节点**"
+            f"（同一 arXiv 号的多版本 PDF 会合并为 1 个节点），未达赛题『20 篇批量文献』规模。"
+            f"社区发现 / PageRank / 时间线在极小图上区分度有限——此处只证明"
+            f"『解析→建图→分析→综述』链路可用，不代表 20 篇规模下的效果。")
     pretty_table(_metrics_rows(ctx, nodes, pack.get("metrics") or {}), title="📊 图论指标")
 
     if pack.get("corner"):
@@ -144,6 +161,24 @@ def _render_pack(ctx, pack):
                 st.caption(f"ℹ️ 共 {len(edges)} 条，已展示前 {MAX_EDGE_SHOW} 条。")
     else:
         st.info("📭 未检测到引用边（孤立节点图谱仅展示图论指标）。")
+
+    # 时间线 + 主题簇：纯 networkx 确定性计算（非 LLM 生成），让小图谱也有信息量
+    G = pack.get("G")
+    if G is not None and not pack.get("demo") and G.number_of_nodes() > 0:
+        try:
+            stx = g.review_structure(ctx, G, pack.get("metrics") or {}, pack.get("corner") or [])
+        except Exception:
+            stx = None
+        if stx:
+            with st.expander("🗓️ 时间线与主题簇（networkx 确定性计算，非 LLM 生成）", expanded=True):
+                if stx["timeline"]:
+                    for y, papers in stx["timeline"]:
+                        st.markdown(f"- **{y}**：" + "、".join(f"《{_title(ctx, p)}》" for p in papers))
+                else:
+                    st.caption("文献元数据无可用年份（arXiv 编号回退也未命中），时间线不可用——不做推断。")
+                for c in stx["clusters"]:
+                    reps = "、".join(f"《{_title(ctx, r)}》" for r in c["reps"])
+                    st.markdown(f"- 主题簇 #{c['id']}「{c['label']}」（{c['size']} 篇）：代表 {reps}")
 
 
 def render(ctx):
@@ -204,7 +239,10 @@ def render(ctx):
                            actions=["点上方按钮重新构建图谱"])
     else:
         empty_state("尚未构建图谱。",
-                    hints=["点上方「🕸️ 构建引用图谱」", "演示数据加载后可一键生成 BERT→Transformer 关系"])
+                    hints=["点上方「🕸️ 构建引用图谱」",
+                           "演示数据加载后可一键生成 BERT→Transformer 关系",
+                           "⚠️ 本地演示语料经版本合并后仅 2-3 个逻辑节点，未达赛题『20 篇』规模；"
+                           "图谱指标在小语料下仅供参考，上传更多含 References 的 PDF 效果更佳"])
 
     st.markdown("---")
     c1, c2, c3 = st.columns([1, 1, 1])
@@ -234,7 +272,11 @@ def render(ctx):
         if llm_guard(ctx, "领域综述生成"):
             with st.spinner(step_text("📝 正在生成领域综述")):
                 try:
-                    G, edges = g.build_graph(ctx)
+                    # 复用已构建的真实图谱（演示图谱不复用），避免重复解析引用关系
+                    pack = st.session_state.get("graph_pack") or {}
+                    G = pack.get("G") if isinstance(pack, dict) else None
+                    if G is None or pack.get("demo"):
+                        G, _ = g.build_graph(ctx)
                     metrics = g.analyze(G)
                     corner, edge = g.classify_papers(G, metrics)
                     st.session_state["review"] = g.generate_review(ctx, G, metrics, corner) or ""
@@ -247,7 +289,10 @@ def render(ctx):
         if llm_guard(ctx, "Future Work 前沿扫描"):
             with st.spinner(step_text("🚀 正在扫描前沿方向")):
                 try:
-                    G, _ = g.build_graph(ctx)
+                    pack = st.session_state.get("graph_pack") or {}
+                    G = pack.get("G") if isinstance(pack, dict) else None
+                    if G is None or pack.get("demo"):
+                        G, _ = g.build_graph(ctx)
                     st.session_state["future"] = g.explore_future(ctx, G) or ""
                     st.success("✅ 前沿方向扫描完成")
                 except Exception as e:

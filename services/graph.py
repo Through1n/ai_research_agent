@@ -27,6 +27,9 @@ REVIEW_EDGE_BACKBONE = 15      # 综述注入的引用骨干边条数
 REVIEW_REPS_PER_CLUSTER = 3    # 每个主题簇取前几篇 PageRank 最高者作代表
 FUTURE_MAX_ITEMS = 12          # Future Work 结构化输出最多条数
 LLM_TEMPERATURE = 0.4          # LLM 调用默认温度
+# 语料规模坦诚阈值：逻辑节点少于此值时，图谱指标（社区/PageRank/时间线）区分度有限，
+# UI 与综述附录必须如实标注「未达赛题 20 篇批量文献规模」，不冒充大图效果
+SMALL_CORPUS_NODES = 5
 # True：优先复用 ctx.llm（保留用户在侧边栏选择的 provider/key），不可用时降级 call_llm_with_retry；
 # False：一律走 core.llm.call_llm_with_retry（core/llm.py:129，读 config 默认 provider）。
 PREFER_CTX_LLM = True
@@ -626,7 +629,11 @@ def review_structure(ctx, G, metrics, cornerstone, reps_per_cluster=REVIEW_REPS_
 def _structure_blocks(ctx, st):
     """把骨架渲染为注入 prompt 的文本块（主题簇 / 簇代表 / 时间线 / 骨干边 / 中心性 Top）。"""
     def _fmt(n):
-        return f"《{ctx.papers.get(n, {}).get('title', n)}》({ctx.papers.get(n, {}).get('year', '')})"
+        # 年份一律走 _node_year：真实元数据优先，arXiv 编号回退次之，取不到写"年份未知"。
+        # 旧实现直接读 papers[n]["year"]，实测该字段常为空串，prompt 里出现
+        # "《Attention Is All You Need》()" 这种空括号，模型只能瞎猜年份。
+        y = _node_year(ctx, n)
+        return f"《{ctx.papers.get(n, {}).get('title', n)}》({y if y else '年份未知'})"
 
     clus_lines = []
     for c in st["clusters"]:
@@ -657,7 +664,8 @@ def _structure_blocks(ctx, st):
 def _deterministic_review(ctx, st):
     """LLM 不可用时的确定性综述：完全由图谱结构数据生成，不编造任何内容。"""
     def _fmt(n):
-        return f"《{ctx.papers.get(n, {}).get('title', n)}》({ctx.papers.get(n, {}).get('year', '')})"
+        y = _node_year(ctx, n)
+        return f"《{ctx.papers.get(n, {}).get('title', n)}》({y if y else '年份未知'})"
 
     lines = [f"### 一、研究脉络（时间线，按论文年份排序，共 {st['n_nodes']} 个节点 / {st['n_edges']} 条引用边）", ""]
     if st["timeline"]:
@@ -689,10 +697,18 @@ def _deterministic_review(ctx, st):
 def _structure_appendix(ctx, st):
     """结构化附录：把图谱计算的原始依据附在综述后，便于核查（非 LLM 生成）。"""
     def _fmt(n):
-        return f"《{ctx.papers.get(n, {}).get('title', n)}》"
+        y = _node_year(ctx, n)
+        return f"《{ctx.papers.get(n, {}).get('title', n)}》({y if y else '年份未知'})"
 
     lines = ["---", "#### 图谱结构明细（networkx 计算所得，非 LLM 生成）", "",
              f"- 节点 {st['n_nodes']} 个、引用边 {st['n_edges']} 条、主题簇 {len(st['clusters'])} 个"]
+    # 语料规模坦诚：节点数远低于赛题「20 篇批量文献」时明确标注，不冒充大图效果
+    if st["n_nodes"] < SMALL_CORPUS_NODES:
+        lines.append(
+            f"- ⚠️ **语料规模坦诚说明**：当前图谱仅 {st['n_nodes']} 个逻辑节点"
+            f"（同一 arXiv 号的多版本 PDF 会被合并为 1 个节点），未达赛题『20 篇批量文献』规模；"
+            f"社区发现 / PageRank / 时间线在极小图上区分度有限，本节结果只证明"
+            f"『解析→建图→分析→综述』链路可用，不代表 20 篇规模下的效果。")
     lines.append("- 主题簇代表论文：" + "；".join(
         f"#{c['id']}「{c['label']}」→ " + "、".join(_fmt(r) for r in c["reps"])
         for c in st["clusters"]))
@@ -713,7 +729,7 @@ def generate_review(ctx, G, metrics, cornerstone):
     # ---- 图谱不可用：退回旧版摘要拼接（保持原行为，但走统一 LLM 入口） ----
     if not st:
         abstracts = "\n".join(
-            f"《{ctx.papers[n].get('title', n)}》({ctx.papers[n].get('year','')}): "
+            f"《{ctx.papers[n].get('title', n)}》({_node_year(ctx, n) or '年份未知'}): "
             f"{ctx.papers[n].get('abstract','')[:500]}" for n in ctx.paper_order)
         corner_simple = "、".join(ctx.papers[n].get("title", n) for n in (cornerstone or []))
         prompt = (f"基于以下局域文献库，用中文撰写一篇结构完整的简短领域综述（含领域背景、主要技术脉络、"
@@ -727,7 +743,7 @@ def generate_review(ctx, G, metrics, cornerstone):
 
     cluster_block, timeline_block, backbone_block, bridge_block, pr_block = _structure_blocks(ctx, st)
     corner_block = "\n".join(
-        f"- 《{ctx.papers[n].get('title', n)}》({ctx.papers[n].get('year','')}) "
+        f"- 《{ctx.papers[n].get('title', n)}》({_node_year(ctx, n) or '年份未知'}) "
         f"{str(ctx.papers[n].get('abstract', ''))[:200]}" for n in (cornerstone or [])) or "（无）"
 
     prompt = f"""你在为本领域撰写一篇**基于引用图谱的**中文综述（900字内）。图谱由 networkx 从本地文献库
@@ -806,9 +822,10 @@ def _future_snippets(ctx):
 
     返回 [(node, snippet, is_fallback)]；正则失配时用正文结尾兜底并标记 is_fallback=True
     （审计指出该兜底可靠性低，故在输出中显式标注，不伪装成真实 Future Work 段落）。
+    排序键用 _node_year（真实元数据/arXiv 回退），避免 year 字段为空串时排序退化为字典序。
     """
     out = []
-    for n in sorted(ctx.paper_order, key=lambda x: ctx.papers[x].get("year", "")):
+    for n in sorted(ctx.paper_order, key=lambda x: (_node_year(ctx, x) or 0)):
         text = "\n".join(c["text"] for c in ctx.chunks if c["source"] == n)
         m = re.search(r"(future work|future research|limitations|conclusion|展望|未来工作).{0,1200}",
                       text, re.IGNORECASE | re.DOTALL)
@@ -877,7 +894,7 @@ def _future_status(ctx, G, src, keywords):
         newer = True
         if y_src and y_m:
             newer = y_m >= y_src - 1      # 同年/更晚才算"后续"（允许 1 年容差）
-        desc = (f"《{info_m.get('title', m)}》({info_m.get('year', '')}) 以 {hops} 跳引用了本文，"
+        desc = (f"《{info_m.get('title', m)}》({y_m or '年份未知'}) 以 {hops} 跳引用了本文，"
                 f"命中关键词 {len(hits)} 个：{'、'.join(hits[:5])}")
         if not newer:
             weak.append(f"{desc}（但发表年份 {y_m} 早于本文 {y_src}，不作为「已解决」证据）")
@@ -910,7 +927,7 @@ def explore_future_structured(ctx, G):
             "item": _future_item_text(snippet),
             "source_paper": n,
             "source_title": ctx.papers.get(n, {}).get("title", n),
-            "year": ctx.papers.get(n, {}).get("year", ""),
+            "year": _node_year(ctx, n) or "",
             "keywords": kws,
             "status": status,
             "evidence": evidences,

@@ -18,7 +18,8 @@ if FROZEN:
     # 使 demo_data/、.streamlit/、lib/ 等业务静态资源随热更新目录一起解析。
     # 可写数据始终放在 %APPDATA%/AI4SResearchAgent 下（与桌面壳共享同一 data_root）。
     RESOURCE_ROOT = Path(__file__).resolve().parent
-    DATA_ROOT = Path(os.environ["APPDATA"]) / "AI4SResearchAgent"
+    # APPDATA 缺失时回落用户主目录，避免 import 期 KeyError 直接崩
+    DATA_ROOT = Path(os.environ.get("APPDATA") or Path.home()) / "AI4SResearchAgent"
     ROOT = RESOURCE_ROOT
 else:
     # 开发态：资源与数据都在项目根，行为与历史完全一致
@@ -56,28 +57,59 @@ if DESKTOP_MODE:
 else:
     load_dotenv(ROOT / ".env")
 
+# ---------- 环境变量安全读取（Round 9 S6：默认值兜底 + 类型转换安全） ----------
+def _env_str(name, default=""):
+    """读环境变量：缺失或空白值都回落默认值。
+
+    os.getenv(name, default) 在变量存在但为空串时返回 ""（不是 default），
+    会把后面的默认值/回退链顶掉；这里统一把空白视为未设置。
+    """
+    v = os.getenv(name)
+    if v is None:
+        return default
+    v = v.strip()
+    return v if v else default
+
+
+def _env_int(name, default):
+    """整数配置：空串 / 非数字（如 int('') 直接崩）都安全回落默认值。"""
+    try:
+        return int(_env_str(name, str(default)))
+    except Exception:
+        return default
+
+
+def _env_float(name, default):
+    """浮点配置：空串 / 非数字（如 float('') 直接崩）都安全回落默认值。"""
+    try:
+        return float(_env_str(name, str(default)))
+    except Exception:
+        return default
+
+
 LIBRARY_JSON = STORAGE_DIR / "library.json"
 MEMORY_JSON = STORAGE_DIR / "memory.json"
 PROFILE_JSON = STORAGE_DIR / "user_profile.json"
 
 # ---------- 大模型（默认智谱 GLM，OpenAI 兼容协议） ----------
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
-LLM_API_KEY = os.getenv("ZHIPU_API_KEY", os.getenv("LLM_API_KEY", ""))
-LLM_MODEL = os.getenv("LLM_MODEL", "glm-4-flash")        # 文本/规划/函数调用
-VL_MODEL = os.getenv("VL_MODEL", "glm-4v")               # 多模态/OCR
-LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "90"))
+LLM_BASE_URL = _env_str("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
+# 注意：ZHIPU_API_KEY 设为空串时不再"屏蔽" LLM_API_KEY（os.getenv 双参默认值的坑）
+LLM_API_KEY = _env_str("ZHIPU_API_KEY", "") or _env_str("LLM_API_KEY", "")
+LLM_MODEL = _env_str("LLM_MODEL", "glm-4-flash")        # 文本/规划/函数调用
+VL_MODEL = _env_str("VL_MODEL", "glm-4v")               # 多模态/OCR
+LLM_TIMEOUT = _env_float("LLM_TIMEOUT", 90.0)
 
 # HuggingFace 国内镜像（供 chroma 默认 embedding 首次下载）
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 # ---------- 检索 / 解析参数 ----------
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1200"))          # 切块目标字符数
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
-DENSE_K = int(os.getenv("DENSE_K", "12"))                  # 向量召回数
-SPARSE_K = int(os.getenv("SPARSE_K", "12"))                # BM25 召回数
-FINAL_K = int(os.getenv("FINAL_K", "6"))                   # 融合后进入上下文数
-DEDUP_THRESHOLD = float(os.getenv("DEDUP_THRESHOLD", "0.90"))   # 语义去重相似度阈值
-AGENT_MAX_ITERS = int(os.getenv("AGENT_MAX_ITERS", "8"))
+CHUNK_SIZE = _env_int("CHUNK_SIZE", 1200)                  # 切块目标字符数
+CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 150)
+DENSE_K = _env_int("DENSE_K", 12)                          # 向量召回数
+SPARSE_K = _env_int("SPARSE_K", 12)                        # BM25 召回数
+FINAL_K = _env_int("FINAL_K", 6)                           # 融合后进入上下文数
+DEDUP_THRESHOLD = _env_float("DEDUP_THRESHOLD", 0.90)      # 语义去重相似度阈值
+AGENT_MAX_ITERS = _env_int("AGENT_MAX_ITERS", 8)
 
 # ---------- 内置演示语料（无 Key 也可演示） ----------
 DEMO_PAPERS = {

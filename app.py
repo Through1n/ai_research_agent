@@ -15,7 +15,7 @@ st.set_page_config(page_title="AI4S 科研助手 Agent", page_icon="🔬", layou
 # ---------- 依赖导入兜底：环境缺依赖时给中文提示而不是崩溃 ----------
 try:
     from services.state import get_container
-    from ui.common import ensure_state, safe_render
+    from ui.common import ensure_state, safe_render, llm_failure_banner
     from ui.sidebar import render as render_sidebar, render_flash
     from ui import (page_agent, page_library, page_qa, page_reading,
                     page_search, page_graph, page_writing, page_misc)
@@ -97,6 +97,15 @@ _PAGES = {
 # 侧边栏/页面在 st.rerun() 前调用 set_flash()，rerun 后由这里重放，避免提示被吞。
 try:
     render_flash()
+except Exception:                                        # pragma: no cover
+    pass
+
+# ---------- LLM 失败横幅（框架层统一消费 core/llm.py 的 last_error） ----------
+# Key 无效 / 限流 429 / 超时 / 断网时，core/llm.py 只记录 last_error 并返回伪响应，
+# 各页面会把伪响应当答案渲染——用户既看到"假答案"又无从排查。这里在主体区顶部
+# 按错误类型给出人话指引 + 日志位置；下次调用成功后 last_error 清空，横幅自动消失。
+try:
+    llm_failure_banner(ctx)
 except Exception:                                        # pragma: no cover
     pass
 

@@ -16,6 +16,7 @@
 import copy
 import os
 import re
+import time
 
 import streamlit as st
 from ui.common import embed_html, page_header
@@ -273,8 +274,37 @@ def _outline_section(ctx):
             st.session_state.outline_meta = cached
             st.caption("⚡ 相同 Idea + 相同文献来源命中缓存，直接复用上次结果（未重新调用大模型）。")
             return
-        with st.spinner("🧱 正在生成论文框架（References 部分不占用生成时间）…"):
-            res = writing.generate_outline_verified(ctx, idea, preferred=preferred, strict=strict)
+        # 1) 白名单（本地 PyMuPDF 抽取，秒级）——失败/为空时明确告知，不进流式
+        with st.spinner("🔍 正在从 PDF 正文末尾抽取真实 References 白名单…"):
+            try:
+                refs_text, refs_list, source = writing.reference_whitelist(ctx, preferred)
+            except Exception as e:
+                st.error(f"References 白名单抽取失败：{type(e).__name__}: {str(e)[:160]}")
+                return
+        if not refs_list:
+            st.session_state.outline = writing.EMPTY_LIBRARY_HINT
+            st.session_state.outline_meta = {"text": writing.EMPTY_LIBRARY_HINT,
+                                             "empty_library": True, "refs": [], "source": source}
+            return
+        # 2) 流式正文：首 chunk 实测 <1s，用户先看到内容，不必等整篇生成完
+        prompt = writing._outline_prompt(idea, refs_text, len(refs_list), strict=strict)
+        box = st.empty()
+
+        def _stream():
+            try:
+                for ch in writing.outline_body_stream(ctx, prompt, 0.4):
+                    yield ch
+            except Exception as e:      # 流式通道整体异常：给出明确中断提示
+                yield f"\n\n⚠️ 流式输出中断：{type(e).__name__}: {str(e)[:120]}"
+
+        t0 = time.time()
+        raw = box.write_stream(_stream())
+        # 3) 共用后处理（剔模型 References → 清洗占位 → 确定性拼接 → 白名单校验）
+        try:
+            res = writing.finalize_outline(raw, refs_list, source, elapsed_sec=time.time() - t0)
+        except Exception as e:
+            st.error(f"大纲后处理失败：{type(e).__name__}: {str(e)[:160]}")
+            return
         st.session_state.outline = res.get("text", "") or ""
         st.session_state.outline_meta = res
         if res.get("text") and not res.get("empty_library"):
@@ -296,6 +326,13 @@ def _outline_section(ctx):
         st.caption(f"⏱️ 本次生成耗时 {meta.get('elapsed_sec')}s"
                    + ("（References 由系统确定性拼接，未占用生成时间）"
                       if meta.get("references_deterministic") else ""))
+    if meta.get("llm_error"):
+        if meta.get("body"):
+            st.error("⚠️ 大模型输出**中途中断**：下方已保留本次真实生成的部分正文（未编造内容），"
+                     "可点「🔁 重新生成（强化约束）」获取完整版本。")
+        else:
+            st.error("⚠️ 大模型未返回任何可用内容（API Key 未配置 / 网络异常 / 额度不足），"
+                     "已中止生成，不输出任何引用。请检查左侧 Provider 配置后重试。")
     if not text:
         return
     st.markdown(text)
@@ -304,6 +341,10 @@ def _outline_section(ctx):
     st.markdown("#### 🔎 References 溯源（每条都能追到入库 PDF 的参考文献表）")
     if meta.get("empty_library"):
         _render_reference_provenance([], meta.get("source"))
+        return
+    if not meta.get("body"):
+        # LLM 完全失败（非空库原因）：溯源/校验区没有意义，明确告知后结束
+        st.info("本次未生成正文，跳过 References 溯源与白名单校验。")
         return
     _render_reference_provenance(refs, meta.get("source"))
 

@@ -9,13 +9,18 @@ Round4 Worker8（3% 思考与流式渲染体验）：
 * **错误边界**：工具失败在思考流里显示 ❌ 与失败原因并继续走备选方案；流式中断时兜底展示已生成部分。
 """
 import html
+import json
+import re
 import time
 
 import streamlit as st
 
 from core import agent
 from ui.common import (render_trace, page_header, ensure_state, friendly_error, empty_state,
-                       llm_guard, long_block, step_text)
+                       llm_guard, long_block, step_text, source_card)
+
+# 截断预览里「完整的来源条目」匹配：扁平 JSON 对象且含 ref/file/source 字段
+_SRC_ITEM_RE = re.compile(r"\{[^{}]*\"(?:ref|file|source)\"\s*:\s*\"[^\"]+\"[^{}]*\}")
 
 SUGGEST = [
     "🤖 对比 Transformer 和 BERT 的架构承袭关系，用表格",
@@ -122,6 +127,124 @@ def _render_thinking(ph, trace, streaming=False):
                 st.caption("✍️ 正在流式生成最终答案…")
 
 
+def _collect_sources(trace, limit=6):
+    """从 Trace 收集真实返回过的来源（ref/file + page + 摘要），双通道：
+
+    通道 1（优先）：trace.final_messages 里 role=="tool" 的完整工具返回
+      （agent.run 收尾时挂载，JSON 完整未截断）；
+    通道 2（兜底）：Trace 工具事件 content 只是 ~240 字符的截断预览，
+      json.loads 必然失败，改用正则只提取其中完整的条目对象。
+
+    修复悬挂【n】角标：系统提示要求答案用【n】标注来源，但从未把编号对照表
+    交给用户，页面上只看到「《…》【n】。」这种无从核对的角标。
+    """
+    seen, out = set(), []
+
+    def _add(ref, page, snippet):
+        ref = str(ref or "").strip()
+        if not ref:
+            return
+        k = (ref, page)
+        if k in seen:
+            return
+        seen.add(k)
+        out.append({"ref": ref, "page": page, "snippet": str(snippet or "")[:400]})
+
+    def _rows_from_obj(obj):
+        """递归找出 JSON 里任何带 ref/file/source 字段的扁平条目。"""
+        rows = []
+
+        def walk(v):
+            if isinstance(v, list):
+                for it in v:
+                    if isinstance(it, dict) and any(kk in it for kk in ("ref", "file", "source")):
+                        rows.append(it)
+                    else:
+                        walk(it)
+            elif isinstance(v, dict):
+                for vv in v.values():
+                    walk(vv)
+        walk(obj)
+        return rows
+
+    def _row_ref_page(r):
+        ref = r.get("ref") or r.get("file") or r.get("source") or ""
+        if r.get("page") in (None, ""):
+            page = None
+        else:
+            try:
+                page = int(r.get("page"))
+            except (TypeError, ValueError):
+                page = None
+        snippet = r.get("snippet") or r.get("text") or r.get("title") or ""
+        return ref, page, snippet
+
+    # ---------- 通道 1：完整工具返回 ----------
+    try:
+        msgs = getattr(trace, "final_messages", None) or []
+    except Exception:
+        msgs = []
+    for m in msgs:
+        if not isinstance(m, dict) or m.get("role") != "tool":
+            continue
+        raw = m.get("content")
+        if not isinstance(raw, str) or not raw.strip().startswith("{"):
+            continue
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            continue
+        for r in _rows_from_obj(obj):
+            ref, page, snippet = _row_ref_page(r)
+            _add(ref, page, snippet)
+            if len(out) >= limit:
+                return out
+
+    # ---------- 通道 2：截断预览的正则兜底 ----------
+    if out:
+        return out
+    try:
+        dicts = trace.to_dicts()
+    except Exception:
+        dicts = []
+    for ev in dicts:
+        if ev.get("kind") != "tool":
+            continue
+        raw = ev.get("content")
+        if not isinstance(raw, str):
+            continue
+        for m in _SRC_ITEM_RE.finditer(raw):
+            try:
+                r = json.loads(m.group(0))
+            except Exception:
+                continue
+            if not isinstance(r, dict):
+                continue
+            ref, page, snippet = _row_ref_page(r)
+            _add(ref, page, snippet)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def _render_sources(trace):
+    """在最终答案下方渲染「📚 答案来源」（与 ui/page_qa.py 溯源卡片同风格）。
+
+    有页码的来源用 source_card（页码徽章可点）；无页码的（如 list_papers）
+    用简化行，避免伪造「第 1 页」。
+    """
+    srcs = _collect_sources(trace)
+    if not srcs:
+        return
+    st.markdown(f"**📚 答案来源**（{len(srcs)} 条，工具真实返回；可与答案中的【n】角标对照核对）")
+    for s in srcs:
+        if s["page"]:
+            st.markdown(source_card(s["ref"], s["page"], s["snippet"]),
+                        unsafe_allow_html=True)
+        else:
+            st.caption(f"📄 {_e(s['ref'])}｜{_e(s['snippet'][:120])}")
+
+
 def render(ctx):
     page_header("🤖 Agent 总助手",
                 "意图驱动：自动任务规划、多智能体路由、Function Calling 工具闭环，答案带内联引用与溯源。",
@@ -156,6 +279,7 @@ def render(ctx):
         if finals:
             st.success("✅ 最终答案")
             long_block(finals[-1].get("content", ""), title="最终答案全文", limit=200)
+            _render_sources(tr)
         else:
             st.info("📭 该次执行未产出最终答案（可能被 Guardrails 拦截或工具调用失败）。")
         with st.expander("🧠 计划 / 路由 / 思考过程", expanded=False):
@@ -213,6 +337,8 @@ def render(ctx):
                     ans_ph.markdown(buf["text"])
             except Exception:
                 pass
+            # 悬挂【n】角标修复：答案下方给出工具真实返回的来源对照
+            _render_sources(tr)
             st.session_state.agent_runs.append({"goal": goal.strip(), "trace": tr})
             try:
                 think_ph.empty()

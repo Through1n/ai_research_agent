@@ -20,6 +20,17 @@
   T2 native_page_html(..., highlight=标题) 让标题树点击后可在原生渲染里高亮定位
   T3 protect_math()/restore_math()/math_safe_translate()：翻译前把 $..$、\(..\)、
      LaTeX 命令、key=value 数值占位，翻译后原样还原（公式与数值不被翻译）
+
+本轮（考生 S3，Round9）修复（均有实测证据，见报告）：
+  D1 作者-年份引用不可点：_render_cite 增加 kind="paren" 分支——(Vaswani et al., 2017)
+     里的年份数字不是文献编号，旧逐数字匹配一个都匹配不上（BERT 31/31 标记全死）；
+  D2 反向循环游标分母偏小：citation_links_html 的 stats 增加 per_ref 权威计数
+     （含 [a,b]/[a-b]/作者-年份 形态），页面不再用 regex 重扫漏计；
+  D6 翻译干等：新增 stream_translate_to_chinese()/_stream_restore() 流式翻译
+     （公式占位 + 流式还原，失败/限流文案不当译文）；
+  D7 抗幻觉：build_reference_index 的 meta 增加 numbered 标记——参考文献本身不带
+     [n] 编号时如实告知用户「编号为按出现顺序生成的索引号」；
+  代码块保护：protect_math 先占位 ```code``` / `inline`，再占位公式数值。
 """
 import importlib
 import re
@@ -864,6 +875,7 @@ def build_reference_index(doc, max_entries=600):
 
     # 编号归一：条目原文开头自带 [n] 时以真实编号为准
     norm = []
+    numbered = False
     for num, text, title in refs[:int(max_entries)]:
         text = re.sub(r"\s+", " ", str(text or "")).strip()
         if not text:
@@ -871,6 +883,7 @@ def build_reference_index(doc, max_entries=600):
         m = re.match(r"^\s*\[(\d{1,4})\]", text)
         if m:
             num = _safe_int(m.group(1), num)
+            numbered = True
         norm.append((_safe_int(num, len(norm) + 1), text,
                      str(title or "").strip() or _ref_guess_title(text)))
     best = {}
@@ -879,6 +892,9 @@ def build_reference_index(doc, max_entries=600):
         if old is None or len(text) > len(old[1]):
             best[num] = (num, text, title)
     out = sorted(best.values(), key=lambda x: x[0])
+    # numbered=False：该 PDF 参考文献本身不带 [n] 编号（如 BERT 的作者-年份文献表），
+    # 上面的编号是按出现顺序生成的索引号——页面据此如实告知用户，不冒充原文编号。
+    meta["numbered"] = bool(numbered) and bool(out)
     if not out:
         meta["status"] = "empty"
     return out, meta
@@ -970,11 +986,28 @@ def _author_year_ref(ref_items, surname, year):
         return None
 
 
-def _render_cite(raw, nums, counter, ref_tip, stats):
-    """把 [11] / [1,2] / [3-7] 里的每个数字包成独立可点击锚点，原文字符一字不改。"""
+def _render_cite(raw, nums, counter, ref_tip, stats, kind="bracket"):
+    """把引用标记包成独立可点击锚点，原文字符一字不改。
+
+    bracket（[11] / [1,2] / [3-7]）：逐个数字包（同一标记里多个编号各自成链）；
+    paren（(Vaswani et al., 2017)）：整段包一个锚点——其中的年份数字不是文献编号，
+    逐数字匹配会一个都匹配不上。实测缺陷：BERT 正文 31 个作者-年份标记此前
+    一个都不可点击（stats 却上报 linked=31 / occurrences=0），此分支修复该问题。
+    """
     html = []
     pos = 0
     try:
+        if kind == "paren":
+            n = nums[0] if nums else 0
+            if n <= 0:
+                return _esc(raw)
+            k = counter.get(n, 0) + 1
+            counter[n] = k
+            stats["occurrences"] += 1
+            tip = ref_tip.get(n, "")
+            return ('<a class="cit" id="cit-%d-%d" href="#ref-%d" data-ref="%d" '
+                    'data-idx="%d" title="%s" data-tip="%s">%s</a>'
+                    % (n, k, n, n, k, _attr(tip), _attr(tip), _esc(raw)))
         for m in re.finditer(r"\d{1,3}", str(raw or "")):
             n = _safe_int(m.group(0), 0)
             if n not in nums:
@@ -1018,7 +1051,7 @@ def _link_citations(text, ref_text, ref_tip, counter, stats):
             stats["markers"] += 1
             if nums:
                 stats["linked"] += 1
-                out.append(_render_cite(s[a:b], nums, counter, ref_tip, stats))
+                out.append(_render_cite(s[a:b], nums, counter, ref_tip, stats, kind))
             else:
                 stats["unlinked"] += 1
                 out.append(_esc(s[a:b]))       # 优雅降级：标记照常显示，不可点击
@@ -1196,6 +1229,11 @@ def citation_links_html(body_pages, refs, tip_len=60):
     if not body_parts:
         body_parts.append('<p class="empty">\uff08\u672c\u6b21\u9875\u7a97\u53e3\u5185\u65e0\u53ef\u63d0\u53d6\u6b63\u6587\uff09</p>')
     stats["refs_in_body"] = sum(1 for n in ref_text if counter.get(n, 0) > 0)
+    # 每条文献在正文窗口内的权威引用处数（含 [a,b]/[a-b]/作者-年份 等所有形态）。
+    # 页面「↩ 回到正文（循环）」按钮的分母 m 必须用它——旧实现用 regex 逐页重扫，
+    # 只认 [n]，会漏计列表/区间/作者-年份引用（实测 Transformer 7 条不一致，
+    # BERT 全文作者-年份引用一条都统计不到）。
+    stats["per_ref"] = {n: int(counter.get(n, 0)) for n in ref_text}
 
     ref_parts = []
     for num, text, _title in sorted(((r[0], r[1], r[2] if len(r) > 2 else "") for r in (refs or [])),
@@ -1233,6 +1271,9 @@ def citation_links_html(body_pages, refs, tip_len=60):
 # 模块三 T3：公式 / 代码 / 数值保护（翻译前占位，翻译后无损还原）
 # =====================================================================
 _MATH_TOKEN_FMT = "@@FM%d@@"
+_RESTORE_RE = re.compile(r"@\s*@\s*FM\s*(\d+)\s*@\s*@")
+# 代码块/行内代码：先于公式占位，避免模型翻译代码内容（含代码里的数字/公式）
+_CODE_RE = re.compile(r"```[\s\S]{0,2000}?```|`[^`\n]{1,200}`")
 _MATH_RE = re.compile(
     r"\$\$[\s\S]{1,400}?\$\$"                                      # 行间公式 $$..$$
     r"|\$[^\$\n]{1,200}?\$"                                        # 行内公式 $..$
@@ -1249,17 +1290,24 @@ _RESTORE_RE = re.compile(r"@\s*@\s*FM\s*(\d+)\s*@\s*@")
 
 
 def protect_math(text):
-    """翻译前：把公式/LaTeX/数值表达式替换为占位符。
+    """翻译前：把代码块/公式/LaTeX/数值表达式替换为占位符。
 
     返回 (masked_text, store)；store 为原始片段列表，供 restore_math 还原。
     任何异常都退化为「原样返回 + 空 store」，绝不冒泡。
     """
     store = []
     try:
+        def _sub_code(m):
+            store.append(m.group(0))
+            return _MATH_TOKEN_FMT % (len(store) - 1)
+
         def _sub(m):
             store.append(m.group(0))
             return _MATH_TOKEN_FMT % (len(store) - 1)
-        return _MATH_RE.sub(_sub, str(text or "")), store
+
+        s = str(text or "")
+        s = _CODE_RE.sub(_sub_code, s)      # ① 代码块先行（代码里可能含 $ 公式/数字）
+        return _MATH_RE.sub(_sub, s), store  # ② 再占位公式/数值
     except Exception:
         return str(text or ""), []
 
@@ -1302,3 +1350,95 @@ def math_safe_translate(ctx, text, call=None):
         return restore_math(out, store), ""
     except Exception as e:
         return "", "%s: %s" % (type(e).__name__, str(e)[:120])
+
+
+# =====================================================================
+# T3+：流式翻译（公式保护 + 流式还原，供「划词翻译」消等待）
+# =====================================================================
+# 与 services.writing.translate_to_chinese 的 prompt 保持一致（改那边记得同步这里）
+_STREAM_TRANSLATE_PROMPT = ("请将以下英文学术内容精准翻译为中文：保留专业术语（首次出现时可在括号内标注原文）、"
+                            "公式与引用标记，保持段落结构；只输出中文译文，不要解释。\n内容：\n%s")
+_STREAM_FALLBACK_PREFIX = "【LLM 暂时不可用"   # core.llm 全部重试失败时的兜底文案前缀
+
+
+def _stream_restore(chunks, store):
+    """边收流边还原占位符：完整出现的 @@FM\\d+@@ 立即替换，疑似不完整的前缀留在缓冲区。
+
+    store 为空时直通；任何异常都退化为原样 yield，绝不冒泡。
+
+    实现说明：chunk 边界可能把一个占位符切成两半（"...@@FM3" + "@@，..."）。
+    旧实现用 rfind("@") 找切分点，会把 "@@FM3" 切成 "@" + "@FM3"——后半辈子孙
+    都无法再匹配 _RESTORE_RE，占位符原样漏到译文里（实测复现）。现在用
+    「占位符前缀」正则精确定位结尾处待定的一部分，只保留真正不完整的前缀。
+    """
+    # 结尾处可能出现的「不完整占位符」前缀（完整占位符会被下面的循环先吃掉）
+    _PARTIAL_TOKEN_RE = re.compile(r"@(?:@(?:F(?:M(?:\d{0,4}(?:@(?:@)?)?)?)?)?)?$")
+    buf = ""
+    try:
+        for ch in chunks:
+            s = "" if ch is None else str(ch)
+            if not s:
+                continue
+            if not store:
+                yield s
+                continue
+            buf += s
+            pos, out = 0, []
+            while True:
+                m = _RESTORE_RE.search(buf, pos)
+                if not m:
+                    break
+                out.append(buf[pos:m.start()])
+                try:
+                    i = int(m.group(1))
+                except (TypeError, ValueError):
+                    out.append(m.group(0))
+                    pos = m.end()
+                    continue
+                out.append(store[i] if 0 <= i < len(store) else m.group(0))
+                pos = m.end()
+            rest = buf[pos:]
+            m = _PARTIAL_TOKEN_RE.search(rest)
+            if m:
+                out.append(rest[:m.start()])
+                buf = rest[m.start():]
+            else:
+                out.append(rest)
+                buf = ""
+            if out:
+                yield "".join(out)
+        if buf:
+            yield buf
+    except Exception:
+        if buf:
+            yield buf
+
+
+def stream_translate_to_chinese(ctx, text, temperature=0.2):
+    """流式翻译生成器：protect_math → ctx.llm.stream → 流式还原公式 → yield 增量文本。
+
+    设计约束（与页面其它翻译路径口径一致）：
+      - Key 不可用 / 内容为空：直接 return（页面侧看到空输出即提示失败）；
+      - core.llm.stream 全部重试失败时会 yield「【LLM 暂时不可用…】」兜底文案
+        （core/llm.py 的行为，不抛异常），此处识别到该前缀即停止 yield，
+        绝不把兜底文案当译文展示；
+      - 任何异常都在 generator 内吞掉并停止，不冒泡到页面。
+    """
+    src = str(text or "")
+    if not src.strip():
+        return
+    if not getattr(getattr(ctx, "llm", None), "available", False):
+        return
+    masked, store = protect_math(src)
+    try:
+        chunks = ctx.llm.stream(
+            [{"role": "user", "content": _STREAM_TRANSLATE_PROMPT % masked[:6000]}],
+            temperature=temperature)
+        for piece in _stream_restore(chunks, store):
+            if not piece:
+                continue
+            if piece.lstrip().startswith(_STREAM_FALLBACK_PREFIX):
+                return
+            yield piece
+    except Exception:
+        return

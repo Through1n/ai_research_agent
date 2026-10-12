@@ -99,6 +99,40 @@ def _desktop_version_caption() -> str:
     return "桌面版"
 
 
+def _library_stats(ctx):
+    """侧边栏库统计行：篇数 + 片段数（1480 片段级大库也需要一眼可见的规模感知）。"""
+    try:
+        n_files = len(ctx.files)
+    except Exception:
+        n_files = 0
+    try:
+        n_chunks = len(getattr(ctx, "chunks", None) or [])
+    except Exception:
+        n_chunks = 0
+    if n_files:
+        return f"📚 文献库 {n_files} 篇 · {n_chunks} 个片段"
+    return "📚 文献库为空（点下方「🚀 一键加载演示数据」开始）"
+
+
+def _llm_ping(ctx):
+    """最小请求测试 Key 是否真的可用；返回 (ok, 人话结果)。
+
+    与页面真实调用同走 core/llm.py 的重试通道；失败时不抛异常，
+    依据 ctx.llm.last_error 判定（伪响应的特征文案仅作二级判据）。
+    """
+    try:
+        msg = ctx.llm.chat([{"role": "user", "content": "请只回复两个字：正常"}],
+                           temperature=0.0)
+        text = str(getattr(msg, "content", "") or "")
+    except Exception as e:
+        return False, f"调用本身出现异常：{str(e)[:120]}"
+    if getattr(ctx.llm, "last_error", None):
+        return False, str(ctx.llm.last_error)[:160]
+    if "暂时不可用" in text or "LLM 返回结构异常" in text:
+        return False, text[:160]
+    return True, (text[:40] or "模型已返回")
+
+
 def render(ctx):
     ensure_state({"saved_api_key": "", "menu": MENU[0]})
     with st.sidebar:
@@ -107,11 +141,11 @@ def render(ctx):
         if _ver:
             st.caption(f"🕹️ {_ver}")
 
-        # 桌面版首次启动提示：无 API Key 时引导在下方「接入方式」配置（不弹窗、不跳转）
-        if DESKTOP_MODE and not os.getenv("ZHIPU_API_KEY") and not os.getenv("LLM_API_KEY") \
-                and not st.session_state.get("saved_api_key"):
+        # 未配置 Key 提示：桌面/浏览器一致（按 llm 实际可用性判断，而非仅桌面模式）
+        if not getattr(getattr(ctx, "llm", None), "available", False):
             with st.container(border=True):
-                st.warning("📌 尚未配置 API Key：请在下方「接入方式」选择平台并填入 Key；无 Key 也可使用底部按钮一键加载离线演示数据。")
+                st.warning("📌 尚未配置 API Key：请在下方「接入方式」选择平台并填入 Key；"
+                           "无 Key 也可使用底部按钮一键加载离线演示数据。")
 
         # ================= 大模型接入（OpenAI 兼容协议，任意模型热切换） =================
         try:
@@ -176,7 +210,9 @@ def render(ctx):
                     st.session_state.saved_api_key = key
                     try:
                         if ctx.set_provider(pid, key):
-                            st.success("✅ 模型已就绪")
+                            # 注意：available 只代表"Key 已填入且客户端已建好"，
+                            # 不代表 Key 一定有效——真实验证请点下方「🔌 测试连通性」。
+                            st.success("✅ Key 已填入，模型通道就绪")
                         elif not p.needs_key:
                             st.caption("本地 Ollama 需先运行 `ollama serve` 并拉取模型")
                         else:
@@ -186,6 +222,22 @@ def render(ctx):
                                        actions=_PROVIDER_FAIL_HINT[1:2])
                     if p.hint:
                         st.caption("💡 " + p.hint)
+
+        # ---------- Key 连通性测试：杜绝"假就绪"（填入≠有效） ----------
+        if getattr(getattr(ctx, "llm", None), "available", False):
+            _model = str(getattr(ctx.llm, "model", "") or "")
+            st.caption(f"🎯 当前模型：`{_model}`" if _model else "🎯 当前模型：未指定")
+            if st.button("🔌 测试连通性",
+                         help="发送一条最小请求验证 Key 是否真的可用；失败时会自动重试，约需 10 秒"):
+                with st.spinner(step_text("🔌 正在测试模型连通性")):
+                    ok, detail = _llm_ping(ctx)
+                if ok:
+                    st.success(f"✅ 连通性正常，模型返回：{detail}")
+                else:
+                    st.warning("⚠️ 连通性测试未通过：请检查 Key / 平台额度 / 网络。")
+                    st.caption(f"🩺 错误摘要：{detail}")
+                    st.caption("🛠️ 怎么办：确认 Key 无误后重试；无 Key 可点下方"
+                               "「🚀 一键加载演示数据」继续离线演示。")
 
         st.markdown("---")
         try:
@@ -226,14 +278,35 @@ def render(ctx):
         if st.button("🚀 一键加载演示数据（v1/v7/BERT）"):
             items = list(DEMO_PAPERS.items())
             done, fails = 0, []
-            with st.spinner(step_text("📥 正在加载演示数据", done, len(items))):
-                for fn, info in items:
-                    try:
-                        if fn not in ctx.files:
-                            library.add_text_corpus(ctx, fn, info.get("text", ""), info)
-                        done += 1
-                    except Exception as e:
-                        fails.append(f"{fn}：{str(e)[:80]}")
+            # 逐项进度：st.status 的 label 可随循环更新，用户能看到 1/3 → 2/3 → 3/3
+            # （旧实现 spinner 文案创建时固定为 0/3，整个加载过程静止不动）
+            try:
+                status = st.status(step_text("📥 正在加载演示数据", 0, len(items)), expanded=True)
+            except Exception:                            # pragma: no cover - 旧版本降级
+                status = None
+            if status is not None:
+                with status:
+                    for fn, info in items:
+                        try:
+                            if fn not in ctx.files:
+                                library.add_text_corpus(ctx, fn, info.get("text", ""), info)
+                            done += 1
+                            st.caption(f"✅ {fn}")
+                        except Exception as e:
+                            fails.append(f"{fn}：{str(e)[:80]}")
+                            st.caption(f"⚠️ {fn} 失败：{str(e)[:80]}")
+                        status.update(label=step_text("📥 正在加载演示数据", done, len(items)))
+                    status.update(label=f"📥 演示数据加载完成 {done}/{len(items)}",
+                                  state="complete")
+            else:                                        # pragma: no cover - 旧版本降级
+                with st.spinner(step_text("📥 正在加载演示数据", 0, len(items))):
+                    for fn, info in items:
+                        try:
+                            if fn not in ctx.files:
+                                library.add_text_corpus(ctx, fn, info.get("text", ""), info)
+                            done += 1
+                        except Exception as e:
+                            fails.append(f"{fn}：{str(e)[:80]}")
             if fails:
                 # 失败提示同样写入 flash：后面紧跟 rerun，直接 st.warning 会被吞掉
                 set_flash("warning", f"⚠️ 已加载 {done}/{len(items)} 篇，{len(fails)} 篇失败。"
@@ -252,12 +325,27 @@ def render(ctx):
                 st.info("📭 文献库已经是空的，无需清空。")
             else:
                 fails = []
-                with st.spinner(step_text("🗑️ 正在清空文献库")):
-                    for fn in list(ctx.files):
-                        try:
-                            library.remove_paper(ctx, fn)
-                        except Exception as e:
-                            fails.append(f"{fn}：{str(e)[:80]}")
+                targets = list(ctx.files)
+                try:
+                    status = st.status(step_text("🗑️ 正在清空文献库", 0, len(targets)), expanded=False)
+                except Exception:                        # pragma: no cover - 旧版本降级
+                    status = None
+                if status is not None:
+                    with status:
+                        for i, fn in enumerate(targets, 1):
+                            try:
+                                library.remove_paper(ctx, fn)
+                            except Exception as e:
+                                fails.append(f"{fn}：{str(e)[:80]}")
+                            status.update(label=step_text("🗑️ 正在清空文献库", i, len(targets)))
+                        status.update(label="🗑️ 清空完成", state="complete")
+                else:                                    # pragma: no cover - 旧版本降级
+                    with st.spinner(step_text("🗑️ 正在清空文献库")):
+                        for fn in targets:
+                            try:
+                                library.remove_paper(ctx, fn)
+                            except Exception as e:
+                                fails.append(f"{fn}：{str(e)[:80]}")
                 for k in ("graph_pack", "review", "future", "struct", "meta_view",
                           "formula_view", "ref_view", "pending"):
                     st.session_state.pop(k, None)
@@ -267,5 +355,6 @@ def render(ctx):
                 else:
                     set_flash("success", "✅ 已清空文献库")
                 st.rerun()
+        st.caption(_library_stats(ctx))
         st.caption(f"💾 内存 {memory_mb()}")
     return menu

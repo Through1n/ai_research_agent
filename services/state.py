@@ -117,6 +117,27 @@ class Container:
             self.llm = self._build_llm(self.provider_id, key)
         return self.llm.available
 
+    # ---------- LLM 降级状态透出（抗幻觉：不可用时必须给出人话原因） ----------
+    @property
+    def llm_status(self):
+        """返回 {"available": bool, "reason": str, "kind": str}。
+
+        UI 层可用它把「LLM 为什么不可用」如实展示给用户（如 Key 含非 ASCII、
+        401 过期、限流等），而不是静默失败或把伪响应当答案。
+        机制细节见 core.llm.is_degraded / DEGRADED_TEXT_MARK。
+        """
+        llm = getattr(self, "llm", None)
+        try:
+            if llm is not None and getattr(llm, "available", False):
+                return {"available": True, "reason": "", "kind": None}
+            reason = (getattr(llm, "key_error", None)
+                      or getattr(llm, "last_error", None)
+                      or "未配置 API Key，大模型不可用")
+            return {"available": False, "reason": str(reason)[:300],
+                    "kind": getattr(llm, "last_error_kind", None)}
+        except Exception:
+            return {"available": False, "reason": "LLM 状态读取失败", "kind": None}
+
     # ---------- 便捷访问 ----------
     @property
     def files(self):

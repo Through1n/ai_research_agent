@@ -18,6 +18,21 @@
   T3 公式保留       → 翻译前 protect_math() 占位、翻译后 restore_math() 还原
 
 硬性约束：所有新代码块 try/except 兜底，异常不冒泡；session_state key 先初始化再读。
+
+本轮（考生 S3，Round9）修复（均有实测证据，见报告）：
+  D1 作者-年份引用跳转全死（services/translate.py：_render_cite kind="paren" 整段包锚点；
+     BERT 31/31 标记此前不可点，stats 却谎报 linked=31/occurrences=0）；
+  D2 反向循环游标分母偏小（页面优先用视图快照 stats.per_ref 权威计数）；
+  D3 标题树点击后页码不同步（写入 TOC_JUMP_KEY 后立即 st.rerun()，实测旧实现
+     read_jump_page 仍是 1，用户切标签看到旧页）；
+  D4 切换 PDF 后 widget 残留旧文档值（doc_id 变化即清理 np/sp/pp/hp/cj_s/cj_e；
+     实测从 15 页 PDF 切到 541 页 UDL，「正文结束页」仍是 9）；
+  D5 逐段翻译切出行碎片（_page_paragraphs 改栏感知按块聚合：BERT p2 从 96 段碎片
+     变 13 个完整段落，中英混杂与调用次数问题随之解决）；
+  D6 翻译干等（划词翻译改流式 stream_translate_to_chinese，首 token ~2s）；
+  D7 合成编号幻觉（meta.numbered=False 时明示「[n] 为按出现顺序生成的索引号」）；
+  D9 双语对照一交互就丢（read_bilingual 快照，同页 rerun 自动重渲染）；
+  D8 翻译缓存无上限（read_tr_cache 上限 400 条，超出丢最旧）。
 """
 import gc
 import json
@@ -38,7 +53,8 @@ from services import parsing, writing
 from services.translate import (native_page_html, bilingual_html, in_place_pdf,
                                 citation_jump_html, selectable_text_html, detect_columns,
                                 build_reference_index, find_reference_start_page,
-                                citation_links_html, protect_math, restore_math)
+                                citation_links_html, protect_math, restore_math,
+                                stream_translate_to_chinese)
 
 # ---------------- 常量（集中配置，便于调参） ----------------
 JUMP_KEY = "qa_jump_page"          # 与 ui/page_qa.py 约定（只读 + 消费后清理）
@@ -53,6 +69,8 @@ PROGRESS_EVERY = 50                # B2：每 N 页刷新一次进度条
 BATCH_FLUSH = 50                   # B2：每 N 页释放一次引用 + gc
 FIG_TTL_HOURS = 24                 # B2：fig_* 临时目录超过该时长视为陈旧
 CITE_SCAN_CAP = 260                # 引用跳转：正文/文献区回溯扫描页数上限
+_TR_PARA_CAP = 1500                # 逐段翻译：单段送模型的最大字符数（超出截断并明示）
+_TR_CACHE_CAP = 400                # 翻译缓存 read_tr_cache 条数上限（防长会话内存增长）
 
 # ---------------- MemoryProbe 导入（缺失时降级为占位探针，绝不崩） ----------------
 try:
@@ -397,7 +415,6 @@ def _translate_pairs(ctx, paras, label="段落翻译"):
     if not isinstance(cache, dict):
         cache = {}
         st.session_state["read_tr_cache"] = cache
-
     todo = []
     for i, p in enumerate(paras):
         key = _cache_key(p)
@@ -414,11 +431,12 @@ def _translate_pairs(ctx, paras, label="段落翻译"):
     workers = max(1, min(MAX_TRANSLATE_WORKERS, len(todo)))
     pb = st.progress(0.0, text=f"{label} 0/{len(todo)} …")
     done = 0
+    truncated = sum(1 for i in todo if len(str(paras[i])) > _TR_PARA_CAP)
     probe = _new_probe(label)
     probe.start()
     try:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = {ex.submit(_safe_translate, ctx, str(paras[i])[:1500], LLM_CALL_TIMEOUT): i
+            futs = {ex.submit(_safe_translate, ctx, str(paras[i])[:_TR_PARA_CAP], LLM_CALL_TIMEOUT): i
                     for i in todo}
             for fut in futs:
                 i = futs[fut]
@@ -445,11 +463,20 @@ def _translate_pairs(ctx, paras, label="段落翻译"):
             pb.empty()
         except Exception:
             pass
+    # 缓存上限：长会话/翻多篇论文时 read_tr_cache 不设上限会持续吃内存
+    while len(cache) > _TR_CACHE_CAP:
+        try:
+            cache.pop(next(iter(cache)))
+        except Exception:
+            break
     try:
         st.info(f"🧠 {label}：{len(todo)} 段调用（并发 ≤ {workers}，单次 ≤ {LLM_CALL_TIMEOUT:.0f}s）· "
                 f"峰值内存 {probe.peak_mb():.0f} MB / 耗时 {probe.elapsed():.1f} 秒")
     except Exception:
         pass
+    if truncated:
+        st.caption(f"ℹ️ 有 {truncated} 个段落超过 {_TR_PARA_CAP} 字符，已按前 {_TR_PARA_CAP} 字符翻译"
+                   "（超长表格/参考文献区建议用「🖱️ 划词翻译」处理片段）。")
     if errors:
         st.warning("⚠️ 以下段落翻译失败（已保留原文，未影响其余段落）："
                    + "；".join(f"第 {i} 段（{r}）" for i, r in errors[:8])
@@ -829,10 +856,25 @@ def _cite_consume_autoscroll():
     return tgt
 
 
-def _cite_ref_total(doc, start, end, ref):
-    """统计第 ref 条文献在正文窗口（start-end 页）里被引用了多少处（反向循环游标的分母 m）。"""
+def _cite_ref_total(doc, start, end, ref, per_ref=None):
+    """统计第 ref 条文献在正文窗口（start-end 页）里被引用了多少处（反向循环游标的分母 m）。
+
+    优先使用 citation_links_html 返回的权威计数 per_ref（视图快照 stats.per_ref，
+    含 [a,b]/[a-b]/(Author, year) 等所有引用形态）；快照缺失时才退回逐页 regex
+    扫描兜底（regex 只认 [n]，会漏计列表/区间/作者-年份引用，仅保证有值）。
+    """
     try:
         n = max(1, int(ref))
+    except (TypeError, ValueError):
+        return 1
+    if isinstance(per_ref, dict):
+        try:
+            v = int(per_ref.get(n, 0) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            return v
+    try:
         s_i, e_i = int(start), int(end)
         if e_i < s_i:
             s_i, e_i = e_i, s_i
@@ -1046,13 +1088,39 @@ def _resolve_doc(ctx, prefer=None):
 
 
 def _page_paragraphs(doc, page):
-    """提取页面段落；异常返回空列表（不冒泡）。"""
+    """提取页面段落：栏感知 + 按文本块聚合 + 去连字符断词。
+
+    旧实现按 get_text() 的单行切分：双栏 PDF 被切成 30~50 字符的行碎片
+    （BERT p2 实测 96 段，且带 "ob-\\njective" 断词），逐段翻译上下文丢失、
+    输出中英混杂、调用次数暴涨。新实现复用 services.parsing.
+    extract_page_blocks_column_aware：一个文本块就是一段，双栏按
+    「左栏自上而下 → 右栏自上而下」的阅读顺序输出（BERT p2 实测 13 段）。
+    块提取失败时退化为旧的行切分，异常/空页返回 []（不冒泡）。
+    """
+    paras = []
+    try:
+        blocks = parsing.extract_page_blocks_column_aware(doc[page - 1]) or []
+        for b in blocks:
+            try:
+                txt = str(b.get("text") or "")
+            except Exception:
+                continue
+            txt = re.sub(r"-\n\s*", "", txt)      # 断词连字符：ob-\njective → objective
+            txt = re.sub(r"\s*\n\s*", " ", txt)   # 块内换行 → 空格
+            txt = txt.strip()
+            if len(txt) > 15 and not re.match(r"^[\W\d_]+$", txt):
+                paras.append(txt)
+    except Exception:
+        paras = []
+    if paras:
+        return paras
+    # 退化兜底：块提取不可用时的旧行切分逻辑
     try:
         raw = doc[page - 1].get_text() or ""
     except Exception:
         return []
-    blocks = [b.strip() for b in str(raw).split("\n") if b.strip()]
-    return [b for b in blocks if len(b) > 15 and not re.match(r"^[\W\d_]+$", b)]
+    lines = [b.strip() for b in str(raw).split("\n") if b.strip()]
+    return [b for b in lines if len(b) > 15 and not re.match(r"^[\W\d_]+$", b)]
 
 
 def _find_citation(doc, cit, tps):
@@ -1112,7 +1180,8 @@ def render(ctx):
                 "原生坐标渲染（双栏分栏）、中英同步滚动、原位 PDF 叠加中文、引用双向跳转、划词翻译、标题树。")
     # 注意：只初始化「非 widget」key；widget key（np/sp/pp/hp/cit/hl_frag/ld_*）
     # 若在这里预设会触发 Streamlit 的 "default value + session_state" 警告。
-    _ensure_state({"read_tr_cache": {}, "read_jump_page": 1, "read_jump_para": None, "hl": ""})
+    _ensure_state({"read_tr_cache": {}, "read_jump_page": 1, "read_jump_para": None, "hl": "",
+                   "read_doc_id": "", "read_bilingual": None})
 
     doc = None
     try:
@@ -1153,6 +1222,17 @@ def render(ctx):
         st.caption(f"📄 {os.path.basename(path)}（{tps} 页）")
         # T1/T2 缓存键：文件名 + 页数（切换 PDF 时自动失效）
         doc_id = "%s|%d" % (os.path.basename(path), int(tps))
+
+        # 切换 PDF：清理上一篇文档残留的 widget 状态。
+        # Streamlit 的 widget key 一旦建过，之后 rerun 会用 session_state 里的旧值、
+        # 忽略 value= 参数——不清就会带着旧文档的页码/窗口满页跑
+        # （实测：从 15 页的 Transformer 切到 541 页的 UDL，「正文结束页」仍是 9）。
+        if st.session_state.get("read_doc_id") != doc_id:
+            _drop_state(("np", "sp", "pp", "hp", "cj_s", "cj_e", "read_hl"))
+            st.session_state["read_doc_id"] = doc_id
+            # 跨文档的双语对照/跳转快照一并失效，避免串档
+            if isinstance(st.session_state.get("read_bilingual"), dict):
+                st.session_state["read_bilingual"] = None
 
         # ② 消费 qa_jump_page（含 para_idx），得到默认页码；无则消费标题树跳转
         jump = _consume_qa_jump(ctx, tps)
@@ -1235,7 +1315,9 @@ def render(ctx):
         with tabs[1]:
             try:
                 p2 = st.number_input("页码", 1, tps, value=default_page, key="sp")
+                translated_now = False
                 if st.button("📥 加载并逐段翻译（段落对齐）", key="sp_go"):
+                    translated_now = True
                     if not getattr(getattr(ctx, "llm", None), "available", False):
                         st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
                         st.caption("🛠️ 怎么办：在左侧「接入方式」填写 Key 后重试。")
@@ -1245,10 +1327,34 @@ def render(ctx):
                             st.error("该页文本过少，可能是扫描件（无文本层）。")
                         else:
                             pairs, _errs = _translate_pairs(ctx, paras, label="逐段翻译")
+                            # 持久化：任何 rerun（切 tab/点别的按钮）后按原样恢复，
+                            # 不再「翻译结果一交互就丢、要重新点一次」。
+                            # 带 doc 字段：换 PDF 后旧文档的对照不串档。
+                            try:
+                                st.session_state["read_bilingual"] = {"doc": doc_id,
+                                                                      "page": int(p2),
+                                                                      "pairs": pairs}
+                            except Exception:
+                                pass
                             try:
                                 embed_html(bilingual_html(pairs), height=760, scrolling=False)
                             except Exception as e:
                                 st.warning(f"⚠️ 双语视图渲染失败：{str(e)[:160]}")
+                # rerun 恢复：本次没有点翻译、且快照的文档/页码都与当前一致时重渲染
+                if not translated_now:
+                    _prev_bi = st.session_state.get("read_bilingual")
+                    if (isinstance(_prev_bi, dict)
+                            and str(_prev_bi.get("doc") or "") == str(doc_id)
+                            and int(_prev_bi.get("page", 0) or 0) == int(p2)
+                            and isinstance(_prev_bi.get("pairs"), list)
+                            and _prev_bi.get("pairs")):
+                        st.caption("♻️ 已恢复上次的逐段翻译结果（同页 rerun 不丢失；"
+                                   "更换页码后自动失效，需重新加载）。")
+                        try:
+                            embed_html(bilingual_html(_prev_bi["pairs"]),
+                                       height=760, scrolling=False)
+                        except Exception:
+                            pass
             except Exception as e:
                 st.warning(f"⚠️ 同步滚动区异常：{str(e)[:160]}")
 
@@ -1332,6 +1438,11 @@ def render(ctx):
                     st.success(f"✅ References 抽取成功：{len(refs)} 条"
                                f"（来源：{meta.get('source') or '-'}"
                                f"{'，标题页 p%d' % ref_page if ref_page else ''}）")
+                    if not meta.get("numbered", True):
+                        # 抗幻觉：该 PDF 文献表本身不带 [n] 编号（如 BERT 作者-年份式），
+                        # 界面上的 [n] 是按出现顺序生成的索引号，必须如实说明、不冒充原文编号
+                        st.caption("ℹ️ 该 PDF 的参考文献列表本身不带 [n] 编号，界面中的 [n] 为按出现"
+                                   "顺序生成的索引号；正文里的作者-年份引用已尽力匹配到对应条目。")
 
                 c1, c2 = st.columns([1, 1])
                 with c1:
@@ -1362,12 +1473,16 @@ def render(ctx):
                     if st.button("↩ 回到正文（循环）", key="cit_go_cit", use_container_width=True):
                         try:
                             n_j = int(jn)
-                            total_j = _cite_ref_total(doc, view_start, view_end, n_j)
+                            # 分母 m 用视图快照里的权威计数（含作者-年份/区间引用），
+                            # 快照缺失时才退回 regex 逐页重扫
+                            _snap_j = _cite_view(doc_id) or {}
+                            _per_ref = (_snap_j.get("stats") or {}).get("per_ref") or {}
+                            total_j = _cite_ref_total(doc, view_start, view_end, n_j, _per_ref)
                             tgt = _cite_cursor_next(n_j, max(1, total_j))
                             if tgt:
                                 cur = dict(st.session_state.get(CITE_CURSOR_KEY) or {})
                                 st.success(f"↩ 已定位并保存：{tgt}"
-                                           f"（第 {cur.get(str(n_j), 1)} 处，rerun 后保留游标）")
+                                           f"（第 {cur.get(str(n_j), 1)}/{total_j} 处，rerun 后保留游标）")
                         except Exception as e:
                             st.caption(f"（反向跳转失败：{str(e)[:80]}）")
                 with jc4:
@@ -1513,11 +1628,22 @@ def render(ctx):
                     if not getattr(getattr(ctx, "llm", None), "available", False):
                         st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
                     else:
-                        zh, err = _safe_translate(ctx, str(frag).strip(), timeout=LLM_CALL_TIMEOUT)
-                        if zh:
-                            st.markdown("**🇨🇳 译文：**" + zh)
-                        else:
-                            st.warning(f"⚠️ 翻译失败：{err}")
+                        # 流式输出：首 token 约 1~2s 即开始显示（实测 glm-4-flash），
+                        # 不用再对着「正在生成」干等 4~10s；公式先占位、流中实时还原
+                        _frag_txt = str(frag).strip()
+                        _full = ""
+                        try:
+                            if hasattr(st, "write_stream"):
+                                _full = st.write_stream(
+                                    stream_translate_to_chinese(ctx, _frag_txt))
+                            else:   # 旧版 Streamlit 兜底：收完一次性展示
+                                _full = "".join(list(
+                                    stream_translate_to_chinese(ctx, _frag_txt)))
+                        except Exception as e:
+                            _full = ""
+                            st.warning(f"⚠️ 翻译失败：{type(e).__name__}: {str(e)[:100]}")
+                        if not str(_full or "").strip():
+                            st.warning("⚠️ 翻译失败：模型未返回内容（网络超时、限流或 Key 失效）。")
                             st.caption("🛠️ 怎么办：稍后重试或缩短片段；接口限流时建议分段翻译。")
             except Exception as e:
                 st.warning(f"⚠️ 划词翻译区异常：{str(e)[:160]}")
@@ -1547,8 +1673,15 @@ def render(ctx):
                             st.session_state[TOC_JUMP_KEY] = {"page": pg, "title": title}
                         except Exception:
                             pass
-                        st.success(f"已定位到第 {pg} 页「{title[:40]}」"
-                                   f"（切换到「📄 原生渲染」标签查看并高亮）")
+                        # 立即重跑：让 render 开头就消费跳转、把页码控件切到目标页。
+                        # 旧实现只写 key 就返回，用户要再做一次任意交互才生效——
+                        # 实测点击后 read_jump_page 仍是 1，切到「原生渲染」看到旧页。
+                        # （RerunException 继承 BaseException，不会被下面的 except 吞掉）
+                        try:
+                            st.rerun()
+                        except Exception:
+                            st.success(f"已定位到第 {pg} 页「{title[:40]}」"
+                                       f"（再任意操作一次即切换到「📄 原生渲染」标签）")
                 if len(toc) > len(shown):
                     st.caption(f"（目录共 {len(toc)} 条，首屏渲染前 {len(shown)} 条，避免长文档卡顿）")
             except Exception as e:

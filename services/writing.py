@@ -25,6 +25,14 @@ R6 修复（References 占位废稿）：
   ``[Placeholder]`` / ``TODO`` / ``[1..N]`` 等命中后要么修复要么上报 UI；
 - :func:`validate_reference_whitelist` 补上「References 章节缺失/条目数不足」判定——旧版
   在这种情形下会解析出 0 条并直接判 PASS（占位废稿被当成无幻觉放行）。
+
+R9 修复（流式 + 失败降级）：
+- :func:`outline_body_stream` 流式吐正文（UI 用 ``st.write_stream`` 消费），首 chunk
+  实测 <1s，用户不必再对着 40s 的空白转圈等整篇；
+- :func:`finalize_outline` 把「剔模型 References → 清洗占位 → 角标打码 → 确定性拼接
+  References → 白名单校验」抽成共用后处理，流式/非流式两条路径共用同一套保证；
+- LLM 中途失败（正文混入 ``【LLM 暂时不可用…】`` 伪响应）时：剔除伪响应、**保留已生成
+  部分**并置 ``llm_error/partial`` 标记，由 UI 明确告知，绝不白屏也不把伪响应当正文。
 """
 import os
 import re
@@ -1149,6 +1157,80 @@ Threats to Validity / Conclusion。
 Idea：{idea}"""
 
 
+def outline_body_stream(ctx, prompt, temperature=0.4):
+    """流式生成大纲正文：逐 chunk yield 字符串（UI 侧用 ``st.write_stream`` 消费）。
+
+    优先走 ``ctx.llm.stream``（与 LLMClient 其余入口同一套退避重试语义）；
+    ctx.llm 不可用时退化为一次性 :func:`_llm_text`（整段 yield）。
+    ``ctx.llm.stream`` 在流式中途失败时会 yield 一条 ``【LLM 暂时不可用…】``
+    伪响应，由 :func:`finalize_outline` 识别、剔除并保留已生成部分。
+    """
+    try:
+        llm = getattr(ctx, "llm", None)
+        if llm is not None and getattr(llm, "available", False):
+            for chunk in llm.stream([{"role": "user", "content": str(prompt)}],
+                                    temperature=temperature):
+                if chunk:
+                    yield chunk
+            return
+    except Exception:
+        pass
+    text = _llm_text(ctx, prompt, temperature=temperature)
+    if text:
+        yield text
+
+
+def finalize_outline(raw, refs_list, source, elapsed_sec=0.0):
+    """把 LLM 正文原文加工为最终大纲（流式/非流式两条生成路径共用的后处理）。
+
+    步骤：剔除模型自带 References 章节 → 清洗占位串 → 越界角标打码 →
+    **确定性拼接** References（不上 LLM）→ 对最终全文跑白名单校验。
+
+    失败语义（对应「LLM 失败不能白屏/不输出半章垃圾」）：
+    - 正文为空 → 返回 :data:`NO_MODEL_OUTPUT_HINT`，明确告知未生成；
+    - 正文混入 ``【LLM 暂时不可用…】`` 伪响应（流式中途失败）→ 剔除伪响应、
+      **保留已生成部分**，置 ``llm_error=True`` / ``partial=True``，由 UI 明确告警；
+    - 白名单为空 → 返回 :data:`EMPTY_LIBRARY_HINT`，不生成任何占位/编造引用。
+
+    返回 dict 与 :func:`generate_outline_verified` 一致（多 ``llm_error``/``partial`` 两字段）。
+    """
+    out = {"text": "", "refs": [], "validation": None, "source": source or "",
+           "sanitized": 0, "empty_library": False, "placeholder_issues": [],
+           "elapsed_sec": round(float(elapsed_sec or 0.0), 2), "body": "",
+           "references_deterministic": False, "llm_error": False, "partial": False}
+    if not refs_list:
+        out["text"] = EMPTY_LIBRARY_HINT
+        out["empty_library"] = True
+        return out
+    body = str(raw or "")
+    if "【LLM 暂时不可用" in body:
+        # 流式中途失败的伪响应：剔掉标记、保留前面已经真实生成的内容
+        out["llm_error"] = True
+        body = re.sub(r"【LLM 暂时不可用[^】]*】", "", body)
+    if not body.strip():
+        out["text"] = NO_MODEL_OUTPUT_HINT
+        return out
+
+    # 顺序很重要：先删 References 段，占位串里最常见的 "[1..N] (List the references…)"
+    # 本来就落在这一节里，会被整节带走。
+    body, _ = _strip_generated_references(body)
+    body, issues = sanitize_placeholders(body)
+    body, k = _sanitize_citations(body, set(range(1, len(refs_list) + 1)))
+    # 再扫一遍：正文里若仍有占位串（如正文中间写了 [Placeholder]），必须如实上报
+    residual = scan_placeholders(body)
+
+    # 确定性拼接 References（不上 LLM，100% 来自白名单）
+    ref_section = build_references_section(refs_list)
+    text = body.rstrip() + "\n\n" + ref_section + "\n"
+
+    # 对**最终全文**做白名单校验
+    validation = validate_reference_whitelist(text, refs_list)
+    out.update({"text": text, "body": body, "refs": refs_list, "validation": validation,
+                "sanitized": k, "placeholder_issues": residual,
+                "references_deterministic": True, "partial": out["llm_error"]})
+    return out
+
+
 def generate_outline_verified(ctx, idea, preferred=None, strict=False, pdf_path=None):
     """生成大纲正文 + **确定性**拼接真实 References，然后跑白名单校验。返回 dict（不抛异常）。
 
@@ -1157,14 +1239,17 @@ def generate_outline_verified(ctx, idea, preferred=None, strict=False, pdf_path=
       ``refs`` 白名单真实条目（每条带 source_pdf）
       ``validation`` :func:`validate_reference_whitelist` 的结果
       ``source`` / ``sanitized`` / ``empty_library`` / ``placeholder_issues`` / ``elapsed_sec``
+      ``llm_error`` / ``partial``（LLM 中途失败但保留了已生成部分）
 
     关键设计（对应赛题模块六「无幻觉 References」）：
       References 章节**不交给大模型**，只用白名单字符串拼接，因此不存在编造空间，
       也省掉了占用时间最长的那部分 token 输出。
+    后处理与流式路径共用 :func:`finalize_outline`，两条路径的校验保证完全一致。
     """
     out = {"text": "", "refs": [], "validation": None, "source": "",
            "sanitized": 0, "empty_library": False, "placeholder_issues": [],
-           "elapsed_sec": 0.0, "body": "", "references_deterministic": False}
+           "elapsed_sec": 0.0, "body": "", "references_deterministic": False,
+           "llm_error": False, "partial": False}
     t_start = time.time()
     try:
         # ---- 1) 真实白名单（少了它就谈不上无幻觉，直接提示用户先上传文献）----
@@ -1192,31 +1277,9 @@ def generate_outline_verified(ctx, idea, preferred=None, strict=False, pdf_path=
         # ---- 2) LLM 只写正文（不含 References）----
         prompt = _outline_prompt(idea, refs_text, len(refs_list), strict=strict)
         raw = _llm_text(ctx, prompt, temperature=0.4)
-        if not raw:
-            out["text"] = NO_MODEL_OUTPUT_HINT
-            out["elapsed_sec"] = round(time.time() - t_start, 2)
-            return out
 
-        # ---- 3) 后处理：剔除模型自带 References → 清洗占位串 → 角标越界打码 ----
-        # 顺序很重要：先删 References 段，占位串里最常见的 "[1..N] (List the references…)"
-        # 本来就落在这一节里，会被整节带走。
-        body, _ = _strip_generated_references(raw)
-        body, issues = sanitize_placeholders(body)
-        body, k = _sanitize_citations(body, set(range(1, len(refs_list) + 1)))
-        # 再扫一遍：正文里若仍有占位串（如正文中间写了 [Placeholder]），必须如实上报
-        residual = scan_placeholders(body)
-
-        # ---- 4) 确定性拼接 References（不上 LLM，100% 来自白名单）----
-        ref_section = build_references_section(refs_list)
-        text = body.rstrip() + "\n\n" + ref_section + "\n"
-
-        # ---- 5) 对**最终全文**做白名单校验 ----
-        validation = validate_reference_whitelist(text, refs_list)
-        out.update({"text": text, "body": body, "refs": refs_list, "source": source,
-                    "sanitized": k, "validation": validation,
-                    "placeholder_issues": residual, "references_deterministic": True,
-                    "elapsed_sec": round(time.time() - t_start, 2)})
-        return out
+        # ---- 3) 共用后处理：剔 References → 清洗 → 确定性拼接 → 白名单校验 ----
+        return finalize_outline(raw, refs_list, source, time.time() - t_start)
     except Exception as e:
         out["text"] = f"⚠️ 大纲生成失败：{type(e).__name__}: {str(e)[:160]}"
         out["elapsed_sec"] = round(time.time() - t_start, 2)
