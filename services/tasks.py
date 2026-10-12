@@ -132,7 +132,12 @@ def snapshot(limit=20):
         return [dict(t) for t in items[:limit]]
 
 
-def running_count():
+def active_count():
+    """活跃任务数 = 运行中 + 排队中。
+
+    注意不要把这里当成"并发占用数"：真正的并发上限由 submit 依据
+    state == "running" 判定（排队任务不计入占用），两者是不同口径。
+    """
     with _LOCK:
         return sum(1 for t in _TASKS.values() if t["state"] in ("running", "pending"))
 
