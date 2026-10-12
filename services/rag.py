@@ -54,6 +54,24 @@ VERSION_DEDUP_MIN = 3       # 同论文多版本去重阈值：较新版本在�
 
 _VERSION_RE = re.compile(r"^(?P<base>.+?)v(?P<ver>\d+)(?:_img)?$")
 
+# ---------- chunk 正文向量缓存（话术 7：问答响应速度优化） ----------
+# 实测本地 ONNX embedding 单次调用固定开销约 150ms，与文本条数弱相关
+# （1 条 154ms / 6 段 229ms / 24 段 519ms）。一次检索内 score_sources 会被
+# 调用 3 次、每次重新算 chunk 正文向量，等于把同一批文本反复编码。
+# 缓存 key 取 (chunk_id, 文本截断长度)：chunk 入库后正文与 id 均不可变，
+# 故缓存安全；容量上限保护内存（8000 × 384 维 float32 ≈ 12MB）。
+_EMBED_CACHE = {}
+_EMBED_CACHE_MAX = 8000
+
+
+def _embed_key(c):
+    return (c.get("id"), len((c.get("text") or "")[:2000]))
+
+
+def clear_embed_cache():
+    """文献库增删/重建后调用，避免陈旧向量污染打分。"""
+    _EMBED_CACHE.clear()
+
 
 def _paper_version(source):
     """从来源文件名解析 (论文基名, 版本号)；无版本号返回 (去掉后缀的文件名, None)。
@@ -121,6 +139,39 @@ def _llm_complete(ctx, messages, temperature=0.1):
         return ""
 
 
+def _llm_complete_stream(ctx, messages, temperature=0.1, on_token=None):
+    """流式生成（话术 7）：逐 token 回调 on_token，返回完整文本。
+
+    设计要点：
+    1. 与 _llm_complete 走同一套 provider 配置（model/key/base_url），不丢失侧边栏选型；
+    2. 流式失败或返回降级占位文案时，回退到非流式 _llm_complete，保证一定有真实内容；
+    3. **仍然返回完整文本给上层**，answer() 照常执行引用校验 / 净化 / 修复环，
+       流式只改变"用户看到字的时机"，不改变任何抗幻觉逻辑。
+    """
+    llm = getattr(ctx, "llm", None)
+    if llm is None or not hasattr(llm, "stream"):
+        return _llm_complete(ctx, messages, temperature=temperature)
+    try:
+        parts = []
+        for tok in llm.stream(messages, model=getattr(llm, "model", None),
+                              temperature=temperature):
+            if not tok:
+                continue
+            parts.append(tok)
+            if on_token:
+                try:
+                    on_token(tok)
+                except Exception:
+                    pass
+        text = "".join(parts)
+        # 降级占位/空内容 → 回退非流式，避免把"LLM 不可用"当答案流出
+        if (not text.strip()) or ("【LLM 暂时不可用" in text):
+            return _llm_complete(ctx, messages, temperature=temperature)
+        return text
+    except Exception:
+        return _llm_complete(ctx, messages, temperature=temperature)
+
+
 def _llm_json(ctx, messages, temperature=0.0):
     from core.llm import parse_json
     try:
@@ -170,6 +221,24 @@ def dense_search(ctx, query, k):
         return list(res["ids"][0])
     except Exception:
         return []
+
+
+def dense_search_vec(ctx, vec, k):
+    """用预计算向量检索，跳过 chroma 内部的重复 embedding（话术 7）。
+
+    实测 query_texts 164ms / query_embeddings 25ms，两者返回 id 序列一致；
+    多个查询变体各自调用时，改走本函数可把逐次 embed 的固定开销合并掉一次。
+
+    **失败返回 None**（而不是空列表）：空列表是"库里没有候选"的合法结果，
+    调用方必须能区分二者并回退到 dense_search，否则向量路会静默失效、
+    只剩 BM25 在撑——这种降级没有日志、极难察觉。
+    """
+    try:
+        n = min(k, max(ctx.collection.count(), 1))
+        res = ctx.collection.query(query_embeddings=[vec], n_results=n)
+        return list(res["ids"][0])
+    except Exception:
+        return None
 
 
 def rrf_fuse(rankings, final_k, c=60):
@@ -336,9 +405,30 @@ def score_sources(ctx, query, sources, variants=None):
 
     dense = {}
     try:
-        qv = ctx.embed(qs)
-        cv = ctx.embed([(c.get("text") or "")[:2000] for c in sources])
-        for c, v in zip(sources, cv):
+        # 话术 7 优化：① chunk 正文向量走 _EMBED_CACHE，同一次检索内 Phase 3
+        # 复用 Phase 2 的结果、跨轮问答复用历史结果；② 查询串与正文合并成一次
+        # embed 调用——拆分调用等于把 ~150ms 的固定开销多付一遍。
+        vecs = [None] * len(sources)
+        todo = []                      # [(下标, chunk)]，仅缓存未命中的
+        for i, c in enumerate(sources):
+            hit = _EMBED_CACHE.get(_embed_key(c))
+            if hit is None:
+                todo.append((i, c))
+            else:
+                vecs[i] = hit
+        if qs or todo:
+            batch = qs + [(c.get("text") or "")[:2000] for _, c in todo]
+            allv = ctx.embed(batch)
+            qv = allv[:len(qs)]
+            for n, (i, c) in enumerate(todo):
+                v = allv[len(qs) + n]
+                vecs[i] = v
+                if len(_EMBED_CACHE) >= _EMBED_CACHE_MAX:
+                    _EMBED_CACHE.clear()
+                _EMBED_CACHE[_embed_key(c)] = v
+        else:
+            qv = []
+        for c, v in zip(sources, vecs):
             dense[c["id"]] = max((_cosine(q, v) for q in qv), default=0.0)
     except Exception:
         dense = {}
@@ -412,7 +502,19 @@ def retrieve(ctx, query, dense_k=None, sparse_k=None, final_k=None, use_rerank=F
     t0 = time.time()
     # ---------- Phase 1：原查询双路检索 + 相关度打分（零 LLM 调用） ----------
     _say("① 原查询混合检索（Dense + BM25）…")
-    d0 = dense_search(ctx, query, dense_k)
+    # 话术 7：Phase 1 同样走预计算向量路径。collection.query(query_texts=...) 内部
+    # 会调用 chroma 自带的 DefaultEmbeddingFunction，而它每次调用都重建 ONNX
+    # 会话（~128ms）；改用自己的持久 embed_fn 只需实际推理时间。两条路径返回
+    # 的 id 序列已实测一致，失败则回退原路径。
+    d0 = None
+    try:
+        _qv = ctx.embed([query])
+        if _qv:
+            d0 = dense_search_vec(ctx, _qv[0], dense_k)
+    except Exception:
+        d0 = None
+    if d0 is None:      # None = 向量路失败，回退文本路；[] 是合法空结果，不回退
+        d0 = dense_search(ctx, query, dense_k)
     if source_filter:
         d0 = [i for i in d0 if by_id.get(i, {}).get("source") == source_filter]
     s0 = sparse_search(ctx, query, sparse_k, source=source_filter)
@@ -441,11 +543,21 @@ def retrieve(ctx, query, dense_k=None, sparse_k=None, final_k=None, use_rerank=F
             variants = expand_queries(ctx, query, report=report, allow_llm=False) or [query]
     extra = [v for v in variants[1:] if v and v != query][:MAX_VARIANT_DENSE - 1]
     d_rankings = [d0]
-    for v in extra:
-        ids = dense_search(ctx, v, variant_dense_k)
-        if source_filter:
-            ids = [i for i in ids if by_id.get(i, {}).get("source") == source_filter]
-        d_rankings.append(ids)
+    if extra:
+        # 话术 7：变体向量一次性批量算好（合并 embed 固定开销），再逐个走
+        # query_embeddings 检索；任一环节失败则退回原 dense_search 路径。
+        try:
+            vvecs = ctx.embed(extra)
+        except Exception:
+            vvecs = None
+        for idx, v in enumerate(extra):
+            vec = vvecs[idx] if vvecs and idx < len(vvecs) else None
+            ids = dense_search_vec(ctx, vec, variant_dense_k) if vec is not None else None
+            if ids is None:     # 同上：None 才回退，[] 保留
+                ids = dense_search(ctx, v, variant_dense_k)
+            if source_filter:
+                ids = [i for i in ids if by_id.get(i, {}).get("source") == source_filter]
+            d_rankings.append(ids)
     if extra:
         s_ids = sparse_search(ctx, query, sparse_k, variants=variants, source=source_filter)
         rankings = d_rankings + [s_ids]
@@ -463,7 +575,13 @@ def retrieve(ctx, query, dense_k=None, sparse_k=None, final_k=None, use_rerank=F
     if use_rerank and getattr(getattr(ctx, "llm", None), "available", False) and len(fused) > 1:
         fused = llm_rerank(ctx, query, fused, by_id)
     sources = annotate_paragraphs([dict(by_id[cid]) for cid in fused if cid in by_id], ctx)
-    scores = score_sources(ctx, query, sources, variants=variants)
+    # 话术 7 优化：sources 绝大多数取自 fused_pool，而 pool_scores 已用同一组
+    # (query, variants) 给这些 chunk 打过分——复用即省掉一整轮 embed（实测 ~440ms），
+    # 数值逐位相同。仅对 cap_by_source 从意图排名额外引入的 chunk 补算。
+    missing = [c for c in sources if c["id"] not in pool_scores]
+    if missing:
+        pool_scores.update(score_sources(ctx, query, missing, variants=variants))
+    scores = {c["id"]: pool_scores.get(c["id"], 0.0) for c in sources}
     for c in sources:
         c["score"] = scores.get(c["id"], 0.0)
 
@@ -606,11 +724,12 @@ def _refuse(reason, sources=None, debug=None):
 
 def answer(ctx, question, use_rerank=False, history=None, source_filter=None,
            compare_papers=None, per_paper=COMPARE_PER_PAPER, max_repair=MAX_REPAIR,
-           progress=None):
+           progress=None, on_token=None):
     """抗幻觉问答主入口：检索 → 拒答闸门 → 生成 → 引用校验（范围 + 内容一致性）→ 最多 1 次自动修复
     → 引用净化（越界重定位/重编号，保证【n】与 sources 一一对应）。
 
     返回 {"answer", "sources", "issues", "debug", "refused", "top_score", "unverified"}。
+    on_token: 可选回调，逐 token 接收流式输出（见 _llm_complete_stream）。
     compare_papers 传入论文名列表（≥2）时走按论文分组的对比流程。
     progress: 可选回调 progress(stage_str)，供 UI 展示阶段进度。
     """
@@ -658,7 +777,12 @@ def answer(ctx, question, use_rerank=False, history=None, source_filter=None,
                        sources, debug)
 
     _say("③ 生成答案并校验引用…")
-    text = _llm_complete(ctx, msgs, temperature=0.1)
+    # 话术 7：on_token 提供时走流式（用户逐字看到内容），但完整文本仍要过下面的
+    # 校验 / 净化 / 修复环——流式只提前"看到字的时机"，不放宽任何抗幻觉约束。
+    if on_token:
+        text = _llm_complete_stream(ctx, msgs, temperature=0.1, on_token=on_token)
+    else:
+        text = _llm_complete(ctx, msgs, temperature=0.1)
     issues = check(text)
 
     # 修复策略（Round 9）："角标越界"是确定性可修问题——实测 LLM 修复环对越界角标

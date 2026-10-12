@@ -1078,6 +1078,13 @@ def _delete_paper_records(ctx, filename):
         except Exception:
             pass
     ctx.chunks = [c for c in ctx.chunks if c["source"] != filename]
+    # 话术 7：chunk 正文向量缓存按 (id, 长度) 索引，删文后同 id 可能被后续
+    # 上传的论文复用，必须失效，否则新 chunk 会拿到旧论文的向量。
+    try:
+        from services.rag import clear_embed_cache
+        clear_embed_cache()
+    except Exception:
+        pass
 
 
 def group_versions(ctx):

@@ -14,6 +14,7 @@ Round 9 改动（S1）：
   引用净化记录；溯源卡片编号与答案角标由 rag.sanitize_citations 保证一一对应。
 """
 import html as _html
+import time
 
 import streamlit as st
 from services import rag
@@ -247,26 +248,55 @@ def render(ctx):
         if not getattr(ctx.llm, "available", False):
             st.warning("请先在左侧填入 API Key。")
         else:
-            with st.spinner("正在检索、生成并校验答案…"):
-                stage_ph = st.empty()   # 阶段进度（rag.answer 的 progress 回调驱动）
+            # 话术 7：静态 spinner 改为「阶段进度 + 流式正文」。
+            # 流式只提前"看到字的时机"，rag.answer 仍照常执行引用校验/净化/修复环；
+            # 因此流式期间明确标注"未校验"，完成后由下方已校验结果覆盖。
+            note_ph = st.empty()
+            stage_ph = st.empty()   # 阶段进度（rag.answer 的 progress 回调驱动）
+            stream_ph = st.empty()  # 流式正文
+            _buf = []
+            _last = [0.0]
+            _t0 = [time.perf_counter()]
+            _ttft = [0.0]           # time to first token
 
-                def _progress(stage):
+            def _progress(stage):
+                try:
+                    stage_ph.caption(f"⏳ {stage}")
+                except Exception:
+                    pass
+
+            def _on_token(tok):
+                _buf.append(tok)
+                if _ttft[0] == 0.0:
+                    _ttft[0] = time.perf_counter() - _t0[0]
                     try:
-                        stage_ph.caption(f"⏳ {stage}")
+                        note_ph.caption(
+                            f"✍️ 流式生成中（首字 {_ttft[0]:.1f}s，内容尚未经引用校验，"
+                            f"完成后自动替换为已校验结果）")
+                    except Exception:
+                        pass
+                now = time.perf_counter()
+                if now - _last[0] >= 0.08:   # 节流约 12 帧/秒，避免高频重绘拖慢 UI
+                    _last[0] = now
+                    try:
+                        stream_ph.markdown("".join(_buf) + "▌")
                     except Exception:
                         pass
 
-                try:
-                    result = rag.answer(ctx, q.strip(), use_rerank=use_rerank,
-                                        source_filter=source_filter,
-                                        compare_papers=list(compare_papers) or None,
-                                        progress=_progress)
-                except Exception as e:
-                    show_error("生成回答", e)
-                    result = None
-                finally:
+            try:
+                result = rag.answer(ctx, q.strip(), use_rerank=use_rerank,
+                                    source_filter=source_filter,
+                                    compare_papers=list(compare_papers) or None,
+                                    progress=_progress, on_token=_on_token)
+                if result is not None and _ttft[0]:
+                    result.setdefault("debug", {})["ttft_sec"] = round(_ttft[0], 2)
+            except Exception as e:
+                show_error("生成回答", e)
+                result = None
+            finally:
+                for ph in (note_ph, stage_ph, stream_ph):
                     try:
-                        stage_ph.empty()
+                        ph.empty()
                     except Exception:
                         pass
             if result:

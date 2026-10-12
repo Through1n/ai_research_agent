@@ -39,12 +39,34 @@ def tokenize(text):
     return toks
 
 
+def _build_embed_fn():
+    """构造**持久**的本地 embedding 函数（话术 7：问答提速的最大单点）。
+
+    chroma 的 DefaultEmbeddingFunction.__call__ 每次都临时新建一个
+    ONNXMiniLM_L6_V2 实例：
+        return ONNXMiniLM_L6_V2()(input)
+    而 ONNX 推理会话挂在该类的 cached_property 上，实例一换缓存即失效——
+    实测每次 embed 都重新 initialize_session（约 128ms），占单次调用固定
+    开销的 80%+（1 条文本 155ms 里有 128ms 是建会话）。一次检索调 5 次
+    embed，等于白付 640ms。持有单例后会话只建一次。
+    """
+    try:
+        from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import (
+            ONNXMiniLM_L6_V2,
+        )
+        fn = ONNXMiniLM_L6_V2()
+        fn(["warmup"])          # 触发模型与会话加载，把首问的等待挪到启动期
+        return fn
+    except Exception:
+        return chroma_ef.DefaultEmbeddingFunction()
+
+
 class Container:
     def __init__(self):
         # 多模态/向量
         self._chroma = chromadb.PersistentClient(path=str(CHROMA_DIR))
         self.collection = self._chroma.get_or_create_collection("papers")
-        self.embed_fn = chroma_ef.DefaultEmbeddingFunction()
+        self.embed_fn = _build_embed_fn()
 
         # 文献库元数据 + 分块（chunks 同时持久化到 library.json）
         lib = self._load_library()
