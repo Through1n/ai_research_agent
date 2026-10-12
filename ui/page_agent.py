@@ -16,8 +16,9 @@ import time
 import streamlit as st
 
 from core import agent
+from services import tasks as task_center
 from ui.common import (render_trace, page_header, ensure_state, friendly_error, empty_state,
-                       llm_guard, long_block, step_text, source_card)
+                       llm_guard, long_block, step_text, source_card, render_task_panel)
 
 # 截断预览里「完整的来源条目」匹配：扁平 JSON 对象且含 ref/file/source 字段
 _SRC_ITEM_RE = re.compile(r"\{[^{}]*\"(?:ref|file|source)\"\s*:\s*\"[^\"]+\"[^{}]*\}")
@@ -245,19 +246,63 @@ def _render_sources(trace):
             st.caption(f"📄 {_e(s['ref'])}｜{_e(s['snippet'][:120])}")
 
 
+def _agent_worker(ctx, goal, progress):
+    """后台线程内执行 Agent 任务；只允许写 progress 回调，禁止任何 st.* 调用。"""
+    step = {"n": 0}
+    tokens = {"n": 0}
+
+    def live(trace):
+        step["n"] += 1
+        progress("执行中 · 第 %d 步（规划 / 路由 / 工具调用）" % step["n"])
+
+    def on_token(tok):
+        if not tok:
+            return
+        tokens["n"] += 1
+        if tokens["n"] == 1:
+            progress("正在生成最终答案（流式）…")
+
+    progress("① 意图识别与任务规划")
+    tr = agent.run(ctx, goal, user=ctx.memory.user, live=live, on_token=on_token)
+    progress("✅ 已完成（%d 步 / %d 个 token）" % (step["n"], tokens["n"]))
+    return tr
+
+
+def _submit_goal(ctx, goal):
+    """一键提交：示例按钮与输入框共用此入口（问题一：此前点击示例只填输入框，
+    且填入值活不过一次重绘——按钮在页顶、执行按钮在页底，视觉上毫无反馈）。"""
+    goal = (goal or "").strip()
+    if not goal:
+        return
+    if not llm_guard(ctx, "Agent 执行"):
+        return
+    task_center.submit("Agent：" + goal[:40],
+                       lambda progress, _g=goal: _agent_worker(ctx, _g, progress),
+                       kind="agent", goal=goal)
+    try:
+        st.toast("任务已提交后台执行，进度见左侧任务中心，可随时切换其他页面", icon="🚀")
+    except Exception:
+        pass
+
+
 def render(ctx):
-    page_header("🤖 Agent 总助手",
-                "意图驱动：自动任务规划、多智能体路由、Function Calling 工具闭环，答案带内联引用与溯源。",
+    page_header("🤖 智能总助手（Agent）",
+                "说一句需求，自动完成任务规划、多智能体路由、工具调用闭环，答案带内联引用与溯源。",
                 icon="🤖")
     ensure_state({"agent_runs": list})
 
+    # 新手引导（问题七：缺引导）
+    st.info("🧭 **三步上手**：① 点左侧「🚀 一键加载演示数据」 → ② 点下方任意示例任务直接看效果 → "
+            "③ 在底部输入框换成你自己的科研任务。任务提交后在**左侧任务中心**查看实时进度。",
+            icon="🧭")
+
+    # --- 示例任务：点击即提交后台执行 ---
     cols = st.columns(SUGGEST_COLS)
-    goal_pending = None
     for i, s in enumerate(SUGGEST):
         try:
             if cols[i % SUGGEST_COLS].button(s, key=f"sug{i}"):
-                # 去掉按钮文案开头的 emoji，只把自然语言任务写进输入框
-                goal_pending = s.split(" ", 1)[1] if " " in s else s
+                # 去掉按钮文案开头的 emoji，只把自然语言任务提交执行
+                _submit_goal(ctx, s.split(" ", 1)[1] if " " in s else s)
         except Exception:
             continue
 
@@ -297,65 +342,10 @@ def render(ctx):
         st.markdown("---")
 
     with st.form("agent_form", clear_on_submit=True):
-        goal = st.text_input("描述你的科研任务", value=goal_pending or "")
-        submitted = st.form_submit_button("🚀 执行")
+        goal = st.text_input("描述你的科研任务，提交后后台执行",
+                             key="agent_goal_input",
+                             placeholder="例：对比 Transformer 和 BERT 的架构承袭关系，用表格")
+        submitted = st.form_submit_button("🚀 执行（后台运行，可继续其他操作）")
 
-    if submitted and goal.strip():
-        if not llm_guard(ctx, "Agent 执行"):
-            return
-        think_ph = st.empty()          # 思考过程（增量重绘）
-        ans_ph = st.empty()            # 最终答案（Token 级流式）
-        buf = {"text": "", "t0": 0.0, "n": 0}
-
-        def live(trace):
-            """Agent 每产生一条 Trace 就把思考过程重绘一次（单调增长 = 逐条追加效果）。"""
-            try:
-                _render_thinking(think_ph, trace, streaming=bool(buf["text"]))
-            except Exception:
-                pass
-
-        def on_token(tok):
-            """Token 级流式：每到一个 token 就累积并增量渲染（带光标）。"""
-            if not tok:
-                return
-            if buf["n"] == 0:
-                buf["t0"] = time.time()
-            buf["n"] += 1
-            buf["text"] += tok
-            try:
-                ans_ph.markdown(buf["text"] + "▌")
-            except Exception:
-                pass
-
-        try:
-            with st.spinner(step_text("🤖 Agent 正在规划并执行任务")):
-                tr = agent.run(ctx, goal.strip(), user=ctx.memory.user,
-                               live=live, on_token=on_token)
-            # 收尾：去掉流式光标，定格最终文本
-            try:
-                if buf["text"]:
-                    ans_ph.markdown(buf["text"])
-            except Exception:
-                pass
-            # 悬挂【n】角标修复：答案下方给出工具真实返回的来源对照
-            _render_sources(tr)
-            st.session_state.agent_runs.append({"goal": goal.strip(), "trace": tr})
-            try:
-                think_ph.empty()
-            except Exception:
-                pass
-            st.rerun()
-        except Exception as e:
-            # 错误边界：流式中断也要保留已生成的部分
-            if buf["text"]:
-                st.warning(f"⚠️ 生成被中断（已输出 {buf['n']} 个 token / {len(buf['text'])} 字），"
-                           f"以下为已生成部分：")
-                st.markdown(buf["text"])
-            try:
-                think_ph.empty()
-            except Exception:
-                pass
-            friendly_error("Agent 执行", e,
-                           reasons=["大模型调用超时 / 额度不足", "工具执行异常（网络或磁盘）"],
-                           actions=["重试一次", "换个更简单的任务",
-                                    "或加载演示数据后用示例问题演示"])
+    if submitted and goal and goal.strip():
+        _submit_goal(ctx, goal)

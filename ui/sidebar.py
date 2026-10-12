@@ -11,16 +11,19 @@ from services import library
 from ui.common import (memory_mb, ensure_state, jump_banner, friendly_error, empty_state, step_text)
 
 MENU = [
-    "🤖 0. Agent 总助手",
+    "🤖 0. 智能总助手",
     "📁 1. 文献库管理",
     "💬 2. 跨文献问答与溯源",
     "📖 3. 版式阅读与智能翻译",
-    "🔍 4. 论文自动检索与追踪",
+    "🔍 4. 论文检索与追踪",
     "🕸️ 5. 引用图谱与综述",
     "✍️ 6. 写作辅助与可视化",
-    "🏗️ 系统架构设计",
-    "💡 技术创新亮点",
+    "🏗️ A. 系统架构设计",
+    "💡 B. 技术创新亮点",
 ]
+# 导航分组（问题七：简洁性）：核心工作流 7 项平铺，展示型 2 项收进折叠区
+MENU_MAIN = MENU[:7]
+MENU_ABOUT = MENU[7:]
 
 _PROVIDER_FAIL_HINT = [
     "🩺 可能原因：API Key 有误或已过期 / 平台额度耗尽 / 代理拦截了出网请求。",
@@ -266,13 +269,50 @@ def render(ctx):
             except (TypeError, ValueError, IndexError):
                 pass
 
-        def _sync_menu():
+        def _pick(item):
+            """统一选中入口：写 session_state + 同步 URL 参数（替代旧 on_change）。"""
+            st.session_state["menu"] = item
             try:
-                st.query_params["p"] = MENU.index(st.session_state["menu"])
+                st.query_params["p"] = MENU.index(item)
             except Exception:
                 pass
 
-        menu = st.radio("导航菜单", MENU, key="menu", on_change=_sync_menu)
+        cur = st.session_state.get("menu")
+        if cur not in MENU:                       # 兼容旧值 / 首次进入
+            cur = MENU[0]
+            st.session_state["menu"] = cur
+
+        menu = st.radio("🧭 功能导航", MENU_MAIN,
+                        index=MENU_MAIN.index(cur) if cur in MENU_MAIN else 0,
+                        label_visibility="collapsed")
+        if menu != cur:
+            _pick(menu)
+            cur = menu
+        with st.expander("ℹ️ 关于本系统"):
+            about = st.radio("关于本系统", MENU_ABOUT,
+                             index=MENU_ABOUT.index(cur) if cur in MENU_ABOUT else 0,
+                             label_visibility="collapsed")
+            if about != cur:
+                _pick(about)
+                cur = about
+                menu = about
+
+        # 任务中心：后台任务的实时节点进度（问题五/六），任何页面都可见
+        try:
+            from services import tasks as _tasks
+            from ui.common import render_task_panel
+
+            def _consume_task(t):
+                if t.get("kind") == "agent" and t.get("result") is not None:
+                    runs = st.session_state.setdefault("agent_runs", [])
+                    runs.append({"goal": str(t.get("goal") or t.get("name", "")),
+                                 "trace": t["result"]})
+                    return True
+                return False
+
+            render_task_panel(_tasks, on_finish=_consume_task)
+        except Exception:
+            pass
 
         st.markdown("---")
         if st.button("🚀 一键加载演示数据（v1/v7/BERT）"):

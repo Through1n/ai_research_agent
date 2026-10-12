@@ -19,7 +19,7 @@ import re
 import time
 
 import streamlit as st
-from ui.common import embed_html, page_header, show_error
+from ui.common import embed_html, page_header, show_error, _esc
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -470,11 +470,22 @@ def _diagram_section(ctx):
                             ("dot" if k == "graphviz" else "python"))))
     try:
         if k == "mermaid":
-            embed_html(f'<div class="mermaid" style="display:flex;justify-content:center;">{code}</div>'
-                       '<script type="module">import mermaid from '
-                       '"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";'
-                       'mermaid.initialize({startOnLoad:true,flowchart:{useMaxWidth:false}});</script>',
-                       height=600, scrolling=True)
+            # 零插件渲染（问题六）：mermaid.js 随软件打包在 static/ 目录，
+            # 由 Streamlit 静态服务（/app/static/...）本地加载，断网也能出图；
+            # 静态服务不可用（如旧启动脚本）时自动回退 CDN，双保险。
+            embed_html(
+                f'<div class="mermaid" style="display:flex;justify-content:center;">{_esc(code)}</div>'
+                '<script>(function(){function init(){'
+                'if(window.mermaid){mermaid.initialize({startOnLoad:true,'
+                'flowchart:{useMaxWidth:false}});}}'
+                'var s=document.createElement("script");'
+                's.src="/app/static/mermaid.min.js";'
+                's.onload=init;'
+                's.onerror=function(){var c=document.createElement("script");'
+                'c.src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js";'
+                'c.onload=init;document.head.appendChild(c);};'
+                'document.head.appendChild(s);})();</script>',
+                height=600, scrolling=True)
         elif k == "tikz":
             _render_tikz(code)
         elif k == "graphviz":

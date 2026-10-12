@@ -556,3 +556,67 @@ def resolve_pdf(filename):
     except Exception:
         return None
     return None
+
+
+# ============================ 任务中心（问题五/六） ============================
+def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
+    """后台任务面板：运行中的任务显示当前节点与已耗时，完成后交 on_finish 消费。
+
+    tasks_mod: services.tasks 模块（由调用方传入，避免本模块顶层依赖）。
+    on_finish: 可选回调 fn(task_dict)，任务完成后第一次渲染时在主线程内调用
+               （可安全写 session_state）；调用后该任务被标记 consumed 不再重复。
+    使用 st.fragment 每 2 秒自动刷新；fragment 内不调用 st.rerun，避免整页抖动。
+    """
+    try:
+        decorator = st.fragment(run_every="2s")
+    except Exception:                        # 旧版本无 fragment：退化为静态渲染
+        decorator = lambda f: f
+
+    @decorator
+    def _panel():
+        snaps = tasks_mod.snapshot()
+        active = [t for t in snaps if t["state"] in ("pending", "running")]
+        recent = [t for t in snaps if t["state"] in ("done", "error")][:expanded_max]
+        if not active and not recent:
+            return
+        if active:
+            st.caption("⏳ **运行中的任务**（可切换其他页面，任务在后台继续）")
+            for t in active:
+                used = tasks_mod.elapsed_str((time.time() - t["started"])
+                                             if t["started"] else 0)
+                if t["state"] == "pending":
+                    line = f"🕐 **{t['name']}** — 排队等待中（并发上限 2）"
+                else:
+                    line = f"⚙️ **{t['name']}** — {t['stage']}（已进行 {used}）"
+                if t.get("pct") is not None:
+                    st.progress(t["pct"], text=line)
+                else:
+                    st.markdown(line)
+        for t in recent:
+            used = tasks_mod.elapsed_str((t["ended"] or 0) - (t["started"] or 0))
+            icon = "✅" if t["state"] == "done" else "❌"
+            label = f"{icon} {t['name']} — {t['stage']}" + (f"（用时 {used}）" if used else "")
+            if t["state"] == "error":
+                with st.expander(label):
+                    st.caption("失败原因：" + str(t.get("error", ""))[:200])
+                continue
+            fresh = not t.get("consumed")
+            if on_finish is not None and fresh:
+                try:
+                    on_finish(t)
+                except Exception:
+                    pass
+                tasks_mod.mark_consumed(t["id"])
+                # 结果已写入 session_state；fragment 内触发整页重绘，
+                # 让页面主体（历史记录 / 下载区）立即显示新结果。
+                try:
+                    st.rerun(scope="app")
+                except Exception:
+                    pass
+            with st.expander(label, expanded=fresh):
+                st.caption("结果已转入页面内容（历史记录 / 下载区）。")
+
+    try:
+        _panel()
+    except Exception:
+        pass

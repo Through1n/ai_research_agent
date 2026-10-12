@@ -1304,7 +1304,15 @@ def diagram(ctx, kind, topic):
     }
     name, fence = kinds.get(kind, ("Mermaid flowchart", "```mermaid"))
     prompt = f"""请为主题“{topic}”生成可直接运行的 {name} 代码，用于绘制系统/架构拓扑图。
-要求节点布局清晰、标注准确；只输出代码，不要解释。"""
+
+绘图硬性要求：
+1. **节点与连线标签一律用中文**（专业术语按「中文优先、无法准确翻译才保留英文」原则，
+   例如 Transformer / BERT / Softmax / Embedding 等模型与算法名保留原文，其余描述性
+   文字必须中文，如 “输出概率”“前馈网络”“加归一化”）；
+2. **精简但不丢内容**：同层同类节点合并为一个带说明的节点，节点总数控制在 12 个以内；
+   层级不超过 4 层；禁止为凑结构添加空节点、重复节点或与主题无关的分支；
+3. 每个节点标签 ≤ 10 个汉字，用换行（flowchart 节点内 <br/>）分行使框体不超宽；
+4. 只输出代码，不要任何解释。"""
     raw = _llm_text(ctx, prompt, temperature=0.2)
     raw = raw.replace("```mermaid", "").replace("```latex", "").replace("```dot", "")
     raw = raw.replace("```python", "").replace("```", "").strip()

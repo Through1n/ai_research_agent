@@ -722,7 +722,16 @@ def describe_figures(figures, llm, progress_cb=None):
         has_vision = False
     if not has_vision:
         for fig in figures:
-            fig["desc"] = "（当前 Provider 无视觉模型，已跳过图表理解；切换多模态 Provider 后重新提取可补全）"
+            cap = (fig.get("caption") or "").strip()
+            if cap:
+                # 无视觉模型：退而求其次——把就近提取的原文图注翻译成中文，
+                # 让用户至少知道"这张图是什么"；原文附后便于对照。
+                zh = _translate_caption(llm, cap)
+                fig["desc"] = ("📖 中文解读：%s\n\n\n原文图注：%s" % (zh, cap)
+                               if zh else "原文图注：%s" % cap)
+            else:
+                fig["desc"] = ("（当前模型无视觉能力，且未能提取到该图图注；"
+                               "切换多模态模型后重新解析可自动生成中文解读）")
         return figures
     for i, fig in enumerate(figures):
         try:
@@ -731,7 +740,14 @@ def describe_figures(figures, llm, progress_cb=None):
             messages = [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "用一句专业、简洁的中文描述这张学术图表的内容。"},
+                    {"type": "text", "text": (
+                        "请用中文解读这张学术论文插图，便于不熟悉该论文的读者快速看懂。"
+                        "按三段输出，每段一行，不加标题符号：\n"
+                        "1️⃣ 图的类型与主题（如：柱状对比图，比较 X 与 Y 的 Z）\n"
+                        "2️⃣ 关键组成或数据要点（坐标轴含义、主要趋势/结构，2-3 条）\n"
+                        "3️⃣ 一句话总结这张图想说明什么\n"
+                        "专业术语用中文（模型名/算法缩写如 Transformer、BERT 保留原文）。"
+                    )},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
                 ],
             }]
@@ -750,6 +766,21 @@ def describe_figures(figures, llm, progress_cb=None):
             except Exception:
                 pass
     return figures
+
+
+def _translate_caption(llm, caption):
+    """把英文图注翻译成一句中文；失败返回空串（调用方回退显示原文）。"""
+    try:
+        response = call_llm_with_retry(
+            [{"role": "user", "content":
+              "把下面的学术论文图注翻译成一句通顺的中文，只输出译文，不要解释：\n" + caption[:300]}],
+            model=getattr(llm, "model", None),
+            temperature=0.1,
+            **_llm_kwargs(llm),
+        )
+        return (_llm_response_text(response) or "").strip()
+    except Exception:
+        return ""
 
 
 def full_text(doc):

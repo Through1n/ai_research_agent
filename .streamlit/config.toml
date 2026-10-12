@@ -8,6 +8,8 @@ font = "sans-serif"
 
 # 桌面壳（pywebview）内嵌时的服务器行为；纯浏览器开发同样可用
 [server]
+# 静态资源服务：把 ./static 映射到 /app/static/<file>，mermaid.min.js 随软件本地分发（零插件可用）
+enableStaticServing = true
 headless = true
 address = "127.0.0.1"
 baseUrlPath = ""

@@ -40,6 +40,8 @@ BUNDLE_ITEMS = [
     ("lib", "app_bundle/lib"),
     ("demo_data", "app_bundle/demo_data"),
     (".streamlit", "app_bundle/.streamlit"),
+    # 前端静态库（mermaid.min.js 等）：随软件本地分发，运行时零外网依赖（/app/static/...）
+    ("static", "app_bundle/static"),
 ]
 
 datas = []

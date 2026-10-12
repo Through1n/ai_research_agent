@@ -1365,55 +1365,87 @@ def render(ctx):
                 if st.button("⚡ 翻译并生成原位 PDF", key="pp_go"):
                     if not getattr(getattr(ctx, "llm", None), "available", False):
                         st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
+                        st.caption("🛠️ 怎么办：在左侧「API 模型」区填入 Key 后重试。")
                     else:
                         p3 = min(max(1, int(p3)), tps)
+                        # 分阶段进度（问题六）：翻译 → 排版落盘，每步节点可见
+                        _st_pdf = st.status("① 提取原文并翻译中…", expanded=True)
                         try:
-                            raw = doc[p3 - 1].get_text()[:3000]
-                        except Exception as e:
-                            st.warning(f"⚠️ 读取第 {p3} 页失败：{str(e)[:120]}")
-                            raw = ""
-                        if not raw.strip():
-                            st.error("该页无可提取文本，可能是扫描件。")
-                        else:
-                            zh, err = _safe_translate(ctx, raw)
-                            if not zh:
-                                st.warning(f"⚠️ 翻译失败（{err}），已中止原位 PDF 生成。")
-                                st.caption("🛠️ 怎么办：检查 API Key / 网络后重试；或改用「🖱️ 划词翻译」手动翻译少量文本。")
-                            else:
-                                tmp_dir = None
-                                out = None
-                                probe = _new_probe("原位 PDF 生成")
-                                probe.start()
+                            with _st_pdf:
+                                raw = ""
                                 try:
-                                    with st.spinner("⚡ 正在生成原位 PDF…"):
-                                        tmp_dir = tempfile.mkdtemp(prefix="fig_inplace_")
-                                        out = os.path.join(tmp_dir, f"translated_p{p3}.pdf")
-                                        in_place_pdf(doc, p3, zh, out)
-                                    probe.sample()
-                                    if not out or not os.path.exists(out):
-                                        st.error("❌ PDF 生成失败：输出文件不存在。")
-                                    else:
-                                        with open(out, "rb") as fh:
-                                            data = fh.read()
-                                        if not data:
-                                            st.error("❌ PDF 生成失败：输出为空文件。")
-                                        else:
-                                            st.success(f"✅ 已生成（{len(data) / 1024:.0f} KB）· "
-                                                       f"峰值内存 {probe.peak_mb():.0f} MB / "
-                                                       f"耗时 {probe.elapsed():.1f} 秒")
-                                            st.download_button("📥 下载", data,
-                                                               file_name=f"translated_p{p3}.pdf",
-                                                               mime="application/pdf",
-                                                               key="pp_dl")
+                                    raw = doc[p3 - 1].get_text()[:3000]
                                 except Exception as e:
-                                    st.warning(f"⚠️ 原位 PDF 生成失败：{str(e)[:160]}")
-                                finally:
-                                    # 临时目录 try/finally 清理
-                                    if tmp_dir:
+                                    _st_pdf.update(label=f"⚠️ 读取第 {p3} 页失败", state="error")
+                                    st.warning(f"⚠️ 读取第 {p3} 页失败：{str(e)[:120]}")
+                                if not raw.strip():
+                                    _st_pdf.update(label="⚠️ 该页无可提取文本（可能是扫描件）",
+                                                   state="error")
+                                    st.error("该页无可提取文本，可能是扫描件。")
+                                else:
+                                    zh, err = _safe_translate(ctx, raw)
+                                    if not zh:
+                                        _st_pdf.update(label="⚠️ 翻译失败，已中止", state="error")
+                                        st.warning(f"⚠️ 翻译失败（{err}），已中止原位 PDF 生成。")
+                                        st.caption("🛠️ 怎么办：检查 API Key / 网络后重试；"
+                                                   "或改用「🖱️ 划词翻译」手动翻译少量文本。")
+                                    else:
+                                        _st_pdf.update(label="② 排版并写回 PDF…")
+                                        probe = _new_probe("原位 PDF 生成")
+                                        probe.start()
+                                        tmp_dir, out = None, None
                                         try:
-                                            shutil.rmtree(tmp_dir, ignore_errors=True)
-                                        except Exception:
-                                            pass
+                                            tmp_dir = tempfile.mkdtemp(prefix="fig_inplace_")
+                                            out = os.path.join(tmp_dir, f"translated_p{p3}.pdf")
+                                            in_place_pdf(doc, p3, zh, out)
+                                            probe.sample()
+                                            if out and os.path.exists(out):
+                                                with open(out, "rb") as fh:
+                                                    data = fh.read()
+                                                if data:
+                                                    # 结果写入 session_state：切页/其他交互
+                                                    # 触发重绘后下载按钮不再消失（问题三根因之一）
+                                                    st.session_state["inplace_pdf_result"] = {
+                                                        "page": int(p3), "data": data,
+                                                        "kb": len(data) / 1024,
+                                                        "elapsed": probe.elapsed(),
+                                                        "peak": probe.peak_mb(),
+                                                        "doc": doc_id,
+                                                    }
+                                                    _st_pdf.update(
+                                                        label=f"✅ 原位 PDF 已生成"
+                                                              f"（第 {p3} 页，"
+                                                              f"{len(data) / 1024:.0f} KB，"
+                                                              f"{probe.elapsed():.1f} 秒）",
+                                                        state="complete")
+                                            else:
+                                                _st_pdf.update(label="❌ PDF 生成失败", state="error")
+                                                st.error("❌ PDF 生成失败：输出文件不存在或为空。")
+                                        except Exception as e:
+                                            _st_pdf.update(label="⚠️ 原位 PDF 生成失败", state="error")
+                                            st.warning(f"⚠️ 原位 PDF 生成失败：{str(e)[:160]}")
+                                        finally:
+                                            if tmp_dir:
+                                                try:
+                                                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                                                except Exception:
+                                                    pass
+                        except Exception as e:
+                            try:
+                                _st_pdf.update(label="⚠️ 原位 PDF 区异常", state="error")
+                            except Exception:
+                                pass
+                            st.warning(f"⚠️ 原位 PDF 区异常：{str(e)[:160]}")
+
+                # 结果常驻渲染：来自 session_state，任何交互后都不消失
+                _r = st.session_state.get("inplace_pdf_result")
+                if _r and _r.get("doc") == doc_id and _r.get("data"):
+                    st.success(f"✅ 已生成第 {_r['page']} 页原位 PDF"
+                               f"（{_r['kb']:.0f} KB · 耗时 {_r['elapsed']:.1f} 秒 · "
+                               f"峰值内存 {_r['peak']:.0f} MB）")
+                    st.download_button("📥 下载翻译后的 PDF", _r["data"],
+                                       file_name=f"translated_p{_r['page']}.pdf",
+                                       mime="application/pdf", key="pp_dl")
             except Exception as e:
                 st.warning(f"⚠️ 原位 PDF 区异常：{str(e)[:160]}")
 

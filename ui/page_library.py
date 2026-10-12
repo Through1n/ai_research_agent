@@ -405,7 +405,11 @@ def render(ctx):
                         st.caption(f"⚠️ 插图文件缺失：{path or '(空路径)'}")
                         continue
                     try:
-                        st.image(path, caption=fig.get("desc", f"p{fig.get('page','?')}"))
+                        st.image(path, caption=f"第 {fig.get('page','?')} 页插图")
+                        desc = (fig.get("desc") or "").strip()
+                        if desc and not desc.startswith("（当前"):
+                            st.markdown(desc)
+                        st.markdown("---")
                     except Exception as e:
                         st.caption(f"⚠️ 插图渲染失败（p{fig.get('page','?')}）：{str(e)[:100]}")
                 if len(figs) > MAX_FIG_SHOW:
