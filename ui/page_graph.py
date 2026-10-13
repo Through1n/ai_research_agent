@@ -286,7 +286,8 @@ def render(ctx):
                                    actions=["先加载演示数据（v1/v7/BERT）", "或上传至少 2 篇 PDF"])
 
     # ===== 区二：领域综述与前沿方向生成（与图谱可视化明确区分） =====
-    st.markdown("---")
+    # 原先这里有一条 st.markdown("---")：但紧跟其后的 _sec_head 本身已经是分区信号，
+    # 横线 + 标题 = 双重视觉打断，删掉横线用留白分区更干净。
     _sec_head("领域综述与前沿方向生成", "📝")
     with st.container(border=True):
         c2, c3 = st.columns([1, 1])

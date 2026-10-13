@@ -365,7 +365,9 @@ def _outline_section(ctx):
             st.markdown(f"- 第 {h.get('line_no')} 行 `{str(h.get('fragment', ''))[:60]}`"
                         f"（{h.get('rule')}）：…{str(h.get('line', ''))[:120]}…")
     elif meta.get("references_deterministic"):
-        st.info("🧹 占位串扫描：全文未发现 `[Placeholder]` / `TODO` / `[1..N]` 等占位内容。")
+        # 「没发现问题」是好消息，不该占一整块蓝色提示——降级为一行灰字，
+        # 把色块留给真正需要用户行动的问题。
+        st.caption("🧹 占位串扫描：全文未发现 `[Placeholder]` / `TODO` / `[1..N]` 等占位内容。")
 
     # —— 白名单校验：不通过必须明确列出 ——
     v = meta.get("validation")
