@@ -68,11 +68,14 @@ def render_arch(ctx):
         friendly_error("架构图渲染", e,
                        reasons=["内嵌 HTML 组件不可用"],
                        actions=["刷新页面重试", "下方文字版分层说明不受影响"])
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        st.success("✅ 分层设计：交互层 / Agent 内核 / 工具服务层 / 存储层，职责单向依赖。")
-    with c2:
-        st.info("🔁 Function Calling 闭环：规划 → 路由 → 工具 → 观察 → Trace 可视化。")
+    st.divider()
+    # 要点卡片化：两张并排信息卡，留白清晰，与上方架构图分区
+    with st.container(border=True):
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.success("✅ 分层设计：交互层 / Agent 内核 / 工具服务层 / 存储层，职责单向依赖。")
+        with c2:
+            st.info("🔁 Function Calling 闭环：规划 → 路由 → 工具 → 观察 → Trace 可视化。")
     with st.expander("📐 分层与数据流（完整版）", expanded=False):
         st.markdown(_ARCH_DETAIL)
 
@@ -100,6 +103,12 @@ def render_innov(ctx):
     rows = [{"#": i, "创新点": t, "说明": d} for i, (t, d) in enumerate(_INNOV, 1)]
     pretty_table(pd.DataFrame(rows), title="💡 12 项创新一览")
     st.success(f"✅ 共 {len(_INNOV)} 项创新点，覆盖 Agent 架构、检索抗幻觉、图论挖掘与工程可复现。")
+    st.divider()
+    st.markdown("#### 🔍 逐项说明")
+    # 卡片化：两列网格，每张卡标题 + 说明，留白清晰、标题层级分明
+    _cols = st.columns(2)
     for i, (t, d) in enumerate(_INNOV, 1):
-        with st.expander(f"🔎 {i}. {t}", expanded=False):
-            st.markdown(d)
+        with _cols[i % 2]:
+            with st.container(border=True):
+                st.markdown(f"**{i}. {t}**")
+                st.caption(d)

@@ -46,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 
-from ui.common import embed_html, page_header, show_error
+from ui.common import embed_html, page_header, show_error, empty_state
 
 from config import UPLOAD_DIR, PDF_DIR
 from services import parsing, writing
@@ -1207,7 +1207,9 @@ def render(ctx):
 
         path = _resolve_doc(ctx, prefer)
         if not path:
-            st.info("请先在文献库导入论文，或临时上传。")
+            empty_state("请先在文献库导入论文，或临时上传 PDF。",
+                        hints=["点击左侧「🚀 一键加载演示数据（v1/v7/BERT）」",
+                               "或到「📁 文献库管理」上传 PDF"])
             return
         try:
             doc = parsing.open_doc(path)
@@ -1256,6 +1258,7 @@ def render(ctx):
         with tabs[0]:
             try:
                 p = st.number_input("页码", 1, tps, value=default_page, key="np")
+                st.markdown("**🖼️ 单页操作**")
                 c_a, c_b = st.columns([1, 1])
                 with c_a:
                     if st.button("🎨 渲染该页", key="np_go"):
@@ -1289,6 +1292,7 @@ def render(ctx):
             except Exception as e:
                 st.warning(f"⚠️ 原生渲染区异常：{str(e)[:160]}")
 
+            st.divider()
             with st.expander("📚 长文档批量扫描（性能 / 内存加固）", expanded=False):
                 try:
                     c1, c2, c3 = st.columns([1, 1, 1])
@@ -1337,6 +1341,7 @@ def render(ctx):
                             except Exception:
                                 pass
                             try:
+                                st.markdown("**🌐 中英对照（逐段对齐 · 左右同步滚动）**")
                                 embed_html(bilingual_html(pairs), height=760, scrolling=False)
                             except Exception as e:
                                 st.warning(f"⚠️ 双语视图渲染失败：{str(e)[:160]}")
@@ -1351,6 +1356,7 @@ def render(ctx):
                         st.caption("♻️ 已恢复上次的逐段翻译结果（同页 rerun 不丢失；"
                                    "更换页码后自动失效，需重新加载）。")
                         try:
+                            st.markdown("**🌐 中英对照（逐段对齐 · 左右同步滚动）**")
                             embed_html(bilingual_html(_prev_bi["pairs"]),
                                        height=760, scrolling=False)
                         except Exception:
@@ -1532,6 +1538,8 @@ def render(ctx):
 
                 # autoscroll 标记「一次性消费」：本次 rerun 用它恢复跳转位置，之后自动清空
                 auto_target = _cite_consume_autoscroll()
+                st.divider()
+                st.markdown("**🔗 生成正文 ↔ 参考文献 双向跳转视图**")
                 built_now = False
                 if st.button("🔗 生成双向跳转视图", key="cit_go"):
                     probe = _new_probe("引用双向跳转")
@@ -1655,6 +1663,8 @@ def render(ctx):
                 else:
                     st.caption("点击「📥 加载该页」后即可划选翻译。")
 
+                st.divider()
+                st.markdown("**✍️ 片段翻译**")
                 frag = st.text_area("选中/粘贴原文片段", height=110, key="hl_frag")
                 if st.button("🌐 翻译该片段", key="hl_tr") and str(frag or "").strip():
                     if not getattr(getattr(ctx, "llm", None), "available", False):
@@ -1663,20 +1673,23 @@ def render(ctx):
                         # 流式输出：首 token 约 1~2s 即开始显示（实测 glm-4-flash），
                         # 不用再对着「正在生成」干等 4~10s；公式先占位、流中实时还原
                         _frag_txt = str(frag).strip()
-                        _full = ""
-                        try:
-                            if hasattr(st, "write_stream"):
-                                _full = st.write_stream(
-                                    stream_translate_to_chinese(ctx, _frag_txt))
-                            else:   # 旧版 Streamlit 兜底：收完一次性展示
-                                _full = "".join(list(
-                                    stream_translate_to_chinese(ctx, _frag_txt)))
-                        except Exception as e:
+                        with st.container(border=True):
+                            st.caption("🌐 译文（流式输出，首 token 约 1–2s）")
                             _full = ""
-                            st.warning(f"⚠️ 翻译失败：{type(e).__name__}: {str(e)[:100]}")
-                        if not str(_full or "").strip():
-                            st.warning("⚠️ 翻译失败：模型未返回内容（网络超时、限流或 Key 失效）。")
-                            st.caption("🛠️ 怎么办：稍后重试或缩短片段；接口限流时建议分段翻译。")
+                            try:
+                                if hasattr(st, "write_stream"):
+                                    _full = st.write_stream(
+                                        stream_translate_to_chinese(ctx, _frag_txt))
+                                else:   # 旧版 Streamlit 兜底：收完一次性展示
+                                    _full = "".join(list(
+                                        stream_translate_to_chinese(ctx, _frag_txt)))
+                            except Exception as e:
+                                _full = ""
+                                st.warning(f"⚠️ 翻译失败：{type(e).__name__}: {str(e)[:100]}")
+                            if not str(_full or "").strip():
+                                st.warning("⚠️ 翻译失败：模型未返回内容"
+                                           "（网络超时、限流或 Key 失效）。")
+                                st.caption("🛠️ 怎么办：稍后重试或缩短片段；接口限流时建议分段翻译。")
             except Exception as e:
                 st.warning(f"⚠️ 划词翻译区异常：{str(e)[:160]}")
 
@@ -1693,29 +1706,34 @@ def render(ctx):
                 else:
                     st.caption("未检测到内置书签目录，且未能从正文推断出标题"
                                "（可能是扫描件，或全文无章节编号/字号差异）。")
-                shown = toc[:TOC_RENDER_CAP]
-                for i, item in enumerate(shown):
-                    try:
-                        level, title, pg = int(item[0]), str(item[1]), int(item[2])
-                    except Exception:
-                        continue
-                    pg = min(max(1, pg), max(1, int(tps)))
-                    if st.button(f"{'　' * (max(1, level) - 1)}{title} · p{pg}", key=f"toc{i}"):
+                # 标题树可折叠、默认收起：长文档时避免大量按钮占据垂直空间；
+                # 需要跳转时再展开，点击标题仍写入 TOC_JUMP_KEY 并立即 st.rerun() 定位。
+                n_total = len(toc)
+                with st.expander(f"📑 标题目录（共 {n_total} 条 · 展开后点击标题跳转并高亮）",
+                                 expanded=False):
+                    shown = toc[:TOC_RENDER_CAP]
+                    for i, item in enumerate(shown):
                         try:
-                            st.session_state[TOC_JUMP_KEY] = {"page": pg, "title": title}
+                            level, title, pg = int(item[0]), str(item[1]), int(item[2])
                         except Exception:
-                            pass
-                        # 立即重跑：让 render 开头就消费跳转、把页码控件切到目标页。
-                        # 旧实现只写 key 就返回，用户要再做一次任意交互才生效——
-                        # 实测点击后 read_jump_page 仍是 1，切到「原生渲染」看到旧页。
-                        # （RerunException 继承 BaseException，不会被下面的 except 吞掉）
-                        try:
-                            st.rerun()
-                        except Exception:
-                            st.success(f"已定位到第 {pg} 页「{title[:40]}」"
-                                       f"（再任意操作一次即切换到「📄 原生渲染」标签）")
-                if len(toc) > len(shown):
-                    st.caption(f"（目录共 {len(toc)} 条，首屏渲染前 {len(shown)} 条，避免长文档卡顿）")
+                            continue
+                        pg = min(max(1, pg), max(1, int(tps)))
+                        if st.button(f"{'　' * (max(1, level) - 1)}{title} · p{pg}", key=f"toc{i}"):
+                            try:
+                                st.session_state[TOC_JUMP_KEY] = {"page": pg, "title": title}
+                            except Exception:
+                                pass
+                            # 立即重跑：让 render 开头就消费跳转、把页码控件切到目标页。
+                            # 旧实现只写 key 就返回，用户要再做一次任意交互才生效——
+                            # 实测点击后 read_jump_page 仍是 1，切到「原生渲染」看到旧页。
+                            # （RerunException 继承 BaseException，不会被下面的 except 吞掉）
+                            try:
+                                st.rerun()
+                            except Exception:
+                                st.success(f"已定位到第 {pg} 页「{title[:40]}」"
+                                           f"（再任意操作一次即切换到「📄 原生渲染」标签）")
+                    if len(toc) > len(shown):
+                        st.caption(f"（目录共 {len(toc)} 条，首屏渲染前 {len(shown)} 条，避免长文档卡顿）")
             except Exception as e:
                 st.warning(f"⚠️ 目录解析失败：{str(e)[:160]}")
     finally:

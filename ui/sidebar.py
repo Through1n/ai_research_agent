@@ -309,6 +309,8 @@ def render(ctx):
         if cur in MENU_ABOUT and raw_main is not None and raw_main == prev_main:
             st.session_state["_nav_main"] = None
 
+        # ── 分组标题（纯视觉，强化层次，不动导航逻辑）────────────────
+        st.markdown("**🧭 功能导航**")
         main_val = st.radio("🧭 功能导航", MENU_MAIN,
                             index=MENU_MAIN.index(cur) if cur in MENU_MAIN else None,
                             key="_nav_main",
@@ -333,6 +335,7 @@ def render(ctx):
         st.session_state["_nav_main_shadow"] = main_val
         menu = cur
 
+        st.markdown("---")
         # 任务中心：后台任务的实时节点进度（问题五/六），任何页面都可见
         try:
             from services import tasks as _tasks
@@ -351,7 +354,12 @@ def render(ctx):
             pass
 
         st.markdown("---")
-        if st.button("🚀 一键加载演示数据（v1/v7/BERT）"):
+        # 分组弱化说明：演示/维护属低频操作，放在底部并加次要文案，
+        # 不与上方核心导航争夺注意力（Notion "less is more" 原则）。
+        st.caption("🧪 演示与维护 · 无 Key 也能体验离线功能")
+        if st.button("🚀 一键加载演示数据（v1/v7/BERT）",
+                     use_container_width=True,
+                     help="向文献库写入 3 篇内置示例论文，用于离线演示各项功能（不覆盖已有论文）"):
             items = list(DEMO_PAPERS.items())
             done, fails = 0, []
             # 逐项进度：st.status 的 label 可随循环更新，用户能看到 1/3 → 2/3 → 3/3
@@ -396,41 +404,57 @@ def render(ctx):
                 # 提示写进 flash 再 rerun：否则 success 会被 rerun 吞掉，用户零反馈
                 set_flash("success", f"✅ 演示数据已就绪，当前文献库 {n} 篇")
                 st.rerun()
-        if st.button("🗑️ 清空文献库"):
+        # 🗑️ 清空为危险操作：先二次确认，避免误触（功能不变，仅加一步确认）。
+        _clearing = bool(st.session_state.get("_confirm_clear", False))
+        if st.button("🗑️ 清空文献库", use_container_width=True,
+                     disabled=_clearing,
+                     help="移除文献库全部论文与索引，操作不可撤销"):
             if not ctx.files:
                 st.info("📭 文献库已经是空的，无需清空。")
             else:
-                fails = []
-                targets = list(ctx.files)
-                try:
-                    status = st.status(step_text("🗑️ 正在清空文献库", 0, len(targets)), expanded=False)
-                except Exception:                        # pragma: no cover - 旧版本降级
-                    status = None
-                if status is not None:
-                    with status:
-                        for i, fn in enumerate(targets, 1):
-                            try:
-                                library.remove_paper(ctx, fn)
-                            except Exception as e:
-                                fails.append(f"{fn}：{str(e)[:80]}")
-                            status.update(label=step_text("🗑️ 正在清空文献库", i, len(targets)))
-                        status.update(label="🗑️ 清空完成", state="complete")
-                else:                                    # pragma: no cover - 旧版本降级
-                    with st.spinner(step_text("🗑️ 正在清空文献库")):
-                        for fn in targets:
-                            try:
-                                library.remove_paper(ctx, fn)
-                            except Exception as e:
-                                fails.append(f"{fn}：{str(e)[:80]}")
-                for k in ("graph_pack", "review", "future", "struct", "meta_view",
-                          "formula_view", "ref_view", "pending"):
-                    st.session_state.pop(k, None)
-                if fails:
-                    set_flash("warning", f"⚠️ 清空完成，但有 {len(fails)} 篇移除失败。"
-                                         f"🩺 失败明细：" + "；".join(fails[:3]))
-                else:
-                    set_flash("success", "✅ 已清空文献库")
+                st.session_state["_confirm_clear"] = True
                 st.rerun()
+        if _clearing:
+            st.warning("⚠️ 确认清空整个文献库？该操作不可撤销，将一并清除图谱/综述等缓存。")
+            _cc1, _cc2 = st.columns(2)
+            with _cc1:
+                if st.button("✅ 确认清空", type="primary", use_container_width=True):
+                    fails = []
+                    targets = list(ctx.files)
+                    try:
+                        status = st.status(step_text("🗑️ 正在清空文献库", 0, len(targets)), expanded=False)
+                    except Exception:                    # pragma: no cover - 旧版本降级
+                        status = None
+                    if status is not None:
+                        with status:
+                            for i, fn in enumerate(targets, 1):
+                                try:
+                                    library.remove_paper(ctx, fn)
+                                except Exception as e:
+                                    fails.append(f"{fn}：{str(e)[:80]}")
+                                status.update(label=step_text("🗑️ 正在清空文献库", i, len(targets)))
+                            status.update(label="🗑️ 清空完成", state="complete")
+                    else:                                # pragma: no cover - 旧版本降级
+                        with st.spinner(step_text("🗑️ 正在清空文献库")):
+                            for fn in targets:
+                                try:
+                                    library.remove_paper(ctx, fn)
+                                except Exception as e:
+                                    fails.append(f"{fn}：{str(e)[:80]}")
+                    for k in ("graph_pack", "review", "future", "struct", "meta_view",
+                              "formula_view", "ref_view", "pending"):
+                        st.session_state.pop(k, None)
+                    if fails:
+                        set_flash("warning", f"⚠️ 清空完成，但有 {len(fails)} 篇移除失败。"
+                                             f"🩺 失败明细：" + "；".join(fails[:3]))
+                    else:
+                        set_flash("success", "✅ 已清空文献库")
+                    st.session_state["_confirm_clear"] = False
+                    st.rerun()
+            with _cc2:
+                if st.button("❌ 取消", use_container_width=True):
+                    st.session_state["_confirm_clear"] = False
+                    st.rerun()
         st.caption(_library_stats(ctx))
         st.caption(f"💾 内存 {memory_mb()}")
     return menu

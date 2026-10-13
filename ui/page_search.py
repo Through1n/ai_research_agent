@@ -1,11 +1,29 @@
 """页面 4：论文自动检索、追踪与智能推荐。arXiv/PubMed/网页、批量下载、引用含金量筛选、个性化推荐、动态追踪。"""
 import numpy as np
 import streamlit as st
+from html import escape as _esc
 
 from services import extern
 from tools import definitions as df
 from ui.common import (ensure_state, page_header, net_error, friendly_error, show_error, pretty_table,
                        empty_state, llm_guard, long_block, step_text)
+
+# 分区卡片样式（与 common.page_header 同色系；highlight 用琥珀色，突出追踪/推荐重点区）
+_SEC_CSS = """<style>
+.sec{border-radius:10px;margin:0 0 4px;padding:10px 14px;
+border-left:4px solid #3b6fb6;background:#f3f7fc;}
+.sec.hl{border-left-color:#e0a23b;background:#fdf6ea;}
+.sec .t{font-size:16px;font-weight:700;color:#173a63;line-height:1.4;}
+.sec.hl .t{color:#8a5a00;}
+</style>"""
+
+
+def _sec_head(title: str, icon: str = "", highlight: bool = False):
+    """统一分区标题：一致层级 + 留白；highlight 用于突出动态追踪 / 个性化推荐重点区。"""
+    head = f"{icon} {title}".strip() if icon else str(title or "")
+    cls = "sec hl" if highlight else "sec"
+    st.markdown(_SEC_CSS + f"<div class='{cls}'><span class='t'>{_esc(head)}</span></div>",
+                unsafe_allow_html=True)
 
 # 推荐列表最多展示条数
 MAX_REC_SHOW = 6
@@ -208,7 +226,6 @@ def _set_like(ctx, aid, user, v):
 
 
 def _recommend(ctx):
-    st.subheader("⭐ 个性化推荐（本地库兴趣 + 开源代码 + 点赞/踩反馈）")
     cat = st.text_input("arXiv 分类 / 关键词", value="cs.AI", key="rc")
     uid = getattr(getattr(ctx, "memory", None), "user", "default")
     if st.button("✨ 刷新并推荐"):
@@ -299,7 +316,6 @@ def _score_rows(ctx, cand, uid):
 
 
 def _track(ctx):
-    st.subheader("⏰ arXiv 动态追踪（订阅 + 增量新论文检测）")
     st.caption("按话题订阅领域，系统记住检查点，每次只推送「上次以来新增」的论文，可配合 scripts/watch_daemon.py 定时运行。")
     try:
         from services import track
@@ -361,10 +377,34 @@ def render(ctx):
                 icon="🔍")
     st.caption("ℹ️ 本页面依赖外网；比赛现场断网时请先「🚀 一键加载演示数据」，"
                "用📁文献库 / 💬问答 / 🕸️图谱页完成演示。")
-    for fn in (_track, _recommend, _arxiv, _batch, _others, _quality):
+
+    # —— 重点区（琥珀色突出）：动态追踪订阅 ——
+    _sec_head("arXiv 动态追踪订阅", "⏰", highlight=True)
+    with st.container(border=True):
         try:
-            fn(ctx)
+            _track(ctx)
         except Exception as e:
-            show_error("渲染该区块", e)
-            st.caption("🛠️ 怎么办：其余检索模块不受影响，可继续使用。")
-        st.markdown("---")
+            show_error("渲染「动态追踪」区块", e)
+            st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
+
+    # —— 重点区（琥珀色突出）：个性化推荐 ——
+    st.markdown("---")
+    _sec_head("个性化论文推荐", "⭐", highlight=True)
+    with st.container(border=True):
+        try:
+            _recommend(ctx)
+        except Exception as e:
+            show_error("渲染「个性化推荐」区块", e)
+            st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
+
+    # —— 中性区：论文检索与抓取（arXiv / PubMed / 网页 / 批量 / 引用含金量） ——
+    st.markdown("---")
+    _sec_head("论文检索与抓取", "🔍")
+    with st.container(border=True):
+        for fn in (_arxiv, _others, _batch, _quality):
+            try:
+                fn(ctx)
+            except Exception as e:
+                show_error(f"渲染「{fn.__name__[1:]}」区块", e)
+                st.caption("🛠️ 怎么办：其余检索模块不受影响，可继续使用。")
+            st.markdown("---")

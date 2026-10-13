@@ -23,12 +23,20 @@ from ui.common import (render_trace, page_header, ensure_state, friendly_error, 
 # 截断预览里「完整的来源条目」匹配：扁平 JSON 对象且含 ref/file/source 字段
 _SRC_ITEM_RE = re.compile(r"\{[^{}]*\"(?:ref|file|source)\"\s*:\s*\"[^\"]+\"[^{}]*\}")
 
+# 示例任务：图标 + 短标题 + 一行灰字描述（卡片化）。
+# goal 为真实提交给后台的自然语言文本（不含 emoji 前缀），
+# 保证提交内容仍是中文自然语言，_submit_goal / task_center.submit 逻辑不变。
 SUGGEST = [
-    "🤖 对比 Transformer 和 BERT 的架构承袭关系，用表格",
-    "🧮 Transformer 训练用了什么 GPU？BLEU 是多少？",
-    "🕸️ 帮我构建引用图谱并找出基石论文",
-    "🔍 检索最新的 arXiv cs.AI 论文并推荐有开源代码的",
-    "✍️ 根据 Idea 生成论文框架和 Mermaid 架构图",
+    {"icon": "🤖", "title": "对比架构承袭", "desc": "Transformer vs BERT 架构关系，用表格",
+     "goal": "对比 Transformer 和 BERT 的架构承袭关系，用表格"},
+    {"icon": "🧮", "title": "训练算力与指标", "desc": "用了什么 GPU？BLEU 是多少？",
+     "goal": "Transformer 训练用了什么 GPU？BLEU 是多少？"},
+    {"icon": "🕸️", "title": "引用图谱", "desc": "构建引用图谱并找出基石论文",
+     "goal": "帮我构建引用图谱并找出基石论文"},
+    {"icon": "🔍", "title": "最新论文检索", "desc": "检索 arXiv cs.AI 并推荐开源代码",
+     "goal": "检索最新的 arXiv cs.AI 论文并推荐有开源代码的"},
+    {"icon": "✍️", "title": "论文框架生成", "desc": "根据 Idea 出框架 + Mermaid 架构图",
+     "goal": "根据 Idea 生成论文框架和 Mermaid 架构图"},
 ]
 
 # 顶栏快捷示例的列数（统一列布局：3 列均分）
@@ -304,16 +312,21 @@ def render(ctx):
         st.caption("💡 文献库为空：示例里的检索 / 图谱类任务将返回有限结果，"
                    "建议先点左侧「🚀 一键加载演示数据」再试。")
 
-    # --- 示例任务：点击即提交后台执行 ---
+    # --- 示例任务：紧凑卡片（图标 + 短标题 + 一行灰字描述），点击即提交后台执行 ---
+    st.markdown("**💡 试试这些示例任务**（点击即后台运行，约 10–30 秒返回带引用答案）")
     cols = st.columns(SUGGEST_COLS)
     for i, s in enumerate(SUGGEST):
         try:
-            if cols[i % SUGGEST_COLS].button(s, key=f"sug{i}"):
-                # 去掉按钮文案开头的 emoji，只把自然语言任务提交执行
-                _submit_goal(ctx, s.split(" ", 1)[1] if " " in s else s)
+            with cols[i % SUGGEST_COLS]:
+                with st.container(border=True):
+                    st.markdown(f"**{_e(s['icon'])} {_e(s['title'])}**")
+                    st.caption(s["desc"])
+                    if st.button("用此任务 ▶", key=f"sug{i}", use_container_width=True):
+                        # 提交的是纯中文自然语言目标（已无 emoji 前缀），后台逻辑不变
+                        _submit_goal(ctx, s["goal"])
         except Exception:
             continue
-    st.caption("🔥 以上示例会真实调用模型 + 本地库（非写死假答案），约 10–30 秒出带引用答案；"
+    st.caption("🔥 示例会真实调用模型 + 本地库（非写死假答案），约 10–30 秒出带引用答案；"
                "答案里的【n】可点开下方「📚 答案来源」卡片核对原文。")
 
     # 全站能力速览（评委视角：让新用户一屏看懂整个产品能做什么，明确"使用起来怎么样"）
@@ -331,40 +344,44 @@ def render(ctx):
             "| ✍️ 写作辅助 | CSV / 素材 | 自动出图 + 无幻觉论文框架 + 架构图 + 翻译 |\n"
         )
 
-    # 历史记录
+    # 历史记录（卡片化：标题 + 答案摘要 + 来源数；思考/轨迹默认折叠，首屏更清爽）
     runs = st.session_state.get("agent_runs") or []
     if not runs:
         empty_state("还没有执行记录。",
-                    hints=["点上方示例问题", "或在下方输入框描述你的科研任务"])
+                    hints=["点上方任意示例任务", "或在下方输入框描述你的科研任务"])
     for entry in runs[-MAX_HISTORY:]:
         if not isinstance(entry, dict):
             continue
-        st.markdown(f"#### 🙋 {entry.get('goal','')}")
+        goal = entry.get("goal", "")
         tr = entry.get("trace")
         finals = []
         try:
-            finals = [e for e in tr.to_dicts() if e.get("kind") == "final"]
+            finals = [e for e in tr.to_dicts() if e.get("kind") == "final"] if tr else []
         except Exception:
             finals = []
-        if finals:
-            st.success("✅ 最终答案")
-            long_block(finals[-1].get("content", ""), title="最终答案全文", limit=200)
-            _render_sources(tr)
-        else:
-            st.info("📭 该次执行未产出最终答案（可能被 Guardrails 拦截或工具调用失败）。")
-        with st.expander("🧠 计划 / 路由 / 思考过程", expanded=False):
-            try:
-                _plan_block(tr)
-                _handoff_block(tr)
-                _timeline_block(tr)
-            except Exception as e:
-                st.caption(f"（过程渲染失败：{str(e)[:120]}）")
-        with st.expander("🔍 查看 Agent 执行轨迹", expanded=False):
-            try:
-                render_trace(tr)
-            except Exception as e:
-                st.caption(f"（轨迹渲染失败：{str(e)[:120]}）")
-        st.markdown("---")
+        n_src = len(_collect_sources(tr)) if tr else 0
+        with st.container(border=True):
+            st.markdown(f"**🙋 {_e(goal)}**")
+            if finals:
+                st.success("✅ 已完成" + (f" · 📚 {n_src} 条来源" if n_src else ""))
+                long_block(finals[-1].get("content", ""), title="最终答案全文", limit=200)
+                if n_src:
+                    _render_sources(tr)
+            else:
+                st.info("📭 该次执行未产出最终答案（可能被 Guardrails 拦截或工具调用失败）。")
+            # 思考 / 执行轨迹默认折叠：首屏只留「问题 + 答案」，减少信息噪音
+            with st.expander("🧠 计划 / 路由 / 思考过程", expanded=False):
+                try:
+                    _plan_block(tr)
+                    _handoff_block(tr)
+                    _timeline_block(tr)
+                except Exception as e:
+                    st.caption(f"（过程渲染失败：{str(e)[:120]}）")
+            with st.expander("🔍 查看 Agent 执行轨迹", expanded=False):
+                try:
+                    render_trace(tr)
+                except Exception as e:
+                    st.caption(f"（轨迹渲染失败：{str(e)[:120]}）")
 
     with st.form("agent_form", clear_on_submit=True):
         goal = st.text_input("描述你的科研任务，提交后后台执行",

@@ -19,7 +19,7 @@ import re
 import time
 
 import streamlit as st
-from ui.common import embed_html, page_header, show_error, _esc
+from ui.common import embed_html, page_header, show_error, _esc, empty_state, pretty_table
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -94,7 +94,26 @@ def _render_plan_chart(df, plan):
 
 def _csv_section(ctx):
     st.subheader("📊 CSV 数据可视化（自动出图）")
-    cf = st.file_uploader("上传 CSV", type=["csv"], key="csv")
+    st.caption("💡 上传 CSV 或载入示例后，系统按列类型**自动**推荐并渲染图表，无需手动选择；"
+               "需要更精细控制时，用下方「🛠️ 自定义图表」手动调整。")
+    c_up, c_demo = st.columns([2, 1])
+    cf = c_up.file_uploader("上传 CSV", type=["csv"], key="csv")
+    with c_demo:
+        st.write("")  # 与上传框垂直对齐留白
+        if st.button("📂 载入示例数据", key="csv_demo", use_container_width=True):
+            try:
+                from config import DEMO_DIR
+                p = os.path.join(str(DEMO_DIR), "data.csv")
+                if os.path.exists(p):
+                    st.session_state.df = pd.read_csv(p)
+                    st.session_state.df_name = "demo_data/data.csv"
+                    st.session_state.chart_plan = None
+                    st.session_state.auto_captions = {}
+                    st.session_state.caption = ""
+                else:
+                    st.warning("未找到示例 CSV。")
+            except Exception as e:
+                show_error("载入示例数据", e)
     if cf:
         try:
             st.session_state.df = pd.read_csv(cf)
@@ -104,24 +123,11 @@ def _csv_section(ctx):
             st.session_state.caption = ""
         except Exception as e:
             show_error("解析 CSV", e)
-    if st.button("📂 载入示例数据 demo_data/data.csv"):
-        try:
-            from config import DEMO_DIR
-            p = os.path.join(str(DEMO_DIR), "data.csv")
-            if os.path.exists(p):
-                st.session_state.df = pd.read_csv(p)
-                st.session_state.df_name = "demo_data/data.csv"
-                st.session_state.chart_plan = None
-                st.session_state.auto_captions = {}
-                st.session_state.caption = ""
-            else:
-                st.warning("未找到示例 CSV。")
-        except Exception as e:
-            show_error("载入示例数据", e)
 
     df = st.session_state.get("df")
     if df is None:
-        st.caption("上传 CSV 或载入示例数据后，系统会按列类型**自动**推荐并渲染图表，无需手动选择。")
+        empty_state("尚未载入数据，暂无可可视化的内容。",
+                    hints=["上传 CSV 文件", "或点击上方「📂 载入示例数据」"])
         return
     st.write(df.head())
 
@@ -240,7 +246,7 @@ def _render_reference_provenance(refs, source):
             "来路 PDF": str(r.get("source_pdf") or where)[:40],
         })
     try:
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        pretty_table(rows)
     except Exception as e:                       # 不同 streamlit 版本的参数差异
         st.table(pd.DataFrame(rows[:40]))
         st.caption(f"（表格参数降级：{type(e).__name__}）")
@@ -255,10 +261,13 @@ def _render_reference_provenance(refs, source):
 
 def _outline_section(ctx):
     st.subheader("✍️ 无幻觉论文框架（References 确定性拼接 + 白名单校验）")
+    st.caption("💡 输入研究 Idea 并选择引用来源，系统生成正文框架；References 由入库 PDF "
+               "**确定性拼接**（不经大模型），生成后自动做白名单校验，杜绝编造文献。")
     files = list(getattr(ctx, "paper_order", []) or [])
     if not files:
-        st.error("📭 **请先上传文献到「📁 文献库管理」**（或在左侧点击「🚀 一键加载演示数据」）。"
-                 "文献库为空时不会生成任何引用，以免出现编造文献。")
+        empty_state("文献库为空，无法生成框架（以免出现编造文献）。",
+                    hints=["到「📁 文献库管理」上传 PDF",
+                           "或左侧点击「🚀 一键加载演示数据」"])
         return
     options = ["自动（文献库首篇）"] + files
     src = st.selectbox("References 抽取来源", options, key="ref_source")
@@ -448,6 +457,8 @@ def _render_graphviz(code):
 
 def _diagram_section(ctx):
     st.subheader("🏗️ 架构拓扑图（真实渲染）")
+    st.caption("💡 选择类型并填写主题，生成 Mermaid / TikZ / Graphviz / Matplotlib 代码，"
+               "并尽可能**真实渲染**（本地编译器优先，缺失时降级为源码 / 在线编辑器）。")
     c1, c2 = st.columns(2)
     kind = c1.selectbox("类型", ["mermaid", "tikz", "graphviz", "matplotlib"], key="dg_kind")
     topic = c2.text_input("主题", key="topic")
@@ -500,6 +511,7 @@ def _diagram_section(ctx):
 # ---------------------------------------------------------------- 翻译
 def _translate_section(ctx):
     st.subheader("🌐 学术翻译")
+    st.caption("💡 粘贴待翻译文本，选择中英方向，一键获得学术风格译文（需配置 API Key）。")
     direction = st.radio("方向", ["中→英", "英→中"], horizontal=True, key="trdir")
     text = st.text_area("粘贴文本", key="trtext", height=160)
     if st.button("🔁 一键翻译"):
@@ -524,10 +536,11 @@ def render(ctx):
     _init_state()
     page_header("✍️ 学术写作与可视化",
                 "CSV→自动出图+Figure Caption、无幻觉论文框架（白名单校验）、拓扑图真实渲染、中英学术翻译。")
-    _csv_section(ctx)
-    st.markdown("---")
-    _outline_section(ctx)
-    st.markdown("---")
-    _diagram_section(ctx)
-    st.markdown("---")
-    _translate_section(ctx)
+    with st.container(border=True):
+        _csv_section(ctx)
+    with st.container(border=True):
+        _outline_section(ctx)
+    with st.container(border=True):
+        _diagram_section(ctx)
+    with st.container(border=True):
+        _translate_section(ctx)

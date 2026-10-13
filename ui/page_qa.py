@@ -21,6 +21,20 @@ from services import rag
 from ui.common import require_library, page_header, show_error
 
 
+# 本页局部样式：仅作用于问答页，不改动 ui/common.py；让答案/来源分层更清爽。
+_QA_CSS = """
+<style>
+.qa-hint{font-size:12.5px;color:#4a5a70;margin:2px 0 6px;}
+.qa-answer-start{height:0;border-top:1px solid #eaf0f8;margin:6px 0 2px;}
+.qa-src-gap{height:2px;}
+/* 示例问题 pills 与跳转按钮统一圆角，贴合「胶囊 / 卡片」视觉 */
+.stPills li{font-size:12.5px;}
+.qa-ex-wrap .stButton>button{border-radius:16px;}
+div:has(>.stPills) .stButton>button{border-radius:16px;}
+</style>
+"""
+
+
 EX = ["这篇论文提出了什么模型？", "训练用了什么 GPU？数量和型号？",
       "对比 Transformer 与 BERT 的架构（表格）", "GPT/BERT/Transformer 参数量演化",
       "Adam 的 beta_1、beta_2 是多少？BLEU 分数分别是多少？"]
@@ -138,9 +152,10 @@ def _render_source(rid, i, c):
         page = 1
     st.markdown(anchor_card(source, page, c.get("score", 0.0), c.get("para_idx"), n=i),
                 unsafe_allow_html=True)
-    col_btn, col_meta, col_snip = st.columns([1.4, 1.0, 3.0])
+    # 跳转按钮 / 相关度 / 原文片段 三列对齐，按钮贴右、卡片下方留白一致
+    col_btn, col_meta, col_snip = st.columns([1.3, 1.1, 3.0])
     with col_btn:
-        if st.button(f"📖 定位到《{str(source)[:16]}》第 {page} 页", key=f"jump_{rid}_{i}"):
+        if st.button(f"📖 定位第 {page} 页", key=f"jump_{rid}_{i}", use_container_width=True):
             _set_jump(source, page, c.get("para_idx"))
     with col_meta:
         st.caption(f"相关度 {float(c.get('score', 0.0)):.2f}"
@@ -148,6 +163,7 @@ def _render_source(rid, i, c):
     with col_snip:
         with st.expander(f"原文片段（前 {SNIPPET_LEN} 字）", expanded=False):
             st.text((c.get("text") or "")[:SNIPPET_LEN])
+    st.markdown('<div class="qa-src-gap"></div>', unsafe_allow_html=True)
 
 
 def _render_debug(run):
@@ -192,6 +208,7 @@ def render(ctx):
     page_header("💬 跨文献问答与溯源",
                 "Dense+Sparse 混合检索（多查询变体 RRF）→ 可选 LLM 重排 → 引用校验 + 一次自动修复；"
                 "每个结论带【n】内联引用与可点击的原文出处锚点。")
+    st.markdown(_QA_CSS, unsafe_allow_html=True)
     if not require_library(ctx):
         return
     _init_state()
@@ -208,11 +225,14 @@ def render(ctx):
                 + (f"（第 {pending.get('para_idx')} 段）" if pending.get("para_idx") else "")
                 + f"。请到左侧导航切换到「📖 版式阅读与翻译」查看（session_state['{JUMP_KEY}']）。")
 
-    cols = st.columns(3)
-    for i, e in enumerate(EX):
-        if cols[i % 3].button(e, key=f"ex{i}"):
-            st.session_state["qa_q"] = e
-            st.rerun()
+    # 示例问题：一行紧凑 chips（st.pills 原生胶囊样式，点击直接填入并提问），
+    # 降低首屏决策成本——借鉴 Consensus「Suggested Follow-Up Questions」/ Elicit 极简界面。
+    _sel = st.pills("💡 试试这些问题（点击直接提问）", EX, key="qa_ex_pills",
+                   selection_mode="single", default=None)
+    if _sel:
+        st.session_state["qa_q"] = _sel if isinstance(_sel, str) else (_sel[0] if _sel else "")
+        st.session_state["qa_ex_pills"] = None
+        st.rerun()
 
     # ---------- 范围选择（单篇锁定 / 多篇对比） ----------
     scope = st.radio("检索范围", ["全部文献", "单篇"], horizontal=True, key="qa_scope_mode")
@@ -317,7 +337,7 @@ def render(ctx):
                 st.session_state["qa_q"] = ""
                 st.rerun()
 
-    # ---------- 历史问答渲染 ----------
+    # ---------- 历史问答渲染（答案优先，证据/调试默认折叠，保持界面整洁） ----------
     for run in reversed(st.session_state.get("qa_runs", [])):
         rid = run.get("id", 0)
         st.markdown(f"#### 🙋 {run.get('q', '')}")
@@ -325,6 +345,8 @@ def render(ctx):
         if run.get("refused"):
             st.warning("🛑 " + str(run.get("a", "")))
         else:
+            # 答案区：轻分隔 + 内联【n】引用保持可点跳转（答案优先于证据，视觉分层）
+            st.markdown('<div class="qa-answer-start"></div>', unsafe_allow_html=True)
             st.markdown(str(run.get("a", "")))
         if run.get("issues"):
             st.warning("⚠️ 幻觉防护校验未完全通过：\n" + "\n".join(f"- {x}" for x in run["issues"]))
@@ -335,9 +357,12 @@ def render(ctx):
                        + "\n".join(f"- {x}" for x in run["unverified"]))
         srcs = run.get("sources") or []
         if srcs:
-            with st.expander(f"🔍 溯源（{len(srcs)} 条来源，点击可定位原文）", expanded=False):
+            # 「📚 答案来源」溯源区：默认折叠，卡片间距统一、页码徽章与跳转按钮对齐
+            st.markdown("**📚 答案来源**")
+            with st.expander(f"共 {len(srcs)} 条来源 · 点击展开可定位原文", expanded=False):
                 for i, c in enumerate(srcs, 1):
                     _render_source(rid, i, c)
-        with st.expander("🛠️ 检索调试", expanded=False):
+        # 🛠️ 检索调试：默认折叠、字号小、不喧宾夺主（高级信息后置）
+        with st.expander("🛠️ 检索调试（高级）", expanded=False):
             _render_debug(run)
         st.markdown("---")

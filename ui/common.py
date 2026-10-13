@@ -32,6 +32,40 @@ QA_JUMP_KEY = "qa_jump_page"
 # 📖 版式阅读页在 ui/sidebar.py MENU / app.py _PAGES 中的索引
 READING_MENU_IDX = 3
 
+# ============================ 视觉令牌（设计系统对齐） ============================
+# 对齐 Linear / Vercel 类设计系统的整洁一致性原则：
+#   1) 统一间距尺度（4px 网格：8/12/16/24），padding 对称；
+#   2) 单一强调色（_C_PRIMARY）贯穿全站，减少颜色噪音；
+#   3) 圆角收敛到一套（卡片 10px / 徽章 12px / 小控件 6px），不混用；
+#   4) 浅蓝→浅紫渐变作为全站唯一「卡片渐变」，页头与表头同源。
+# 仅作模块内部常量，不对外暴露，不改变任何导出函数签名与渲染语义。
+_C_PRIMARY      = "#3b6fb6"   # 主强调蓝（左侧竖条 / 徽章 / 链接色）
+_C_PRIMARY_DK   = "#2f5a96"   # 强调蓝深色（渐变终点 / 深表头）
+_C_INK          = "#173a63"   # 标题深蓝灰
+_C_INK_TBL      = "#17325a"   # 表头文字深蓝（与 _C_INK 同源，配合渐变更清晰）
+_C_SUB          = "#4a5a70"   # 副文案
+_C_CELL         = "#26313f"   # 单元格正文
+_C_BORDER       = "#d9e3f2"   # 卡片外边框（浅蓝）
+_C_BORDER_TBL   = "#dde5f0"   # 表格外框
+_C_BORDER_HEAD  = "#bfd2ee"   # 表头底框
+_C_BORDER_CELL  = "#e9eef5"   # 表格单元格分隔线
+_C_BORDER_CELL2 = "#e8edf3"   # 旧表单元格分隔线（html_table）
+_C_BG_BLUE      = "#eef4fc"   # 全站唯一浅蓝渐变起点
+_C_BG_PURPLE    = "#f6f1fd"   # 全站唯一浅紫渐变终点
+_C_BG_SOFT      = "#f7faff"   # 卡片底色（溯源卡）
+_C_BG_ZEBRA     = "#f7fafd"   # 斑马纹
+_C_BG_ZEBRA2    = "#f6f9fd"   # 旧表斑马纹（html_table）
+_C_BG_HOVER     = "#eef4fc"   # 悬停底色
+_C_SOURCE       = "#27518a"   # 溯源标题
+_C_THOUGHT_BG   = "#f4f6fa"   # 思考块底色
+_C_THOUGHT_BD   = "#9aa7bd"   # 思考块竖条
+_C_RADIUS       = "10px"      # 卡片 / 表格圆角
+_C_RADIUS_BADGE = "12px"      # 徽章 / 标签圆角（pill 风格）
+_C_RADIUS_SM    = "6px"       # 小控件圆角（思考块等）
+_C_SHADOW       = "0 1px 3px rgba(23,58,99,.06)"  # 统一轻投影（蓝色调，呼应品牌）
+_C_PAD          = "12px 16px"  # 统一卡片内边距（对称）
+_C_MARGIN       = "2px 0 14px" # 统一卡片外边距
+
 
 # ============================ 基础工具 ============================
 def _esc(x) -> str:
@@ -69,11 +103,11 @@ def page_header(title: str, subtitle: str = "", icon: str = ""):
     head = f"{icon} {title}".strip() if icon else str(title or "").strip()
     sub = str(subtitle or "").strip()
     st.markdown(
-        f"""<div style="background:linear-gradient(90deg,#eef4fc 0%,#f6f1fd 100%);
-border:1px solid #d9e3f2;border-left:4px solid #3b6fb6;border-radius:10px;
-padding:12px 16px;margin:2px 0 14px;box-shadow:0 1px 3px rgba(23,58,99,.06);">
-<div style="font-size:20px;font-weight:700;color:#173a63;line-height:1.35;">{_esc(head)}</div>
-{"" if not sub else f'<div style="margin-top:5px;font-size:13px;color:#4a5a70;line-height:1.65;">{_esc(sub)}</div>'}
+        f"""<div style="background:linear-gradient(90deg,{_C_BG_BLUE} 0%,{_C_BG_PURPLE} 100%);
+border:1px solid {_C_BORDER};border-left:4px solid {_C_PRIMARY};border-radius:{_C_RADIUS};
+padding:{_C_PAD};margin:{_C_MARGIN};box-shadow:{_C_SHADOW};">
+<div style="font-size:20px;font-weight:700;color:{_C_INK};line-height:1.35;">{_esc(head)}</div>
+{"" if not sub else f'<div style="margin-top:5px;font-size:13px;color:{_C_SUB};line-height:1.65;">{_esc(sub)}</div>'}
 </div>""",
         unsafe_allow_html=True,
     )
@@ -81,16 +115,20 @@ padding:12px 16px;margin:2px 0 14px;box-shadow:0 1px 3px rgba(23,58,99,.06);">
 
 # ============================ UI 规范 4：统一表格 ============================
 _PRETTY_CSS = """<style>
-.ptab-wrap{overflow-x:auto;margin:8px 0 12px;border:1px solid #dde5f0;border-radius:10px;}
-table.ptab{border-collapse:collapse;width:100%;font-size:13px;
+.ptab-wrap{overflow-x:auto;margin:8px 0 12px;border:1px solid %s;border-radius:%s;}
+table.ptab{border-collapse:collapse;width:100%%;font-size:13px;
 font-family:'Segoe UI','Microsoft YaHei',sans-serif;}
-.ptab th{background:linear-gradient(90deg,#e2edfb 0%,#efe7fb 100%);color:#17325a;
-font-weight:700;padding:9px 12px;text-align:left;border-bottom:1.5px solid #bfd2ee;white-space:nowrap;}
-.ptab td{padding:8px 12px;border-bottom:1px solid #e9eef5;color:#26313f;
+.ptab th{background:linear-gradient(90deg,%s 0%%,%s 100%%);color:%s;
+font-weight:700;padding:9px 12px;text-align:left;border-bottom:1.5px solid %s;white-space:nowrap;}
+.ptab td{padding:8px 12px;border-bottom:1px solid %s;color:%s;
 vertical-align:top;line-height:1.6;}
-.ptab tr:nth-child(even) td{background:#f7fafd;}
-.ptab tr:hover td{background:#eef4fc;}
-</style>"""
+.ptab tr:nth-child(even) td{background:%s;}
+.ptab tr:hover td{background:%s;}
+</style>""" % (
+    _C_BORDER_TBL, _C_RADIUS,
+    _C_BG_BLUE, _C_BG_PURPLE, _C_INK_TBL, _C_BORDER_HEAD,
+    _C_BORDER_CELL, _C_CELL, _C_BG_ZEBRA, _C_BG_HOVER,
+)
 
 
 def _to_frame(df_or_rows, columns=None) -> pd.DataFrame:
@@ -447,9 +485,10 @@ def embed_html(html, height=600, scrolling=True):
 def html_table(df):
     """旧版 HTML 表格（深色表头），保留供历史调用；新代码请统一用 pretty_table。"""
     css = """<style>.ptable{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0;}
-.ptable th{background:linear-gradient(135deg,#3b6fb6,#2f5a96);color:#fff;padding:9px 12px;text-align:left;}
-.ptable td{padding:8px 12px;border-bottom:1px solid #e8edf3;}
-.ptable tr:nth-child(even){background:#f6f9fd;}.ptable tr:hover{background:#eef4fb;}</style>"""
+.ptable th{background:linear-gradient(135deg,%s,%s);color:#fff;padding:9px 12px;text-align:left;}
+.ptable td{padding:8px 12px;border-bottom:1px solid %s;}
+.ptable tr:nth-child(even){background:%s;}.ptable tr:hover{background:%s;}</style>""" % (
+        _C_PRIMARY, _C_PRIMARY_DK, _C_BORDER_CELL2, _C_BG_ZEBRA2, _C_BG_HOVER)
     try:
         body = df.to_html(index=False, classes="ptable", border=0, escape=False)
     except Exception as e:
@@ -461,17 +500,17 @@ def html_table(df):
 def source_card(source, page, text, n=None, snippet_len=520):
     """溯源卡片：页码徽章可点击跳转阅读页（?p=3&jump_page=N&paper=文件名）。"""
     tag = f"【{n}】 " if n else ""
-    t = str(text or "")[:snippet_len]
-    t = t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # 复用全站统一的 _esc 转义（原为内联 .replace，存在重复转义逻辑），避免注入
+    t = _esc(str(text or "")[:snippet_len])
     # 阅读页在 MENU 中的索引为 3（📖 版式阅读与智能翻译）
     safe_src = str(source).replace('"', "%22")
     badge = (f'<a href="?p={READING_MENU_IDX}&jump_page={page}&paper={safe_src}" target="_self" '
              f'style="text-decoration:none;color:#fff;display:inline-block;">第 {page} 页</a>')
-    return f"""<div style="background:#f7faff;border-left:4px solid #3b6fb6;border-radius:8px;
-padding:12px 16px;margin:8px 0;box-shadow:0 1px 2px rgba(0,0,0,.05);">
+    return f"""<div style="background:{_C_BG_SOFT};border-left:4px solid {_C_PRIMARY};border-radius:{_C_RADIUS};
+padding:{_C_PAD};margin:8px 0;box-shadow:{_C_SHADOW};">
 <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-<strong style="color:#27518a;font-size:13.5px;">{tag}📄 {_esc(source)}</strong>
-<span style="background:#3b6fb6;color:#fff;padding:1px 10px;border-radius:12px;font-size:11.5px;">{badge}</span></div>
+<strong style="color:{_C_SOURCE};font-size:13.5px;">{tag}📄 {_esc(source)}</strong>
+<span style="background:{_C_PRIMARY};color:#fff;padding:1px 10px;border-radius:{_C_RADIUS_BADGE};font-size:11.5px;">{badge}</span></div>
 <div style="color:#333;font-size:12.5px;line-height:1.75;white-space:pre-wrap;">{t}…</div></div>"""
 
 
@@ -505,8 +544,8 @@ def render_trace(trace, in_expander=False):
                                 f"<span style='color:#888;font-size:12px;'>{_esc(ev.get('content',''))}</span>",
                                 unsafe_allow_html=True)
                 elif kind == "thought":
-                    st.markdown(f"<div style='background:#f4f6fa;border-left:3px solid #9aa7bd;padding:8px 12px;"
-                                f"border-radius:6px;color:#444;font-size:12.5px;white-space:pre-wrap;'>"
+                    st.markdown(f"<div style='background:{_C_THOUGHT_BG};border-left:3px solid {_C_THOUGHT_BD};padding:8px 12px;"
+                                f"border-radius:{_C_RADIUS_SM};color:#444;font-size:12.5px;white-space:pre-wrap;'>"
                                 f"{icon} {_esc(ev.get('content',''))}</div>", unsafe_allow_html=True)
                 elif kind == "tool":
                     d = ev.get("data") or {}

@@ -2,12 +2,27 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
+from html import escape as _esc
 
 from services import graph as g
 from services import library as _lib
 from ui.common import (embed_html, require_library, page_header, pretty_table, ensure_state,
                        friendly_error, empty_state, llm_guard, long_block, step_text, at)
 from ui.sidebar import set_flash
+
+# 分区卡片样式（与 common.page_header 同色系）。图谱可视化区与综述/前沿生成区分区，层级一致。
+_SEC_CSS = """<style>
+.sec{border-radius:10px;margin:0 0 4px;padding:10px 14px;
+border-left:4px solid #3b6fb6;background:#f3f7fc;}
+.sec .t{font-size:16px;font-weight:700;color:#173a63;line-height:1.4;}
+</style>"""
+
+
+def _sec_head(title: str, icon: str = ""):
+    """统一分区标题：一致层级 + 留白，便于图谱可视化区与生成区清晰区分。"""
+    head = f"{icon} {title}".strip() if icon else str(title or "")
+    st.markdown(_SEC_CSS + f"<div class='sec'><span class='t'>{_esc(head)}</span></div>",
+                unsafe_allow_html=True)
 
 # 引用关系列表一次展示的最大条数（其余折叠）
 MAX_EDGE_SHOW = 12
@@ -190,133 +205,140 @@ def render(ctx):
     if not require_library(ctx):
         return
 
-    if st.button("🕸️ 构建引用图谱"):
-        bar = st.progress(0.0)
-        note = st.empty()
-        try:
-            note.caption(step_text("🕸️ 解析引用关系"))
-            G, edges, metrics, corner, edge = _build_real(ctx, bar=bar, note=note)
+    # ===== 区一：引用图谱可视化（构建 / 结果 / 演示，均属图谱范畴） =====
+    _sec_head("引用图谱可视化", "🕸️")
+    with st.container(border=True):
+        if st.button("🕸️ 构建引用图谱"):
+            bar = st.progress(0.0)
+            note = st.empty()
             try:
-                html = g.graph_html(G, metrics, corner)
-            except Exception as e:
-                html = ""
-                friendly_error("图谱 HTML 生成", e,
-                               reasons=["lib/vis-9.1.2 可视化库文件缺失"],
-                               actions=["检查 lib/ 目录完整性", "表格版图论指标仍可正常使用"])
-            try:
-                bar.empty()
-                note.empty()
-            except Exception:
-                pass
-            pack = _make_pack(G, edges, metrics, corner, edge)
-            pack["html"] = html
-            st.session_state.graph_pack = pack
-            if edges:
-                st.success(f"✅ 图谱构建完成：{len(pack['nodes'])} 个节点 · {len(edges)} 条真实引用关系")
-            else:
-                st.warning("⚠️ 未检测到文献间的真实引用关系，已生成仅含节点的图谱。")
-                st.caption("🩺 可能原因：论文正文未包含 References 章节 / 演示语料引用条目过少。")
-                st.caption("🛠️ 怎么办：①上传含完整参考文献的真实 PDF（如 BERT 与 Transformer）；"
-                           "②或点下方「🎭 演示模式示意图谱」兜底演示。")
-        except Exception as e:
-            try:
-                bar.empty()
-                note.empty()
-            except Exception:
-                pass
-            friendly_error("构建引用图谱", e,
-                           reasons=["论文正文缺少 References 章节导致解析为空",
-                                    "embedding 推理失败 / 内存不足"],
-                           actions=["重试一次", "点下方「🎭 演示模式示意图谱」",
-                                    "或减少文献数量后重试"])
-
-    pack = st.session_state.get("graph_pack")
-    if pack and isinstance(pack, dict):
-        try:
-            _render_pack(ctx, pack)
-        except Exception as e:
-            friendly_error("图谱结果渲染", e, reasons=["图谱数据结构不完整"],
-                           actions=["点上方按钮重新构建图谱"])
-    else:
-        empty_state("尚未构建图谱。",
-                    hints=["点上方「🕸️ 构建引用图谱」",
-                           "演示数据加载后可一键生成 BERT→Transformer 关系",
-                           "⚠️ 本地演示语料经版本合并后仅 2-3 个逻辑节点，未达赛题『20 篇』规模；"
-                           "图谱指标在小语料下仅供参考，上传更多含 References 的 PDF 效果更佳"])
-
-    st.markdown("---")
-    c1, c2, c3 = st.columns([1, 1, 1])
-    if c1.button("🎭 演示模式示意图谱"):
-        with st.spinner(step_text("🎭 正在生成演示模式示意图谱")):
-            try:
-                G, edges, metrics, corner, edge = _build_demo(ctx)
+                note.caption(step_text("🕸️ 解析引用关系"))
+                G, edges, metrics, corner, edge = _build_real(ctx, bar=bar, note=note)
                 try:
                     html = g.graph_html(G, metrics, corner)
-                except Exception:
+                except Exception as e:
                     html = ""
-                pack = _make_pack(G, edges, metrics, corner, edge, demo=True)
+                    friendly_error("图谱 HTML 生成", e,
+                                   reasons=["lib/vis-9.1.2 可视化库文件缺失"],
+                                   actions=["检查 lib/ 目录完整性", "表格版图论指标仍可正常使用"])
+                try:
+                    bar.empty()
+                    note.empty()
+                except Exception:
+                    pass
+                pack = _make_pack(G, edges, metrics, corner, edge)
                 pack["html"] = html
                 st.session_state.graph_pack = pack
-                # 本按钮位于「图谱结果读取」之后，若不 rerun，本轮页面上方的
-                # 「尚未构建图谱」空状态会与新生成的图谱并存，自相矛盾。
-                # 提示写进 flash 以跨 rerun 存活（直接 st.success 会被吞）。
-                set_flash("success", f"✅ 演示图谱已生成：{len(pack['nodes'])} 节点 · "
-                                     f"{len(edges)} 条示意关系")
-                st.rerun()
+                if edges:
+                    st.success(f"✅ 图谱构建完成：{len(pack['nodes'])} 个节点 · {len(edges)} 条真实引用关系")
+                else:
+                    st.warning("⚠️ 未检测到文献间的真实引用关系，已生成仅含节点的图谱。")
+                    st.caption("🩺 可能原因：论文正文未包含 References 章节 / 演示语料引用条目过少。")
+                    st.caption("🛠️ 怎么办：①上传含完整参考文献的真实 PDF（如 BERT 与 Transformer）；"
+                               "②或点下方「🎭 演示模式示意图谱」兜底演示。")
             except Exception as e:
-                friendly_error("演示模式示意图谱", e,
-                               reasons=["论文数量不足 2 篇", "embedding 推理失败"],
-                               actions=["先加载演示数据（v1/v7/BERT）", "或上传至少 2 篇 PDF"])
+                try:
+                    bar.empty()
+                    note.empty()
+                except Exception:
+                    pass
+                friendly_error("构建引用图谱", e,
+                               reasons=["论文正文缺少 References 章节导致解析为空",
+                                        "embedding 推理失败 / 内存不足"],
+                               actions=["重试一次", "点下方「🎭 演示模式示意图谱」",
+                                        "或减少文献数量后重试"])
 
-    if c2.button("📝 一键生成领域综述"):
-        if llm_guard(ctx, "领域综述生成"):
-            # 话术 3：该步压测 31.90s，静态 spinner 全程文案不变，演示时观感等同卡死。
-            # 改用 st.status 并把 generate_review 上报的阶段实时反映到标题上。
-            with st.status(step_text("📝 正在生成领域综述"), expanded=True) as status:
+        pack = st.session_state.get("graph_pack")
+        if pack and isinstance(pack, dict):
+            try:
+                _render_pack(ctx, pack)
+            except Exception as e:
+                friendly_error("图谱结果渲染", e, reasons=["图谱数据结构不完整"],
+                               actions=["点上方按钮重新构建图谱"])
+        else:
+            empty_state("尚未构建图谱。",
+                        hints=["点上方「🕸️ 构建引用图谱」",
+                               "演示数据加载后可一键生成 BERT→Transformer 关系",
+                               "⚠️ 本地演示语料经版本合并后仅 2-3 个逻辑节点，未达赛题『20 篇』规模；"
+                               "图谱指标在小语料下仅供参考，上传更多含 References 的 PDF 效果更佳"])
 
-                def _rev_progress(stage):
+        st.markdown("---")
+        if st.button("🎭 演示模式示意图谱"):
+            with st.spinner(step_text("🎭 正在生成演示模式示意图谱")):
+                try:
+                    G, edges, metrics, corner, edge = _build_demo(ctx)
                     try:
-                        status.update(label=f"📝 正在生成领域综述 · {stage}")
+                        html = g.graph_html(G, metrics, corner)
                     except Exception:
-                        pass
-
-                try:
-                    # 复用已构建的真实图谱（演示图谱不复用），避免重复解析引用关系
-                    pack = st.session_state.get("graph_pack") or {}
-                    G = pack.get("G") if isinstance(pack, dict) else None
-                    if G is None or pack.get("demo"):
-                        _rev_progress("⓪ 解析引用关系建图…")
-                        G, _ = g.build_graph(ctx)
-                    metrics = g.analyze(G)
-                    corner, edge = g.classify_papers(G, metrics)
-                    st.session_state["review"] = g.generate_review(
-                        ctx, G, metrics, corner, progress_cb=_rev_progress) or ""
-                    status.update(label="✅ 领域综述已生成", state="complete")
-                    st.success("✅ 领域综述已生成")
+                        html = ""
+                    pack = _make_pack(G, edges, metrics, corner, edge, demo=True)
+                    pack["html"] = html
+                    st.session_state.graph_pack = pack
+                    # 本按钮位于「图谱结果读取」之后，若不 rerun，本轮页面上方的
+                    # 「尚未构建图谱」空状态会与新生成的图谱并存，自相矛盾。
+                    # 提示写进 flash 以跨 rerun 存活（直接 st.success 会被吞）。
+                    set_flash("success", f"✅ 演示图谱已生成：{len(pack['nodes'])} 节点 · "
+                                         f"{len(edges)} 条示意关系")
+                    st.rerun()
                 except Exception as e:
-                    friendly_error("生成综述", e,
-                                   reasons=["大模型返回超时 / 额度不足", "文献库为空导致无素材"],
-                                   actions=["重试一次", "或减少单次综述的文献数量"])
-    if c3.button("🚀 Future Work 前沿扫描（排除已解决）"):
-        if llm_guard(ctx, "Future Work 前沿扫描"):
-            with st.spinner(step_text("🚀 正在扫描前沿方向")):
-                try:
-                    pack = st.session_state.get("graph_pack") or {}
-                    G = pack.get("G") if isinstance(pack, dict) else None
-                    if G is None or pack.get("demo"):
-                        G, _ = g.build_graph(ctx)
-                    st.session_state["future"] = g.explore_future(ctx, G) or ""
-                    st.success("✅ 前沿方向扫描完成")
-                except Exception as e:
-                    friendly_error("前沿扫描", e,
-                                   reasons=["大模型返回超时 / 额度不足", "图谱为空"],
-                                   actions=["先点「🕸️ 构建引用图谱」", "或重试一次"])
+                    friendly_error("演示模式示意图谱", e,
+                                   reasons=["论文数量不足 2 篇", "embedding 推理失败"],
+                                   actions=["先加载演示数据（v1/v7/BERT）", "或上传至少 2 篇 PDF"])
 
-    review_txt = st.session_state.get("review", "") or ""
-    future_txt = st.session_state.get("future", "") or ""
-    if review_txt:
-        st.markdown("##### 📖 领域综述")
-        long_block(review_txt, title="领域综述全文", limit=200)
-    if future_txt:
-        st.markdown("##### 🚀 前沿方向")
-        long_block(future_txt, title="前沿方向全文", limit=200)
+    # ===== 区二：领域综述与前沿方向生成（与图谱可视化明确区分） =====
+    st.markdown("---")
+    _sec_head("领域综述与前沿方向生成", "📝")
+    with st.container(border=True):
+        c2, c3 = st.columns([1, 1])
+        if c2.button("📝 一键生成领域综述"):
+            if llm_guard(ctx, "领域综述生成"):
+                # 话术 3：该步压测 31.90s，静态 spinner 全程文案不变，演示时观感等同卡死。
+                # 改用 st.status 并把 generate_review 上报的阶段实时反映到标题上。
+                with st.status(step_text("📝 正在生成领域综述"), expanded=True) as status:
+
+                    def _rev_progress(stage):
+                        try:
+                            status.update(label=f"📝 正在生成领域综述 · {stage}")
+                        except Exception:
+                            pass
+
+                    try:
+                        # 复用已构建的真实图谱（演示图谱不复用），避免重复解析引用关系
+                        pack = st.session_state.get("graph_pack") or {}
+                        G = pack.get("G") if isinstance(pack, dict) else None
+                        if G is None or pack.get("demo"):
+                            _rev_progress("⓪ 解析引用关系建图…")
+                            G, _ = g.build_graph(ctx)
+                        metrics = g.analyze(G)
+                        corner, edge = g.classify_papers(G, metrics)
+                        st.session_state["review"] = g.generate_review(
+                            ctx, G, metrics, corner, progress_cb=_rev_progress) or ""
+                        status.update(label="✅ 领域综述已生成", state="complete")
+                        st.success("✅ 领域综述已生成")
+                    except Exception as e:
+                        friendly_error("生成综述", e,
+                                       reasons=["大模型返回超时 / 额度不足", "文献库为空导致无素材"],
+                                       actions=["重试一次", "或减少单次综述的文献数量"])
+        if c3.button("🚀 Future Work 前沿扫描（排除已解决）"):
+            if llm_guard(ctx, "Future Work 前沿扫描"):
+                with st.spinner(step_text("🚀 正在扫描前沿方向")):
+                    try:
+                        pack = st.session_state.get("graph_pack") or {}
+                        G = pack.get("G") if isinstance(pack, dict) else None
+                        if G is None or pack.get("demo"):
+                            G, _ = g.build_graph(ctx)
+                        st.session_state["future"] = g.explore_future(ctx, G) or ""
+                        st.success("✅ 前沿方向扫描完成")
+                    except Exception as e:
+                        friendly_error("前沿扫描", e,
+                                       reasons=["大模型返回超时 / 额度不足", "图谱为空"],
+                                       actions=["先点「🕸️ 构建引用图谱」", "或重试一次"])
+
+        review_txt = st.session_state.get("review", "") or ""
+        future_txt = st.session_state.get("future", "") or ""
+        if review_txt:
+            st.markdown("##### 📖 领域综述")
+            long_block(review_txt, title="领域综述全文", limit=200)
+        if future_txt:
+            st.markdown("##### 🚀 前沿方向")
+            long_block(future_txt, title="前沿方向全文", limit=200)

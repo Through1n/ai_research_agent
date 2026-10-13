@@ -1,6 +1,7 @@
 """页面 1：文献库管理。语义查重与版本决策、元数据/排版识别、细粒度结构（标题树/表格/图表/公式/参考文献/附录）、首跑自愈。"""
 import os
 import time
+from html import escape as _h
 
 import pandas as pd
 import streamlit as st
@@ -25,6 +26,24 @@ def _init():
         "formula_view": None,
         "ref_view": None,
     })
+
+
+def _section(title, desc=""):
+    """分区标题：与 page_header 一致的蓝色左侧强调条风格，统一层级、留白舒适。
+
+    借鉴 Zotero 三栏分区 + Paperpile 按逻辑分组的原则：每个功能区用一致的标题卡片，
+    替代原先零散的 st.subheader，避免视觉噪音、提升扫描可读性。
+    """
+    block = (f'<div style="margin:20px 0 12px;padding:4px 0 4px 12px;'
+             f'border-left:4px solid #3b6fb6;'
+             f'background:linear-gradient(90deg,#eef4fc 0%,rgba(238,244,252,0) 100%);'
+             f'border-radius:6px;">'
+             f'<div style="font-size:16px;font-weight:700;color:#173a63;line-height:1.4;">{_h(title)}</div>')
+    if desc:
+        block += (f'<div style="margin-top:4px;font-size:12.5px;color:#5a6678;'
+                  f'line-height:1.6;">{_h(desc)}</div>')
+    block += '</div>'
+    st.markdown(block, unsafe_allow_html=True)
 
 
 def _struct_error_hint(what, e):
@@ -181,7 +200,8 @@ def render(ctx):
     st.markdown("---")
 
     # ---------------- 上传 & 语义查重 ----------------
-    st.subheader("⬆️ 上传 PDF（自动语义查重 / 扫描件 OCR）")
+    _section("⬆️ 上传 PDF（自动语义查重 / 扫描件 OCR）",
+             "拖入 PDF 后自动解析与语义查重；命中已有论文会提示版本决策。")
     f = st.file_uploader("选择 PDF", type=["pdf"], key="lib_up")
     if f and st.button("🔍 解析并查重"):
         if not f.name:
@@ -262,7 +282,7 @@ def render(ctx):
 
     st.markdown("---")
     # ---------------- 元数据 / 排版 ----------------
-    st.subheader("🪪 元数据与排版识别")
+    _section("🪪 元数据与排版识别", "选择论文后抽取标题/作者/机构/摘要，并判断单/双栏排版。")
     if not ctx.files:
         empty_state("文献库为空，暂无可识别元数据的论文。",
                     hints=["在上方上传 PDF", "或点击左侧「🚀 一键加载演示数据」"])
@@ -304,7 +324,7 @@ def render(ctx):
 
     st.markdown("---")
     # ---------------- 细粒度结构 ----------------
-    st.subheader("🔬 细粒度结构解析")
+    _section("🔬 细粒度结构解析", "提取标题树 / 表格 / 插图，并可按需抽取公式与参考文献。")
     if not ctx.files:
         empty_state("文献库为空，暂无可解析的细粒度结构。",
                     hints=["在上方上传 PDF", "或点击左侧「🚀 一键加载演示数据」"])
@@ -470,20 +490,31 @@ def render(ctx):
 
     st.markdown("---")
     # ---------------- 当前库 & 删除 ----------------
-    st.subheader("📚 当前文献库")
+    _section("📚 当前文献库", "库内全部论文一览；可删除单篇以释放空间。")
     if not ctx.files:
         empty_state("文献库为空。", hints=["点击左侧「🚀 一键加载演示数据（v1/v7/BERT）」",
                                        "或在上方上传 PDF"])
     else:
-        st.success(f"✅ 当前共 {len(ctx.files)} 篇文献")
+        rows = []
         for fn in ctx.files:
             p = ctx.papers.get(fn, {})
-            c1, c2 = st.columns([2, 1])
-            c1.markdown(f"**{p.get('title', fn)}** `{p.get('version','')}` · {fn} · {p.get('year','')}")
-            if c2.button("🗑️ 删除", key=f"rm_{fn}"):
+            n = len([c for c in ctx.chunks if c.get("source") == fn])
+            rows.append({
+                "篇名": p.get("title", fn),
+                "版本": p.get("version", "") or "—",
+                "年份": p.get("year", "") or "—",
+                "片段数": n,
+                "文件名": fn,
+            })
+        pretty_table(rows, title=f"✅ 当前共 {len(ctx.files)} 篇文献",
+                     max_rows=MAX_FAILED_SHOW)
+        with st.container(border=True):
+            st.markdown("**🗑️ 删除文献**")
+            delf = st.selectbox("选择要删除的文献", ctx.files, key="lib_rm_sel")
+            if st.button("🗑️ 确认删除所选文献", key="lib_rm_btn"):
                 try:
-                    library.remove_paper(ctx, fn)
-                    set_flash("success", f"✅ 已删除：{fn}")
+                    library.remove_paper(ctx, delf)
+                    set_flash("success", f"✅ 已删除：{delf}")
                     st.rerun()
                 except Exception as e:
                     friendly_error("删除文献", e, reasons=["文件被占用 / 向量库写入失败"],
@@ -491,7 +522,7 @@ def render(ctx):
 
     st.markdown("---")
     # ---------------- 版本管理与差异 ----------------
-    st.subheader("🗝️ 版本管理与差异")
+    _section("🗝️ 版本管理与差异", "同一论文的多个版本会在此分组，便于对比差异与取舍。")
     try:
         groups = library.group_versions(ctx) or {}
     except Exception as e:
@@ -503,33 +534,35 @@ def render(ctx):
                     hints=["演示时先加载演示数据（内含 1706.03762 的 v1 / v7 两版）",
                            "或手动上传同一论文的 v1 / v7"])
     for gid, files in multi.items():
-        st.info(f"🗂️ 同一论文（{gid}）在库中有 {len(files)} 版：{', '.join(files)}")
-        try:
-            latest = library.latest_of(files)[0]
-            st.caption(f"💡 建议保留最新版 **{latest}**，其余版本可删除以避免检索重复。")
-        except Exception:
-            latest = ""
-        if st.button(f"🔍 对比 {gid} 版本差异"):
-            if llm_guard(ctx, "版本差异对比"):
-                try:
-                    with st.spinner(step_text("🔍 正在对比版本差异")):
-                        diff_md = library.version_diff(ctx, files)
-                    if not diff_md or not str(diff_md).strip():
-                        st.info("📭 未生成差异报告（可能两版正文完全一致）。")
-                    else:
-                        txt = str(diff_md)
-                        # 大模型不可用时 version_diff 会返回降级文案而非抛异常，
-                        # 这里显式降级提示 + 引导，避免评委看到一串技术错误摘要却无任何说明。
-                        if "暂不可用" in txt or txt.startswith("【"):
-                            st.warning("⚠️ 版本差异报告已降级：大模型暂不可用，未生成对比表格。")
-                            st.caption("🩺 可能原因：API Key 无效 / 额度不足 / 现场网络受限。")
-                            st.caption("🛠️ 怎么办：填入有效 Key 后重试；"
-                                       "无 Key 时可直接讲解下方「💡 建议保留最新版」与版本清单，演示不受阻断。")
-                        long_block(txt, title="版本差异报告", limit=LONG_TEXT_LIMIT)
-                except Exception as e:
-                    friendly_error("版本差异对比", e,
-                                   reasons=["大模型返回超时 / 额度不足", "版本元数据缺失"],
-                                   actions=["重试一次", "或跳过该步继续演示"])
+        with st.container(border=True):
+            st.markdown(f"🗂️ **同一论文（{gid}）** · 库中有 {len(files)} 版")
+            st.caption("版本清单：" + "、".join(files))
+            try:
+                latest = library.latest_of(files)[0]
+                st.caption(f"💡 建议保留最新版 **{latest}**，其余版本可删除以避免检索重复。")
+            except Exception:
+                latest = ""
+            if st.button(f"🔍 对比 {gid} 版本差异", key=f"lib_diff_{gid}"):
+                if llm_guard(ctx, "版本差异对比"):
+                    try:
+                        with st.spinner(step_text("🔍 正在对比版本差异")):
+                            diff_md = library.version_diff(ctx, files)
+                        if not diff_md or not str(diff_md).strip():
+                            st.info("📭 未生成差异报告（可能两版正文完全一致）。")
+                        else:
+                            txt = str(diff_md)
+                            # 大模型不可用时 version_diff 会返回降级文案而非抛异常，
+                            # 这里显式降级提示 + 引导，避免评委看到一串技术错误摘要却无任何说明。
+                            if "暂不可用" in txt or txt.startswith("【"):
+                                st.warning("⚠️ 版本差异报告已降级：大模型暂不可用，未生成对比表格。")
+                                st.caption("🩺 可能原因：API Key 无效 / 额度不足 / 现场网络受限。")
+                                st.caption("🛠️ 怎么办：填入有效 Key 后重试；"
+                                           "无 Key 时可直接讲解下方「💡 建议保留最新版」与版本清单，演示不受阻断。")
+                            long_block(txt, title=f"版本差异报告（{gid}）", limit=LONG_TEXT_LIMIT)
+                    except Exception as e:
+                        friendly_error("版本差异对比", e,
+                                       reasons=["大模型返回超时 / 额度不足", "版本元数据缺失"],
+                                       actions=["重试一次", "或跳过该步继续演示"])
 
 
 def _commit(ctx, prepared):
