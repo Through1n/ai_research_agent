@@ -1,29 +1,11 @@
 """页面 4：论文自动检索、追踪与智能推荐。arXiv/PubMed/网页、批量下载、引用含金量筛选、个性化推荐、动态追踪。"""
 import numpy as np
 import streamlit as st
-from html import escape as _esc
 
 from services import extern
 from tools import definitions as df
 from ui.common import (ensure_state, page_header, net_error, friendly_error, show_error, pretty_table,
                        empty_state, llm_guard, long_block, step_text)
-
-# 分区卡片样式（与 common.page_header 同色系；highlight 用琥珀色，突出追踪/推荐重点区）
-_SEC_CSS = """<style>
-.sec{border-radius:10px;margin:0 0 4px;padding:10px 14px;
-border-left:4px solid #3b6fb6;background:#f3f7fc;}
-.sec.hl{border-left-color:#e0a23b;background:#fdf6ea;}
-.sec .t{font-size:16px;font-weight:700;color:#173a63;line-height:1.4;}
-.sec.hl .t{color:#8a5a00;}
-</style>"""
-
-
-def _sec_head(title: str, icon: str = "", highlight: bool = False):
-    """统一分区标题：一致层级 + 留白；highlight 用于突出动态追踪 / 个性化推荐重点区。"""
-    head = f"{icon} {title}".strip() if icon else str(title or "")
-    cls = "sec hl" if highlight else "sec"
-    st.markdown(_SEC_CSS + f"<div class='{cls}'><span class='t'>{_esc(head)}</span></div>",
-                unsafe_allow_html=True)
 
 # 推荐列表最多展示条数
 MAX_REC_SHOW = 6
@@ -67,7 +49,7 @@ def _arxiv(ctx):
         st.markdown(f"**{i+1}. {p.get('title','(无标题)')}**（{p.get('published','')}，{p.get('arxiv_id','')}）")
         long_block(p.get("summary", ""), title=f"摘要 · {p.get('arxiv_id','')}", limit=160)
         if p.get("github"):
-            st.info("💻 开源代码：" + str(p["github"][0]))
+            st.markdown("💻 开源代码：" + str(p["github"][0]))
         key = str(p.get("id") or p.get("arxiv_id") or i)
         if st.button("⬇️ 下载并入库", key=f"ad_{key}"):
             try:
@@ -186,7 +168,6 @@ def _others(ctx):
 
 
 def _quality(ctx):
-    st.subheader("🔬 引用含金量自动剔除")
     refs = st.text_area("粘贴参考文献（每行一条）", height=160, key="qrefs")
     if st.button("🧹 分析并剔除应付式引用"):
         lines = [x.strip() for x in str(refs or "").split("\n") if x.strip()]
@@ -247,14 +228,14 @@ def _recommend(ctx):
 
     rows = st.session_state.get("rec_rows") or []
     if not rows:
-        empty_state("暂无推荐结果。", hints=["点上方「✨ 刷新并推荐」", _SEARCH_DEMO_HINT])
+        empty_state("暂无推荐结果。", hints=[_SEARCH_DEMO_HINT])
     for score, p, why in rows[:MAX_REC_SHOW]:
         if not isinstance(p, dict):
             continue
         c1, c2 = st.columns([2, 1])
         with c1:
             st.markdown(f"**{str(p.get('title',''))[:90]}**  ·  {p.get('arxiv_id','')}  ·  相关度 {score:.2f}")
-            st.caption("💡 推荐理由：" + "；".join(why or ["该领域最新提交，值得关注"]))
+            st.caption("推荐理由：" + "；".join(why or ["该领域最新提交，值得关注"]))
             long_block(str(p.get("summary", ""))[:400], title="摘要", limit=120)
         with c2:
             aid = str(p.get("arxiv_id") or p.get("id") or "")
@@ -270,7 +251,7 @@ def _recommend(ctx):
             voted = len([v for v in ctx.likes.values() if any((v or {}).values())])
         except Exception:
             voted = 0
-        st.caption(f"🧑‍🤝‍🧑 当前用户 `{uid}`（切换侧边栏用户 ID 可演示多用户差异化推荐）；"
+        st.caption(f"当前用户 `{uid}`（切换侧边栏用户 ID 可演示多用户差异化推荐）；"
                    f"已记录反馈 {voted} 篇")
 
 
@@ -316,7 +297,7 @@ def _score_rows(ctx, cand, uid):
 
 
 def _track(ctx):
-    st.caption("按话题订阅领域，系统记住检查点，每次只推送「上次以来新增」的论文，可配合 scripts/watch_daemon.py 定时运行。")
+    st.caption("系统按检查点增量推送（只给上次以来的新增论文），可配合 scripts/watch_daemon.py 定时运行。")
     try:
         from services import track
         cur = track.get_subscriptions(ctx) or []
@@ -350,7 +331,7 @@ def _track(ctx):
 
     reports = st.session_state.get("trk_report") or []
     if not reports:
-        empty_state("暂无追踪报告。", hints=["填写话题后点「🔄 运行一次追踪」", _SEARCH_DEMO_HINT])
+        empty_state("暂无追踪报告。", hints=[_SEARCH_DEMO_HINT])
     for r in reports:
         if not isinstance(r, dict):
             continue
@@ -360,7 +341,7 @@ def _track(ctx):
         new = r.get("new") or []
         st.markdown(f"**{r.get('topic','')}** · 本轮扫描 {r.get('count', 0)} 篇，新增 **{len(new)}** 篇")
         if not new:
-            st.caption("ℹ️ 本话题自上次检查点以来暂无新增论文。")
+            st.caption("本话题暂无新增论文。")
         for p in new[:6]:
             if not isinstance(p, dict):
                 continue
@@ -375,36 +356,37 @@ def render(ctx):
     page_header("🔍 论文自动检索、追踪与推荐",
                 "arXiv/PubMed/网页批量检索、引用含金量筛选、个性化推荐、动态追踪订阅。",
                 icon="🔍")
-    st.caption("ℹ️ 本页面依赖外网；比赛现场断网时请先「🚀 一键加载演示数据」，"
+    st.caption("本页面依赖外网；比赛现场断网时请先「🚀 一键加载演示数据」，"
                "用📁文献库 / 💬问答 / 🕸️图谱页完成演示。")
 
-    # —— 重点区（琥珀色突出）：动态追踪订阅 ——
-    _sec_head("arXiv 动态追踪订阅", "⏰", highlight=True)
-    with st.container(border=True):
+    tab_sub, tab_search, tab_quality = st.tabs(["订阅与推荐", "检索与下载", "引用含金量"])
+
+    with tab_sub:
+        st.subheader("⏰ 动态追踪订阅")
         try:
             _track(ctx)
         except Exception as e:
             show_error("渲染「动态追踪」区块", e)
             st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
 
-    # —— 重点区（琥珀色突出）：个性化推荐 ——
-    st.markdown("---")
-    _sec_head("个性化论文推荐", "⭐", highlight=True)
-    with st.container(border=True):
+        st.subheader("⭐ 个性化推荐")
         try:
             _recommend(ctx)
         except Exception as e:
             show_error("渲染「个性化推荐」区块", e)
             st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
 
-    # —— 中性区：论文检索与抓取（arXiv / PubMed / 网页 / 批量 / 引用含金量） ——
-    st.markdown("---")
-    _sec_head("论文检索与抓取", "🔍")
-    with st.container(border=True):
-        for fn in (_arxiv, _others, _batch, _quality):
+    with tab_search:
+        for fn in (_arxiv, _others, _batch):
             try:
                 fn(ctx)
             except Exception as e:
                 show_error(f"渲染「{fn.__name__[1:]}」区块", e)
                 st.caption("🛠️ 怎么办：其余检索模块不受影响，可继续使用。")
-            st.markdown("---")
+
+    with tab_quality:
+        try:
+            _quality(ctx)
+        except Exception as e:
+            show_error("渲染「引用含金量」区块", e)
+            st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")

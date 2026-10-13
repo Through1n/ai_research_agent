@@ -68,31 +68,49 @@ def render_arch(ctx):
         friendly_error("架构图渲染", e,
                        reasons=["内嵌 HTML 组件不可用"],
                        actions=["刷新页面重试", "下方文字版分层说明不受影响"])
-    st.divider()
-    # 要点卡片化：两张并排信息卡，留白清晰，与上方架构图分区
-    with st.container(border=True):
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.success("✅ 分层设计：交互层 / Agent 内核 / 工具服务层 / 存储层，职责单向依赖。")
-        with c2:
-            st.info("🔁 Function Calling 闭环：规划 → 路由 → 工具 → 观察 → Trace 可视化。")
+    # 分层结论与闭环流程已由上方架构图 + 页头副标题表达，此处不再重复色块，只保留完整版折叠
     with st.expander("📐 分层与数据流（完整版）", expanded=False):
         st.markdown(_ARCH_DETAIL)
 
 
+# (标题, 卡片一句话, 完整说明)：首屏只展示前两项，完整说明收进折叠表格
 _INNOV = [
-    ("真正的 Agent 架构", "任务规划 + 多专家路由 + Function Calling 闭环，而非按钮式脚本；全程 Trace 可视化。"),
-    ("多模型 Provider 抽象层", "智谱/DeepSeek/通义千问/OpenAI/本地 Ollama 侧边栏热切换（OpenAI 兼容协议）；无视觉能力的 Provider 自动降级 OCR 链路，LLM_PROVIDERS_EXTRA 支持内网自定义网关。"),
-    ("跨语言混合检索抗幻觉", "查询扩展（LLM + 中英术语表双通道）弥合中文提问与英文文献的词表鸿沟；Dense+BM25Plus RRF 融合，可选 LLM 重排；答案内联【n】角标并给原文页码锚点。"),
-    ("内容语义去重", "论文级 embedding + 分段内容指纹交叉匹配识别 arXiv v1/v7（不依赖文件名），同号版本规则 + 版本差异表格。"),
-    ("真实引用关系解析", "References 标题锚点定位 + 标题 token 倒排索引候选 + 语义兜底，识别论文间真实引用，兼容 IEEE/Nature 排版。"),
-    ("基石/边缘图论挖掘", "PageRank、入度、中介、特征向量中心性，自动定位基石论文与边缘衍生工作；20+ 篇规模秒级建图。"),
-    ("Future Work 前沿过滤", "按时间线比对后续论文摘要，自动标注/排除已被解决的旧 idea。"),
-    ("中英同步滚动阅读", "JS 按比例 + 段落对齐双机制联动，悬停联动高亮；双栏坐标级原生渲染。"),
-    ("无幻觉写作", "框架的 References 只引用本地真实文献，不足处占位；生成 Mermaid/TikZ/Graphviz/Matplotlib。"),
-    ("动态追踪与个性化推荐", "arXiv 订阅 + last-seen 检查点增量推送；点赞/踩 + 用户画像 + 开源代码加权排序，附推荐理由。"),
-    ("隔离代码执行", "AST 白名单护栏（危险 import/系统调用静态拦截）+ 子进程沙箱执行数据处理脚本，形成可复现闭环。"),
-    ("工程可复现", "模块化包结构、requirements 版本锁定、.env 模板、Docker、一键启动 bat，密钥经环境变量隔离、绝不进前端。"),
+    ("真正的 Agent 架构",
+     "任务规划 + 专家路由 + Function Calling 闭环，全程 Trace 可视化。",
+     "任务规划 + 多专家路由 + Function Calling 闭环，而非按钮式脚本；全程 Trace 可视化。"),
+    ("多模型 Provider 抽象层",
+     "智谱/DeepSeek/通义/OpenAI/Ollama 侧边栏热切换，支持内网自定义网关。",
+     "智谱/DeepSeek/通义千问/OpenAI/本地 Ollama 侧边栏热切换（OpenAI 兼容协议）；无视觉能力的 Provider 自动降级 OCR 链路，LLM_PROVIDERS_EXTRA 支持内网自定义网关。"),
+    ("跨语言混合检索抗幻觉",
+     "中英查询扩展 + Dense/BM25Plus 融合，答案内联【n】角标与原文页码。",
+     "查询扩展（LLM + 中英术语表双通道）弥合中文提问与英文文献的词表鸿沟；Dense+BM25Plus RRF 融合，可选 LLM 重排；答案内联【n】角标并给原文页码锚点。"),
+    ("内容语义去重",
+     "按内容指纹识别 arXiv 同文多版本（v1/v7），并给出版本差异表。",
+     "论文级 embedding + 分段内容指纹交叉匹配识别 arXiv v1/v7（不依赖文件名），同号版本规则 + 版本差异表格。"),
+    ("真实引用关系解析",
+     "References 锚点 + 标题倒排索引，兼容 IEEE/Nature 排版。",
+     "References 标题锚点定位 + 标题 token 倒排索引候选 + 语义兜底，识别论文间真实引用，兼容 IEEE/Nature 排版。"),
+    ("基石/边缘图论挖掘",
+     "PageRank 与多中心性定位基石论文，20+ 篇秒级建图。",
+     "PageRank、入度、中介、特征向量中心性，自动定位基石论文与边缘衍生工作；20+ 篇规模秒级建图。"),
+    ("Future Work 前沿过滤",
+     "按时间线比对后续论文，排除已被解决的旧 idea。",
+     "按时间线比对后续论文摘要，自动标注/排除已被解决的旧 idea。"),
+    ("中英同步滚动阅读",
+     "按比例 + 段落对齐双机制联动，悬停高亮。",
+     "JS 按比例 + 段落对齐双机制联动，悬停联动高亮；双栏坐标级原生渲染。"),
+    ("无幻觉写作",
+     "References 只引本地真实文献，可出 Mermaid/TikZ/Graphviz/Matplotlib。",
+     "框架的 References 只引用本地真实文献，不足处占位；生成 Mermaid/TikZ/Graphviz/Matplotlib。"),
+    ("动态追踪与个性化推荐",
+     "arXiv 订阅增量推送 + 画像加权推荐，附推荐理由。",
+     "arXiv 订阅 + last-seen 检查点增量推送；点赞/踩 + 用户画像 + 开源代码加权排序，附推荐理由。"),
+    ("隔离代码执行",
+     "AST 白名单护栏 + 子进程沙箱跑数据处理脚本。",
+     "AST 白名单护栏（危险 import/系统调用静态拦截）+ 子进程沙箱执行数据处理脚本，形成可复现闭环。"),
+    ("工程可复现",
+     "模块化 + 版本锁定 + Docker 一键启动，密钥只走环境变量。",
+     "模块化包结构、requirements 版本锁定、.env 模板、Docker、一键启动 bat，密钥经环境变量隔离、绝不进前端。"),
 ]
 
 
@@ -100,15 +118,16 @@ def render_innov(ctx):
     page_header("💡 技术创新亮点",
                 "12 项工程与算法创新：Agent 闭环、多模型 Provider、混合检索抗幻觉、图论挖掘等。",
                 icon="💡")
-    rows = [{"#": i, "创新点": t, "说明": d} for i, (t, d) in enumerate(_INNOV, 1)]
-    pretty_table(pd.DataFrame(rows), title="💡 12 项创新一览")
-    st.success(f"✅ 共 {len(_INNOV)} 项创新点，覆盖 Agent 架构、检索抗幻觉、图论挖掘与工程可复现。")
-    st.divider()
-    st.markdown("#### 🔍 逐项说明")
-    # 卡片化：两列网格，每张卡标题 + 说明，留白清晰、标题层级分明
-    _cols = st.columns(2)
-    for i, (t, d) in enumerate(_INNOV, 1):
-        with _cols[i % 2]:
-            with st.container(border=True):
-                st.markdown(f"**{i}. {t}**")
-                st.caption(d)
+    # 卡片化：两列网格（行优先，编号从左到右读），每卡「标题 + 一句话」
+    for _i in range(0, len(_INNOV), 2):
+        for _col, _idx in zip(st.columns(2), (_i, _i + 1)):
+            if _idx >= len(_INNOV):
+                continue
+            _t, _s, _ = _INNOV[_idx]
+            with _col:
+                with st.container(border=True):
+                    st.markdown(f"**{_idx + 1}. {_t}**\n\n{_s}")
+    # 完整说明不丢，只从首屏收进折叠区
+    with st.expander(f"📋 完整说明（{len(_INNOV)} 项）", expanded=False):
+        rows = [{"#": i, "创新点": t, "说明": d} for i, (t, _s, d) in enumerate(_INNOV, 1)]
+        pretty_table(pd.DataFrame(rows))
