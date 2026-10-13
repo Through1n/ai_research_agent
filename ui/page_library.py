@@ -6,11 +6,29 @@ from html import escape as _h
 import pandas as pd
 import streamlit as st
 
-from config import UPLOAD_DIR
+from config import UPLOAD_DIR, MAX_UPLOAD_MB
 from services import library, parsing
 from ui.common import (ensure_state, page_header, pretty_table, resolve_pdf, friendly_error,
                        empty_state, llm_guard, long_block, step_text, LONG_TEXT_LIMIT)
 from ui.sidebar import set_flash
+
+# 文件级拒收（prepare_pdf 返回带 error 的 dict）的分档话术，键 = prepared["reason"]。
+# 取值来源 services/library.py：_validate_prepared(:501-530) 写 empty / scanned_no_ocr /
+# corrupt / truncated；_empty_prepared 调用处(:584) 另写 encrypted。
+_PDF_ERR_TIPS = {
+    "empty": (["文件是 0 字节，或没有任何可读页面", "下载中断 / 网盘同步不全"],
+              ["换一个完整的 PDF 重试", "或点击左侧「🚀 一键加载演示数据」继续演示"]),
+    "truncated": (["文件不完整：下载中断 / 网盘同步不全 / 磁盘坏块导致对象流丢失"],
+                  ["重新下载完整版后重试", "或点击左侧「🚀 一键加载演示数据」继续演示"]),
+    "corrupt": (["PDF 结构损坏 / 非标准排版", "扫描件但未配置可用的多模态模型 Key"],
+                ["换一个 PDF 重试", "或先加载演示数据继续演示"]),
+    "scanned_no_ocr": (["是扫描件，但当前未启用 / 不可用的视觉模型 Key，全部页面都提取不到文本"],
+                       ["在左侧「接入方式」填入支持视觉的 Key 后重试",
+                        "或先加载演示数据继续演示"]),
+    "encrypted": (["PDF 被加密，需要密码才能打开"],
+                  ["换一个未加密的 PDF 重试", "或先加载演示数据继续演示"]),
+    "_": (["PDF 损坏 / 加密 / 非标准排版"], ["换一个 PDF 重试", "或先加载演示数据继续演示"]),
+}
 
 # 细粒度结构一次最多展示的图表数量（避免超大 PDF 把页面拖垮）
 MAX_FIG_SHOW = 8
@@ -208,6 +226,19 @@ def render(ctx):
                 st.warning("⚠️ 未取得文件名，请重新选择文件。")
             else:
                 data = f.read()
+                # 应用层体积闸门（Round 12 场景 9）：超限在**解析之前**友好拒绝，
+                # 避免超大 PDF 一路走到解析/入库，页面长时间无反馈。
+                try:
+                    _mb = len(data) / 1048576.0
+                except Exception:
+                    _mb = 0.0
+                if _mb > MAX_UPLOAD_MB:
+                    st.warning(f"⚠️ 这个文件有 {_mb:.0f} MB，超过 {MAX_UPLOAD_MB} MB 上限，"
+                               f"已停止解析（现场解析会很慢且占用大量内存）。")
+                    st.caption("🛠️ 怎么办：换一个更小的 PDF（建议 "
+                               f"≤ {MAX_UPLOAD_MB} MB）；或先点击左侧"
+                               "「🚀 一键加载演示数据」继续演示，其余功能不受影响。")
+                    st.stop()
                 bar = st.progress(0.0)
                 note = st.empty()
 
@@ -228,10 +259,15 @@ def render(ctx):
                     if not isinstance(prepared, dict):
                         st.warning("⚠️ 解析返回数据异常，未入库。请重试或换一个 PDF。")
                     elif prepared.get("error"):
-                        friendly_error("PDF 解析", prepared.get("error"),
-                                       reasons=["PDF 损坏 / 加密 / 非标准排版",
-                                                "扫描件但未配置可用的多模态模型 Key"],
-                                       actions=["换一个 PDF 重试", "或先加载演示数据继续演示"])
+                        # 文件级拒收**不是异常**：真因直接上红框标题，按 prepared["reason"]
+                        # 分档给原因/动作。不走 friendly_error —— 这条路径的真因文案
+                        # （"打开 PDF 失败：…" / "PDF 没有任何可读页面（0 页）"）不含任何
+                        # 网络/HTTP 关键字，走通用话术只会被吞成"发生内部错误"。
+                        _rs, _as_ = _PDF_ERR_TIPS.get(str(prepared.get("reason") or ""),
+                                                      _PDF_ERR_TIPS["_"])
+                        st.error("⚠️ " + str(prepared.get("error")))
+                        st.caption("🩺 可能原因：" + "；".join(_rs))
+                        st.caption("🛠️ 怎么办：" + "；".join(_as_))
                     else:
                         # 失败页 / 截断 / 扫描件 OCR 状态如实展示后再决定入库（R9 T4）
                         _show_prepare_warnings(prepared)

@@ -26,7 +26,7 @@ CITATION_RE = re.compile(r"【[nN]?(\d+)】|\[[nN]?(\d+)\]")
 # 跨文献对比模式的分论文角标，形如 【P1-2】/ [P2-3]（兼容小写 p）
 GROUP_CITATION_RE = re.compile(r"【[pP](\d+)-(\d+)】|\[[pP](\d+)-(\d+)\]")
 
-# 内容一致性阈值：答案句与来源文本的锚点 n-gram Jaccard 低于此值判为"可疑引用"
+# 内容一致性阈值（覆盖率口径，非 Jaccard 相似度；口径见 _overlap 的说明）
 SUSPICION_THRESHOLD = 0.15
 
 # 越界角标重定位阈值：答案句与某来源的锚点覆盖率达到该值，才把越界角标
@@ -143,7 +143,7 @@ def validate_citations(answer, n_sources, source_texts=None, threshold=SUSPICION
     两层校验：
     1) 角标范围校验（原行为，向后兼容 n_sources 两参调用）；
     2) 内容一致性校验（新增）：传入 source_texts 时，对每个被引用的【n】检查其
-       所在句与第 n 个来源文本的锚点 n-gram Jaccard，低于 threshold 判为"可疑引用"。
+       所在句与第 n 个来源文本的锚点 n-gram 覆盖率，低于 threshold 判为"可疑引用"。
     """
     issues = []
     nums = set()

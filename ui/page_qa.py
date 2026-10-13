@@ -18,7 +18,8 @@ import time
 
 import streamlit as st
 from services import rag
-from ui.common import require_library, page_header, show_error
+from ui.common import (require_library, page_header, show_error,
+                       is_llm_degraded, llm_degraded_banner)
 
 
 # 本页局部样式：仅作用于问答页，不改动 ui/common.py；让答案/来源分层更清爽。
@@ -352,14 +353,21 @@ def render(ctx):
         rid = run.get("id", 0)
         st.markdown(f"#### 🙋 {run.get('q', '')}")
         st.caption(f"检索范围：{run.get('scope', '全部文献')}")
+        _ans = str(run.get("a", "") or "")
+        _degraded = (not run.get("refused")) and is_llm_degraded(_ans)
         if run.get("refused"):
-            st.warning("🛑 " + str(run.get("a", "")))
+            st.warning("🛑 " + _ans)
         else:
             # 答案区：轻分隔 + 内联【n】引用保持可点跳转（答案优先于证据，视觉分层）
             st.markdown('<div class="qa-answer-start"></div>', unsafe_allow_html=True)
-            st.markdown(str(run.get("a", "")))
+            # 离线占位不能看起来像正常答案（Round 12 ②残留）
+            if _degraded:
+                llm_degraded_banner()
+            st.markdown(_ans)
         if run.get("issues"):
             st.warning("⚠️ 幻觉防护校验未完全通过：\n" + "\n".join(f"- {x}" for x in run["issues"]))
+        elif _degraded:
+            st.caption("⚠️ 离线降级结果未做引用校验（没有真实模型输出可供校验）。")
         else:
             st.success("✅ 引用校验通过：角标均在有效来源范围内，且与来源文本存在实质词汇重叠")
         if run.get("unverified"):

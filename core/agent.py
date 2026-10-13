@@ -18,7 +18,7 @@ import os
 import re
 import time
 
-from config import AGENT_MAX_ITERS
+from config import AGENT_MAX_ITERS, _env_str
 from core.trace import Trace
 from core.router import (EXPERTS, route_detail, allowed_tools,
                          next_expert, describe_expert)
@@ -45,7 +45,7 @@ def global_iter_cap(n_tasks):
     显式覆盖（运维/评测可按需收紧或放开）。
     """
     try:
-        env = str(os.getenv("AGENT_GLOBAL_MAX_ITERS", "") or "").strip()
+        env = _env_str("AGENT_GLOBAL_MAX_ITERS", "")
         if env:
             return max(1, int(env))
     except (TypeError, ValueError):

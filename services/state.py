@@ -7,7 +7,8 @@ import streamlit as st
 import chromadb
 from chromadb.utils import embedding_functions as chroma_ef
 
-from config import CHROMA_DIR, LIBRARY_JSON, MEMORY_JSON, PROFILE_JSON, LLM_TIMEOUT
+from config import (CHROMA_DIR, LIBRARY_JSON, MEMORY_JSON, PROFILE_JSON,
+                    LLM_TIMEOUT, _env_str)
 from core.llm import LLMClient
 from core.memory import Memory
 from core.providers import get_provider, resolve_key, custom_provider, CUSTOM_ID
@@ -76,7 +77,8 @@ class Container:
         self.likes = lib.get("likes", {})
 
         # LLM 与记忆（Provider/Key 在侧边栏设置后生效；默认取 LLM_PROVIDER 环境变量）
-        self.provider_id = os.getenv("LLM_PROVIDER", "zhipu")
+        # 走 _env_str：云平台上 .env 不存在，需回退到 Streamlit Secrets 才读得到
+        self.provider_id = _env_str("LLM_PROVIDER", "zhipu")
         self.llm = self._build_llm(self.provider_id, "")
         self.memory = Memory(MEMORY_JSON, PROFILE_JSON)
         self.bm25 = self._build_bm25()

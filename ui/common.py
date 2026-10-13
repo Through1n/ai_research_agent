@@ -16,6 +16,7 @@ memory_mb / require_library / resolve_pdf / embed_html）全部保留，签名�
 """
 import json
 import os
+import socket
 import time
 import traceback
 from html import escape as _escape
@@ -191,10 +192,34 @@ LOG_DIR = "logs"
 LOG_FILE = os.path.join(LOG_DIR, "errors.log")
 
 
+class _MsgError(RuntimeError):
+    """服务层直接给出的「人话原因」的异常包装。
+
+    历史调用点会把**字符串**（如 ``prepared.get("error")`` = ``"打开 PDF 失败：…"``）
+    当异常对象传给 friendly_error / show_error；本模块原先对它取 ``.__traceback__``
+    会抛 AttributeError，冒泡到调用方的外层 except 后**又渲染一个一模一样的红框**
+    （Round 12 场景 7/8 实测：2 个红框 + 真因被吞）。这里统一把非异常入参包装成
+    异常对象，``str(exc)`` 与原文本完全一致，全站调用点一次性免疫。
+    """
+
+
+def _as_exception(exc):
+    """把任意入参归一化成 BaseException 实例（已是异常则原样返回）。"""
+    if isinstance(exc, BaseException):
+        return exc
+    if exc is None:
+        return _MsgError("未提供具体错误原因")
+    try:
+        return _MsgError(str(exc))
+    except Exception:                                   # pragma: no cover
+        return _MsgError("无法解析的错误原因")
+
+
 def log_exception(what, exc, extra=""):
     """把异常完整写入 logs/errors.log —— 包装只改展示方式，绝不吞掉异常。"""
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
+        exc = _as_exception(exc)
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write("[%s] %s | %s: %s\n%s\n%s\n" % (
@@ -205,13 +230,56 @@ def log_exception(what, exc, extra=""):
     return None
 
 
+# 网络类异常的判定依据（Round 12 场景 S6：PubMed 的 DNS 失败
+# ``URLError(socket.gaierror(11001))`` 文案是 ``<urlopen error [Errno 11001]
+# getaddrinfo failed>``，既不含 "connection" 也不含 "timeout"，以前会落到
+# "发生内部错误" 兜底 —— 把网络故障说成内部错误，评委问"哪里错了"答不上来）。
+# 按「模块 + 类名」精确命中，避免把 requests 的 HTTPError（5xx/404）也误判成网络故障
+_NET_EXC_CLASS = {
+    ("requests.exceptions", "ConnectionError"),
+    ("requests.exceptions", "ConnectTimeout"),
+    ("requests.exceptions", "ProxyError"),
+    ("requests.exceptions", "SSLError"),
+    ("urllib.error", "URLError"),          # 注意：HTTPError 是 URLError 的子类，按精确类名排除
+    ("socket", "gaierror"),
+    ("socket", "herror"),
+}
+# 文案兜底：DNS 失败的 errno 在各平台写法不一，靠关键字覆盖
+_NET_MSG_MARKS = ("getaddrinfo", "gaierror", "urlopen error",
+                  "name or service not known", "temporary failure in name resolution",
+                  "nodename nor servname", "no route to host", "network is unreachable",
+                  "errno 11001", "errno 11004", "errno -2", "errno -3",
+                  "failed to establish a new connection", "max retries exceeded",
+                  "connection refused", "connection reset", "connection aborted",
+                  "proxy error", "proxyerror", "certificate verify failed",
+                  "name resolution")
+
+
+def _is_network_exc(exc):
+    """是否是「网络不可达 / DNS 失败 / 被代理拦截」这一类异常。"""
+    try:
+        if (type(exc).__module__, type(exc).__name__) in _NET_EXC_CLASS:
+            return True
+    except Exception:
+        pass
+    if isinstance(exc, (ConnectionError, socket.gaierror, socket.herror)):
+        return True
+    return any(k in str(exc).lower() for k in _NET_MSG_MARKS)
+
+
 def friendly_hint(exc):
     """异常 → 一句用户能看懂的话（不暴露内部实现细节）。"""
+    exc = _as_exception(exc)
+    # 服务层已经给了人话原因（str 入参）：原样透出，别吞成"发生内部错误"
+    if type(exc) is _MsgError:
+        return str(exc)[:200] or "发生内部错误，请重试或换一种操作方式"
     name = type(exc).__name__.lower()
     msg = str(exc)
     low = msg.lower()
     if isinstance(exc, TimeoutError) or "timeout" in low or "timed out" in low:
-        return "网络请求超时，请稍后重试"
+        return "网络请求超时，请检查网络后重试"
+    if _is_network_exc(exc):
+        return "网络连接失败，请检查网络后重试（外网不可达或被代理拦截）"
     if "401" in msg or "403" in msg or "unauthor" in low or "invalid api key" in low:
         return "API Key 无效或已过期，请在左侧重新填写后重试"
     if "429" in msg or "rate limit" in low or "quota" in low:
@@ -237,9 +305,10 @@ def show_error(what, exc, hint="", reasons=(), actions=(), log=True):
     """统一的异常展示：⚠️ 操作失败 前缀 + 人话说明 + 技术细节折叠 + 落盘日志。
 
     what   —— 用户视角的操作名，如「生成回答」「打开 PDF」
-    exc    —— 捕获到的异常对象
+    exc    —— 捕获到的异常对象（历史调用点会传 str，入口统一归一化，见 _as_exception）
     hint   —— 可选，覆盖自动推断的人话说明
     """
+    exc = _as_exception(exc)
     if log:
         log_exception(what, exc)
     st.error("⚠️ 操作失败：%s。%s" % (what, hint or friendly_hint(exc)))
@@ -340,9 +409,95 @@ def llm_failure_banner(ctx, action: str = "大模型调用"):
         FAIL_LOG_PATH_HINT = "storage/llm_failures.log"
     st.warning(f"⚠️ {action}失败：{what}（点击页面内其他功能仍可继续使用）")
     st.caption("🩺 可能原因：" + "；".join(reasons))
-    st.caption("🛠️ 怎么办：" + "；".join(actions) + f"；完整错误已记录到 {FAIL_LOG_PATH_HINT}")
+    # 「离线演示仍可用」必须写进去：现场遇到 429（尤其 Retry-After 很长）时，
+    # 只有"重试/等待"这类建议会让评委以为系统卡死了——实际本地解析 / 检索 /
+    # 图谱检索式演示不受影响，可以直接继续往下讲。
+    st.caption("🛠️ 怎么办：" + "；".join(actions)
+               + "；**离线演示仍可用**（本地解析 / 检索 / 图谱演示不受影响，可继续演示）"
+               + f"；完整错误已记录到 {FAIL_LOG_PATH_HINT}")
     with st.expander("🔧 错误摘要（供排查，已自动脱敏）", expanded=False):
         st.code(str(err)[:300])
+
+
+def llm_degraded_banner():
+    """离线降级结果的统一标识条（橙色 warning，绝不用成功态）。
+
+    Round 12 场景 S1/S4 实测：主体区在 LLM 失败时渲染的是 ``✅ 分析完成`` +
+    离线占位文案 —— **假成功 + 假答案**，比红字报错更危险（评委看到"分析完成"
+    就会当真）。凡是走了离线占位响应的结果，都必须先渲染这条可见的降级标识。
+
+    话术**沿用 core/llm.py:19 / DEGRADED_HINT 已定的那句**，不另造词：
+    ``⚠️ 离线占位响应：LLM 不可用，以下内容不是模型生成``。
+
+    维护注意：``friendly_hint`` 里用 ``type(exc) is _MsgError`` 精确判断，
+    若将来给 _MsgError 加子类，那处要换成 isinstance，否则服务层的人话原因
+    又会被吞成"发生内部错误"（= 本轮场景 7/8 的症状复发）。
+    """
+    st.warning("⚠️ 离线占位响应：LLM 不可用，以下内容不是模型生成，请勿作为答案引用。")
+    st.caption("🛠️ 怎么办：在左侧「接入方式」检查 API Key / 平台额度 / 网络后重试；"
+               "无 Key 时可点「🚀 一键加载演示数据」用本地离线链路继续演示。")
+
+
+def is_llm_degraded(content) -> bool:
+    """判断一段大模型产出是否为离线占位（结构化标记优先，纯文本标记兜底）。"""
+    try:
+        from core.llm import is_degraded, is_degraded_text
+    except Exception:                                   # pragma: no cover
+        return False
+    try:
+        if is_degraded(content):
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(is_degraded_text(getattr(content, "content", content)))
+    except Exception:
+        return False
+
+
+# 「离线确定性生成」与「离线占位响应」是**两类不同的降级**，不能混用同一句话：
+#   · 占位响应（core/llm.py 的 _fake_response）——什么都没算出来，纯兜底文案；
+#   · 确定性生成（services/graph.py 的 _deterministic_review / explore_future）
+#     ——本地图结构算出了**真实内容**，只是撰写者不是大模型。
+# 后者若套用 llm_degraded_banner 的「离线占位响应」措辞，等于把真实能力说成空壳，
+# 是另一种失分（评委看到"占位"就不会看内容了）。故单列一套判定与话术。
+# 判定标记直接取 services/graph.py 里已经写死的那两句，不另造标记。
+_OFFLINE_GEN_MARKS = (
+    "LLM 不可用，以下综述由 networkx 图谱结构确定性生成",       # graph.py:842
+    "LLM 不可用，以下直接使用引用图可达性的确定性判定结果",     # graph.py:1050
+)
+
+
+def is_llm_offline_generated(content) -> bool:
+    """判断产出是否为「LLM 不可用 → 本地确定性生成」的非模型产出。"""
+    text = "" if content is None else str(getattr(content, "content", content) or "")
+    return any(m in text for m in _OFFLINE_GEN_MARKS)
+
+
+def llm_offline_generated_banner(what: str = "内容"):
+    """确定性生成结果的降级标识条：内容真实，但**不是**大模型输出。"""
+    st.warning(f"⚠️ 大模型不可用：以下{what}由本地确定性算法生成，"
+               f"**不是**大模型输出（内容取自本地真实数据，未编造）。")
+    st.caption("🛠️ 怎么办：在左侧「接入方式」检查 API Key / 平台额度 / 网络后重试，"
+               "即可改由大模型撰写。")
+
+
+def show_llm_result(content, success_msg="✅ 完成", title="查看完整内容",
+                    action="该操作", limit=LONG_TEXT_LIMIT):
+    """渲染一次大模型产出：降级内容走**可见的降级态**，绝不使用成功态文案。
+
+    返回 True 表示拿到了真实模型输出（调用方可继续后续成功态逻辑）；
+    返回 False 表示本次是离线降级，不应报"完成 / 成功"。
+    """
+    text = "" if content is None else str(getattr(content, "content", content) or "")
+    if is_llm_degraded(content) or "【LLM 暂时不可用" in text:
+        st.warning(f"⚠️ {action}未完成：大模型暂时不可用，本次**没有**生成任何真实结果。")
+        llm_degraded_banner()
+        long_block(text, title=title, limit=limit)
+        return False
+    st.success(success_msg)
+    long_block(text, title=title, limit=limit)
+    return True
 
 
 # ============================ UI 规范 5：长文本折叠 ============================
@@ -567,8 +722,15 @@ def render_trace(trace, in_expander=False):
                 st.caption(f"（轨迹条目渲染跳过：{str(e)[:100]}）")
         finals = [e for e in dicts if e.get("kind") == "final"]
         if finals:
-            st.markdown("##### ✅ 最终答案")
-            st.success(finals[-1].get("content", ""))
+            content = finals[-1].get("content", "") or ""
+            # 离线占位不能顶着「✅ 最终答案」出现（Round 12 S1/S4：假成功比报错更危险）
+            if is_llm_degraded(content) or "【LLM 暂时不可用" in str(content):
+                st.markdown("##### ⚠️ 最终答案（离线降级）")
+                llm_degraded_banner()
+                st.warning(str(content))
+            else:
+                st.markdown("##### ✅ 最终答案")
+                st.success(content)
 
 
 def memory_mb():
@@ -598,6 +760,42 @@ def resolve_pdf(filename):
 
 
 # ============================ 任务中心（问题五/六） ============================
+# 本 session 已尝试 / 已成功交付的任务 id（只放 session_state，不碰后台模块）
+_SEEN_TASKS_KEY = "_task_panel_seen"
+_MINE_TASKS_KEY = "_task_panel_mine"
+
+
+def _task_id_set(key):
+    try:
+        v = st.session_state.get(key)
+        if not isinstance(v, set):
+            v = set()
+            st.session_state[key] = v
+        return v
+    except Exception:
+        return set()
+
+
+def _render_task_result(t):
+    """把后台任务记录里留存的原始结果渲染出来（刷新后页面内容不可恢复时的兜底）。"""
+    res = t.get("result")
+    if res is None:
+        return False
+    try:
+        if isinstance(res, str):
+            if not res.strip():
+                return False
+            st.markdown(res[:4000])
+        elif isinstance(res, (dict, list)):
+            import json as _json
+            st.code(_json.dumps(res, ensure_ascii=False, default=str)[:4000], language="json")
+        else:
+            st.code(str(res)[:4000])
+    except Exception:
+        return False
+    return True
+
+
 def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
     """后台任务面板：运行中的任务显示当前节点与已耗时，完成后交 on_finish 消费。
 
@@ -639,21 +837,38 @@ def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
                 with st.expander(label):
                     st.caption("失败原因：" + str(t.get("error", ""))[:200])
                 continue
+            tid = t["id"]
             fresh = not t.get("consumed")
-            if on_finish is not None and fresh:
+            mine = _task_id_set(_MINE_TASKS_KEY)
+            if on_finish is not None and fresh and tid not in _task_id_set(_SEEN_TASKS_KEY):
+                # 每个 session 只尝试交付一次：回调返回 False（结果为空 / 写入失败）
+                # 时**不**标记 consumed，避免"标记了但页面里其实没有"。
+                _task_id_set(_SEEN_TASKS_KEY).add(tid)
                 try:
-                    on_finish(t)
+                    ok = bool(on_finish(t))
                 except Exception:
-                    pass
-                tasks_mod.mark_consumed(t["id"])
-                # 结果已写入 session_state；fragment 内触发整页重绘，
-                # 让页面主体（历史记录 / 下载区）立即显示新结果。
-                try:
-                    st.rerun(scope="app")
-                except Exception:
-                    pass
+                    ok = False
+                if ok:
+                    mine.add(tid)
+                    tasks_mod.mark_consumed(tid)
+                    # 结果已写入 session_state；fragment 内触发整页重绘，
+                    # 让页面主体（历史记录 / 下载区）立即显示新结果。
+                    try:
+                        st.rerun(scope="app")
+                    except Exception:
+                        pass
             with st.expander(label, expanded=fresh):
-                st.caption("结果已转入页面内容（历史记录 / 下载区）。")
+                if tid in mine:
+                    st.caption("结果已转入页面内容（历史记录 / 下载区）。")
+                else:
+                    # Round 12 场景 12 实测：刷新后新 session 的 agent_runs=0，
+                    # 历史记录区还是新手引导，旧文案「结果已转入页面内容」指向一个
+                    # 不存在的地方。改成诚实说法，并把后台任务记录里留存的结果直接渲染出来。
+                    # 前缀统一用 ⚠️：这是"降级 / 不可恢复"语义，用 ℹ️ 会被当成普通信息
+                    st.caption("⚠️ 该结果属于上一个会话：浏览器刷新后页面内容不可恢复，"
+                               "以下是后台任务留存的原始结果（可复制保存）。")
+                    if not _render_task_result(t):
+                        st.caption("⚠️ 该任务没有留存可展示的结果载荷。")
 
     try:
         _panel()

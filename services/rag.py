@@ -168,6 +168,18 @@ def _llm_complete_stream(ctx, messages, temperature=0.1, on_token=None):
         text = "".join(parts)
         # 降级占位/空内容 → 回退非流式，避免把"LLM 不可用"当答案流出
         if (not text.strip()) or ("【LLM 暂时不可用" in text):
+            # Round 12 F4：流式这条链已经把「1 次立即尝试 + 最多 3 次退避重试」
+            # 跑完并**明确**失败了（last_error_kind 非空）。此时再退回非流式，
+            # 等于把同一条重试链原样再打一遍 —— 实测 SDK 调用 4→8 次、耗时翻倍，
+            # 而 Key 失效 / 限流 / 断网这类失败重试一遍也不会通，纯属重复烧配额。
+            # 判定依据：last_error_kind 在调用成功时被置 None（core/llm.py:477 / :555），
+            # 所以它反映的是「最近一次调用」的真实状态。
+            # 它为 None 时（模型真的就返回了空内容、链路本身没报错）仍照常回退。
+            if getattr(getattr(ctx, "llm", None), "last_error_kind", None):
+                if text.strip():
+                    return text
+                from core.llm import degraded_content
+                return degraded_content("流式调用已失败，已跳过重复的非流式重试")
             return _llm_complete(ctx, messages, temperature=temperature)
         return text
     except Exception:
@@ -837,6 +849,17 @@ def answer(ctx, question, use_rerank=False, history=None, source_filter=None,
     # 无效（修复后答案仍含【5】，见复现记录），统一交给末尾 sanitize_citations
     # 重定位/重编号，不再浪费一次 LLM 调用；仅"内容可疑"类问题才值得修复一次。
     repairable = [i for i in issues if "超出有效来源范围" not in i]
+    # Round 12 F4（非流式路径）：答案是**离线降级占位**（不是模型真实输出）时不进修复环。
+    # 占位文案必然「未包含任何引用角标」→ check() 判为可修 → 修复环把完整重试链
+    # 再打一遍（实测 4→8 次 SDK 调用、耗时翻倍），而占位内容再修也修不出角标，
+    # 纯属重复烧配额。Key 失效 / 限流 / 断网时尤其不该这么烧。
+    try:
+        from core.llm import is_degraded_text as _is_deg
+        _degraded = bool(_is_deg(text))
+    except Exception:                                   # pragma: no cover
+        _degraded = "【LLM 暂时不可用" in str(text)
+    if _degraded:
+        repairable = []
     repairs = 0
     while repairable and repairs < max_repair:
         repair = msgs + [

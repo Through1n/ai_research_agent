@@ -212,11 +212,37 @@ def _render_model_settings(ctx):
                                     type="password", value=st.session_state.get("saved_api_key", ""),
                                     key="key_input").strip()
                 st.session_state.saved_api_key = key
+                # ---- Round 12 F2：保住 last_error，别被"无谓重建"清零 ----
+                # 现象：Key 来自 .env / 环境变量、侧边栏输入框为空时，set_provider 的
+                # 重建条件 `manual_key != self.llm.api_key` 恒真 → 每轮重建 LLMClient
+                # → last_error 被清零 → 主体区 LLM 失败时框架横幅永远不会出现。
+                # 修法：**不改 set_provider 的重建语义**（切换平台 / 演示中途 Key 失效
+                # 仍照常重建），只在"重建前后 Key 与平台都没变"这种无谓重建之后，
+                # 把上一轮的 last_error 还回去。
+                _prev = (getattr(ctx.llm, "api_key", None), getattr(ctx, "provider_id", None),
+                         getattr(ctx.llm, "last_error", None),
+                         getattr(ctx.llm, "last_error_kind", None),
+                         # F7：序号也要一起回补。seq 是 UI 判断"这次失败是本轮新写的"
+                         # 的依据，重建把它清零会让"每轮 seq 都变"→ 横幅在每一页都显示。
+                         getattr(ctx.llm, "last_error_seq", 0))
                 try:
                     if ctx.set_provider(pid, key):
                         # 注意：available 只代表"Key 已填入且客户端已建好"，
                         # 不代表 Key 一定有效——真实验证请点下方「🔌 测试连通性」。
-                        st.success("✅ Key 已填入，模型通道就绪")
+                        # 同理：最近一次调用已经失败时**不能**再报「通道就绪」，
+                        # 否则和本轮在消灭的假成功同族（degrade-api 实测观察）。
+                        #
+                        # 注意必须读 **_prev[2]（重建前的值）**：`.env` 供 Key 时
+                        # set_provider 每轮都会重建 LLMClient，重建后 last_error 是空的，
+                        # 而下面的回补块又在本次判断**之后**执行——读重建后的值恒为 None，
+                        # 这条分支永远不会命中（degrade-api 01:19 实测：修了等于没修）。
+                        # _prev[2] 正是回补块要还回去的那个值，用它判断与"回补后再判断"等价，
+                        # 且不依赖执行顺序。
+                        if _prev[2]:
+                            st.caption("⚠️ Key 已填入，但最近一次大模型调用失败了"
+                                       "（原因见主体区提示 / 点下方「🔌 测试连通性」复查）")
+                        else:
+                            st.success("✅ Key 已填入，模型通道就绪")
                     elif not p.needs_key:
                         st.caption("本地 Ollama 需先运行 `ollama serve` 并拉取模型")
                     else:
@@ -224,6 +250,16 @@ def _render_model_settings(ctx):
                 except Exception as e:
                     friendly_error("切换模型平台", e, reasons=_PROVIDER_FAIL_HINT[0:1],
                                    actions=_PROVIDER_FAIL_HINT[1:2])
+                # 仅当"平台与 Key 都没变"才回补：Key 真的变了（演示中途清空 Key）
+                # 时不回补，避免把上一次的失败原因带到新的 Key 上。
+                try:
+                    _now = (getattr(ctx.llm, "api_key", None), getattr(ctx, "provider_id", None))
+                    if _now == _prev[:2] and _prev[2] and not getattr(ctx.llm, "last_error", None):
+                        ctx.llm.last_error = _prev[2]
+                        ctx.llm.last_error_kind = _prev[3]
+                        ctx.llm.last_error_seq = _prev[4]
+                except Exception:
+                    pass
                 if p.hint:
                     st.caption("💡 " + p.hint)
 

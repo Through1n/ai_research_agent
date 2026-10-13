@@ -19,7 +19,8 @@ import re
 import time
 
 import streamlit as st
-from ui.common import embed_html, page_header, show_error, _esc, empty_state, pretty_table
+from ui.common import (embed_html, page_header, show_error, _esc, empty_state, pretty_table,
+                       is_llm_degraded, llm_degraded_banner)
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -442,13 +443,13 @@ def _render_graphviz(code):
         if res.get("mode") == "graphviz":
             st.success("✅ " + note)
         else:
-            st.caption("ℹ️ " + note + "（降级渲染（等价拓扑图））")
+            st.caption("⚠️ " + note + "（降级渲染（等价拓扑图））")
         html = ('<div style="background:#fff;overflow:auto;display:flex;'
                 f'justify-content:center;padding:8px;">{res["svg"]}</div>')
         embed_html(html, height=_svg_height(res["svg"]), scrolling=True)
         return
     if res.get("ok") and res.get("png"):
-        st.caption("ℹ️ " + str(res.get("note", "")) + " —— 降级渲染（等价拓扑图）")
+        st.caption("⚠️ " + str(res.get("note", "")) + " —— 降级渲染（等价拓扑图）")
         st.image(res["png"], caption="降级渲染（等价拓扑图）", width="stretch")
         return
     st.warning("⚠️ 未能渲染 Graphviz：" + str(res.get("note", "未知原因")))
@@ -530,8 +531,13 @@ def _translate_section(ctx):
                         st.session_state.trres = writing.translate_to_chinese(ctx, text) or ""
             except Exception as e:
                 show_error("翻译正文", e)
-    if st.session_state.get("trres"):
-        st.markdown(st.session_state["trres"])
+    _tr = st.session_state.get("trres") or ""
+    if _tr:
+        # 离线占位不能当译文展示（Round 12 ②残留）：模型不可用时
+        # translate_to_* 返回的是带降级标记的占位串，直接渲染 = 给评委看一段假译文。
+        if is_llm_degraded(_tr):
+            llm_degraded_banner()
+        st.markdown(_tr)
 
 
 def render(ctx):

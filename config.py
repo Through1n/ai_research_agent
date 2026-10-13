@@ -58,14 +58,37 @@ else:
     load_dotenv(ROOT / ".env")
 
 # ---------- 环境变量安全读取（Round 9 S6：默认值兜底 + 类型转换安全） ----------
+def _st_secret(name):
+    """从 Streamlit Secrets 读值：Streamlit Community Cloud / HuggingFace Spaces
+    的官方密钥入口。
+
+    为什么需要这一层：本仓库的 .env 被 .gitignore 排除，推到云平台后**根本不存在**，
+    而代码原本只读 os.getenv + .env —— 在云上会一个 Key 都拿不到，整站静默降级成
+    "离线模式"，评委看到的就是所有 AI 功能不可用。Streamlit 官方承诺 Secrets 可用
+    st.secrets 读取（是否同时注入 os.environ 未承诺），所以补这一层兜底。
+
+    非 Streamlit 运行环境（桌面版 / 单元测试 / 脚本）访问 st.secrets 会抛异常，
+    这里直接吞掉，行为与改动前完全一致。
+    """
+    try:
+        import streamlit as st
+        v = st.secrets.get(name, "")
+    except Exception:
+        return ""
+    return str(v or "").strip()
+
+
 def _env_str(name, default=""):
     """读环境变量：缺失或空白值都回落默认值。
 
     os.getenv(name, default) 在变量存在但为空串时返回 ""（不是 default），
     会把后面的默认值/回退链顶掉；这里统一把空白视为未设置。
+    读取顺序：os.environ（含 .env 注入）→ Streamlit Secrets → default。
     """
     v = os.getenv(name)
-    if v is None:
+    if v is None or not v.strip():
+        v = _st_secret(name)
+    if not v:
         return default
     v = v.strip()
     return v if v else default
@@ -98,6 +121,11 @@ LLM_API_KEY = _env_str("ZHIPU_API_KEY", "") or _env_str("LLM_API_KEY", "")
 LLM_MODEL = _env_str("LLM_MODEL", "glm-4-flash")        # 文本/规划/函数调用
 VL_MODEL = _env_str("VL_MODEL", "glm-4v")               # 多模态/OCR
 LLM_TIMEOUT = _env_float("LLM_TIMEOUT", 90.0)
+# 单次 LLM 调用的**总时长预算**（秒）：同一条链路（1 次立即尝试 + 最多 3 次退避重试）
+# 累计耗时超过预算就放弃重试、直接走人话降级。只约束"要不要再试一次"，
+# **不裁剪任何单次调用的 LLM_TIMEOUT 窗口**，因此不影响正常成功请求。
+# 想让"最坏等待"也压到 45s，请把 LLM_TIMEOUT 一并设为 45（默认 90 是为慢生成留窗口）。
+LLM_RETRY_BUDGET_SEC = _env_float("LLM_RETRY_BUDGET_SEC", 45.0)
 
 # HuggingFace 国内镜像（供 chroma 默认 embedding 首次下载）
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -110,6 +138,10 @@ SPARSE_K = _env_int("SPARSE_K", 12)                        # BM25 召回数
 FINAL_K = _env_int("FINAL_K", 6)                           # 融合后进入上下文数
 DEDUP_THRESHOLD = _env_float("DEDUP_THRESHOLD", 0.90)      # 语义去重相似度阈值
 AGENT_MAX_ITERS = _env_int("AGENT_MAX_ITERS", 8)
+# 单个上传 PDF 的体积上限（应用层前置闸门，解析之前拦截）。
+# 与 Streamlit 的 server.maxUploadSize（默认 200MB）不冲突：那个是 HTTP 层硬上限，
+# 这里是解析前的应用层友好拒绝，超限会给出"建议 ≤100MB / 加载演示数据"的提示。
+MAX_UPLOAD_MB = _env_int("MAX_UPLOAD_MB", 100)
 
 # ---------- 内置演示语料（无 Key 也可演示） ----------
 DEMO_PAPERS = {

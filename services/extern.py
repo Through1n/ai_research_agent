@@ -9,8 +9,11 @@ import urllib.parse
 import urllib.error
 from datetime import datetime, timezone
 
+from config import _env_str
+
 # GitHub REST API：未认证限流 60 次/小时；配置 GITHUB_TOKEN（或 .env 中同名变量）可提额
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "") or os.getenv("GITHUB_API_TOKEN", "")
+# 走 _env_str：云平台上 .env 不存在，需回退到 Streamlit Secrets 才读得到
+GITHUB_TOKEN = _env_str("GITHUB_TOKEN", "") or _env_str("GITHUB_API_TOKEN", "")
 GITHUB_TIMEOUT = 8            # 仓库元数据请求超时（秒）
 GITHUB_README_TIMEOUT = 8     # README 抓取超时（秒）
 GITHUB_README_CHARS = 3000    # README 取前 3000 字用于复现性判断

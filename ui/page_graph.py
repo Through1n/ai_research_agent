@@ -7,7 +7,9 @@ from html import escape as _esc
 from services import graph as g
 from services import library as _lib
 from ui.common import (embed_html, require_library, page_header, pretty_table, ensure_state,
-                       friendly_error, empty_state, llm_guard, long_block, step_text, at)
+                       friendly_error, empty_state, llm_guard, long_block, step_text, at,
+                       is_llm_degraded, llm_degraded_banner,
+                       is_llm_offline_generated, llm_offline_generated_banner)
 from ui.sidebar import set_flash
 
 # 分区卡片样式（与 common.page_header 同色系）。图谱可视化区与综述/前沿生成区分区，层级一致。
@@ -138,7 +140,7 @@ def _render_pack(ctx, pack):
                    "需真实引用请上传含 References 章节的完整 PDF。")
     html = pack.get("html") or ""
     if not html:
-        st.caption("ℹ️ 图谱可视化 HTML 不可用（下方表格版图论指标不受影响）。")
+        st.caption("⚠️ 图谱可视化 HTML 不可用（下方表格版图论指标不受影响）。")
     if html:
         embed_html(html, height=560)
 
@@ -314,8 +316,21 @@ def render(ctx):
                         corner, edge = g.classify_papers(G, metrics)
                         st.session_state["review"] = g.generate_review(
                             ctx, G, metrics, corner, progress_cb=_rev_progress) or ""
-                        status.update(label="✅ 领域综述已生成", state="complete")
-                        st.success("✅ 领域综述已生成")
+                        # 离线降级绝不能顶着「✅ 已生成」出现（Round 12 ②残留）
+                        # 两种降级分档：占位响应（什么都没算出来）/ 确定性生成（算出来了，
+                        # 但不是大模型写的）—— 后者内容真实，不能套「占位」措辞。
+                        _r = st.session_state["review"]
+                        if is_llm_degraded(_r):
+                            status.update(label="⚠️ 领域综述未生成：大模型暂时不可用",
+                                          state="error")
+                            llm_degraded_banner()
+                        elif is_llm_offline_generated(_r):
+                            status.update(label="⚠️ 领域综述为离线确定性生成，非大模型输出",
+                                          state="error")
+                            llm_offline_generated_banner("领域综述")
+                        else:
+                            status.update(label="✅ 领域综述已生成", state="complete")
+                            st.success("✅ 领域综述已生成")
                     except Exception as e:
                         friendly_error("生成综述", e,
                                        reasons=["大模型返回超时 / 额度不足", "文献库为空导致无素材"],
@@ -328,8 +343,14 @@ def render(ctx):
                         G = pack.get("G") if isinstance(pack, dict) else None
                         if G is None or pack.get("demo"):
                             G, _ = g.build_graph(ctx)
-                        st.session_state["future"] = g.explore_future(ctx, G) or ""
-                        st.success("✅ 前沿方向扫描完成")
+                        _f = g.explore_future(ctx, G) or ""
+                        st.session_state["future"] = _f
+                        if is_llm_degraded(_f):
+                            llm_degraded_banner()
+                        elif is_llm_offline_generated(_f):
+                            llm_offline_generated_banner("前沿方向")
+                        else:
+                            st.success("✅ 前沿方向扫描完成")
                     except Exception as e:
                         friendly_error("前沿扫描", e,
                                        reasons=["大模型返回超时 / 额度不足", "图谱为空"],
@@ -339,7 +360,16 @@ def render(ctx):
         future_txt = st.session_state.get("future", "") or ""
         if review_txt:
             st.markdown("##### 📖 领域综述")
+            # 降级内容先给可见标识，再展示正文（覆盖后续所有 rerun）
+            if is_llm_degraded(review_txt):
+                llm_degraded_banner()
+            elif is_llm_offline_generated(review_txt):
+                llm_offline_generated_banner("领域综述")
             long_block(review_txt, title="领域综述全文", limit=200)
         if future_txt:
             st.markdown("##### 🚀 前沿方向")
+            if is_llm_degraded(future_txt):
+                llm_degraded_banner()
+            elif is_llm_offline_generated(future_txt):
+                llm_offline_generated_banner("前沿方向")
             long_block(future_txt, title="前沿方向全文", limit=200)

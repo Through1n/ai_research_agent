@@ -46,7 +46,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 
-from ui.common import embed_html, page_header, show_error, empty_state
+from ui.common import (embed_html, page_header, show_error, empty_state,
+                       is_llm_degraded, llm_degraded_banner)
 
 from config import UPLOAD_DIR, PDF_DIR
 from services import parsing, writing
@@ -449,7 +450,9 @@ def _translate_pairs(ctx, paras, label="段落翻译"):
                 if zh:
                     pairs[i] = (paras[i], zh)
                     try:
-                        cache[_cache_key(paras[i])] = zh
+                        # 降级占位串不进缓存：否则下次"命中缓存"会把假译文原样重放
+                        if not is_llm_degraded(zh):
+                            cache[_cache_key(paras[i])] = zh
                     except Exception:
                         pass
                 else:
@@ -1335,6 +1338,11 @@ def render(ctx):
                             st.error("该页文本过少，可能是扫描件（无文本层）。")
                         else:
                             pairs, _errs = _translate_pairs(ctx, paras, label="逐段翻译")
+                            # 离线占位不能当译文展示（Round 12 ②残留）：模型不可用时
+                            # translate_to_chinese 返回的是带降级标记的占位串，
+                            # 直接塞进「中英对照」= 给评委看一段假译文。
+                            if any(is_llm_degraded(_zh) for _en, _zh in pairs):
+                                llm_degraded_banner()
                             # 持久化：任何 rerun（切 tab/点别的按钮）后按原样恢复，
                             # 不再「翻译结果一交互就丢、要重新点一次」。
                             # 带 doc 字段：换 PDF 后旧文档的对照不串档。
@@ -1672,6 +1680,9 @@ def render(ctx):
                                 st.warning("⚠️ 翻译失败：模型未返回内容"
                                            "（网络超时、限流或 Key 失效）。")
                                 st.caption("🛠️ 怎么办：稍后重试或缩短片段。")
+                            elif is_llm_degraded(_full):
+                                # 模型不可用：流式吐出来的是占位串，不是译文
+                                llm_degraded_banner()
             except Exception as e:
                 st.warning(f"⚠️ 划词翻译区异常：{str(e)[:160]}")
 

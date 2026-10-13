@@ -18,7 +18,8 @@ import streamlit as st
 from core import agent
 from services import tasks as task_center
 from ui.common import (render_trace, page_header, ensure_state, friendly_error, empty_state,
-                       llm_guard, long_block, step_text, source_card, render_task_panel)
+                       llm_guard, long_block, step_text, source_card, render_task_panel,
+                       is_llm_degraded, llm_degraded_banner)
 
 # 截断预览里「完整的来源条目」匹配：扁平 JSON 对象且含 ref/file/source 字段
 _SRC_ITEM_RE = re.compile(r"\{[^{}]*\"(?:ref|file|source)\"\s*:\s*\"[^\"]+\"[^{}]*\}")
@@ -272,7 +273,11 @@ def _agent_worker(ctx, goal, progress):
 
     progress("① 意图识别与任务规划")
     tr = agent.run(ctx, goal, user=ctx.memory.user, live=live, on_token=on_token)
-    progress("✅ 已完成（%d 步 / %d 个 token）" % (step["n"], tokens["n"]))
+    # token 数为 0 说明一个字都没吐出来（大模型不可用 / 被拒答），此时不能报「✅ 已完成」
+    if tokens["n"]:
+        progress("✅ 已完成（%d 步 / %d 个 token）" % (step["n"], tokens["n"]))
+    else:
+        progress("⚠️ 已结束，但大模型没有输出任何内容（%d 步 / 0 个 token）" % step["n"])
     return tr
 
 
@@ -363,8 +368,13 @@ def render(ctx):
         with st.container(border=True):
             st.markdown(f"**🙋 {_e(goal)}**")
             if finals:
-                st.success("✅ 已完成" + (f" · 📚 {n_src} 条来源" if n_src else ""))
-                long_block(finals[-1].get("content", ""), title="最终答案全文", limit=200)
+                # 离线占位不能顶着「✅ 已完成」出现（Round 12 ②残留，与 page_qa 同一套判定）
+                _ans = finals[-1].get("content", "")
+                if is_llm_degraded(_ans):
+                    llm_degraded_banner()
+                else:
+                    st.success("✅ 已完成" + (f" · 📚 {n_src} 条来源" if n_src else ""))
+                long_block(_ans, title="最终答案全文", limit=200)
                 if n_src:
                     _render_sources(tr)
             else:

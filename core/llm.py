@@ -47,6 +47,15 @@ CONFIG_LOG_PATH_HINT = "storage/llm_config_errors.log"   # 可预见配置错误
 RATE_LIMIT_RETRY_AFTER_CAP = 10.0   # 429 尊重 Retry-After，但封顶 10s，避免交互界面长睡
 MAX_VISION_IMAGE_BYTES = 20 * 1024 * 1024   # 多模态图片大小上限（20MB），超过直接人话降级
 
+# 单次 LLM 调用的**总时长预算**（秒）：同一条链路（1 次立即尝试 + 最多 3 次退避重试）
+# 累计耗时超过预算就放弃后续重试、直接走人话降级。
+# 背景（Round 12 场景 S3 实测）：LLM_TIMEOUT 默认 90s × 4 次尝试 + 9s 退避 ≈ 369s，
+# 问答链路还会翻倍到 ≈738s —— 演示现场转圈 6~12 分钟。
+# **边界（重要）**：预算只决定"要不要发起下一次尝试"，**不改变任何一次尝试自己的
+# 超时窗口**（不裁剪 timeout 参数），因此不会缩短正常成功请求的可用时间窗：
+# 首次成功的调用仍拥有完整的 LLM_TIMEOUT 秒。
+RETRY_BUDGET_SEC = 45.0
+
 # ---------------- 降级标记（抗幻觉：伪响应绝不可伪装成正常答案） ----------------
 DEGRADED_FLAG = "ai4s-offline-placeholder-v1"   # 结构化标记值：真实 SDK 响应对象不可能携带
 DEGRADED_TEXT_MARK = "⚠️ 离线占位响应"           # 文案标记：纯文本通道（string 返回值）的透出
@@ -282,6 +291,19 @@ def _backoff_for(attempt: int) -> float:
     return float(RETRY_BACKOFF[-1])
 
 
+def _budget():
+    """取总时长预算：优先 config（可被 .env / 环境变量覆盖），失败回落模块常量。
+
+    <=0 视为"不设预算"（保持旧的无限重试语义），便于按需关掉。
+    """
+    try:
+        from config import LLM_RETRY_BUDGET_SEC
+        v = float(LLM_RETRY_BUDGET_SEC)
+    except Exception:
+        v = RETRY_BUDGET_SEC
+    return v if v > 0 else 0.0
+
+
 def _sleep_backoff(attempt: int, info=None):
     """按错误类别睡相应时长：429 优先尊重 Retry-After（封顶），其余用 1.5/3.0/4.5。"""
     secs = _backoff_for(attempt)
@@ -408,6 +430,11 @@ class LLMClient:
         self._client = None
         self.last_error = None          # 最近一次失败原因（供 UI 展示，不抛异常）
         self.last_error_kind = None     # 最近一次失败分类（auth / rate_limit / server / ...）
+        # 单调递增序号：**每写一次 last_error 就 +1**（成功置 None 时不 bump）。
+        # 用途：UI 要判断"某个失败是本轮、在本页新产生的"，光比字符串不够——
+        # 两个不同页面完全可能报出**一模一样**的错误串（如同一个 401）。
+        # 见 app.py 的 F7 收敛逻辑（横幅只挂在"产生它的那一页"）。
+        self.last_error_seq = 0
         self.key_error = None           # Key 形态问题的人话原因（非 ASCII 等；None = 无问题）
         try:
             key = _validate_api_key(api_key)
@@ -430,6 +457,16 @@ class LLMClient:
     def available(self):
         return self._client is not None
 
+    def _note_error(self, reason, kind=None):
+        """统一写入 last_error，并 bump 序号（F7：UI 靠序号判断"本页本轮新产生"）。
+
+        成功路径（``self.last_error = None``）**不要**走这里、也不要清 seq——
+        清了就分不出"旧失败"与"新失败"。
+        """
+        self.last_error = reason
+        self.last_error_kind = kind
+        self.last_error_seq = int(getattr(self, "last_error_seq", 0) or 0) + 1
+
     def _create(self, **kwargs):
         """统一调用入口：1 次立即尝试 + 按错误类别差异化重试（最多 3 次退避重试）。
 
@@ -439,13 +476,14 @@ class LLMClient:
         model = kwargs.get("model") or self.model
         if not self._client:
             reason = self.key_error or "未配置 API Key，无法调用大模型。"
-            self.last_error = reason
-            self.last_error_kind = "config"
+            self._note_error(reason, "config")
             # 可预见的配置错误单独分类，不写 llm_failures.log 噪声
             _log_llm_failure(RuntimeError(reason), kwargs.get("messages"),
                              model=model, caller=_caller_info(), category="config", kind="config")
             return _fake_response(degraded_content(reason), reason=reason)
         last, info = None, None
+        budget = _budget()
+        t_start = time.time()
         for attempt in range(MAX_RETRIES + 1):     # 0,1,2,3 → 最多 4 次调用
             try:
                 resp = self._client.chat.completions.create(**kwargs)
@@ -455,11 +493,16 @@ class LLMClient:
             except Exception as e:                 # 分类差异化：401/400 不重试，429 尊重 Retry-After
                 last = e
                 info = _classify_error(e)
-                self.last_error = str(e)[:300]
-                self.last_error_kind = info.kind
+                self._note_error(str(e)[:300], info.kind)
                 if not info.retryable or attempt >= MAX_RETRIES:
                     break
+                # 总时长预算：累计耗时（含每次尝试的等待 + 退避）超预算就放弃重试。
+                # 只决定是否发起下一次尝试，**不裁剪本次/下次的 timeout**。
+                if budget and (time.time() - t_start) >= budget:
+                    break
                 _sleep_backoff(attempt, info)
+                if budget and (time.time() - t_start) >= budget:
+                    break
         _log_llm_failure(last, kwargs.get("messages"), model=model,
                          caller=_caller_info(), kind=(info.kind if info else None))
         reason = "%s；原始错误：%s" % (info.human if info else "未知错误", str(last))
@@ -496,14 +539,15 @@ class LLMClient:
         model = model or self.model
         if not self._client:
             reason = self.key_error or "未配置 API Key，无法调用大模型。"
-            self.last_error = reason
-            self.last_error_kind = "config"
+            self._note_error(reason, "config")
             _log_llm_failure(RuntimeError(reason), messages, model=model,
                              caller=_caller_info(), category="config", kind="config")
             yield degraded_content(reason)
             return
         last, info = None, None
         produced = False
+        budget = _budget()
+        t_start = time.time()
         for attempt in range(MAX_RETRIES + 1):
             produced = False
             stream = None
@@ -525,14 +569,17 @@ class LLMClient:
             except Exception as e:
                 last = e
                 info = _classify_error(e)
-                self.last_error = str(e)[:300]
-                self.last_error_kind = info.kind
+                self._note_error(str(e)[:300], info.kind)
                 if produced:
                     # 已输出过内容，重试会导致重复 → 直接结束并给出中断提示
                     break
                 if not info.retryable or attempt >= MAX_RETRIES:
                     break
+                if budget and (time.time() - t_start) >= budget:
+                    break
                 _sleep_backoff(attempt, info)            # 1.5 / 3.0 / 4.5 后重试
+                if budget and (time.time() - t_start) >= budget:
+                    break
             finally:
                 if stream is not None:
                     try:
@@ -559,8 +606,7 @@ class LLMClient:
         import base64
         if not image_bytes:
             reason = "图片内容为空，无法调用多模态模型"
-            self.last_error = reason
-            self.last_error_kind = "config"
+            self._note_error(reason, "config")
             _log_llm_failure(RuntimeError(reason), prompt, model=self.vl_model,
                              caller=_caller_info(), category="config", kind="config")
             return degraded_content(reason)
@@ -568,16 +614,14 @@ class LLMClient:
             reason = ("图片过大（%.1f MB，超过 %.0f MB 上限），无法调用多模态模型；"
                       "请压缩图片或降低分辨率后重试"
                       % (len(image_bytes) / 1048576.0, MAX_VISION_IMAGE_BYTES / 1048576.0))
-            self.last_error = reason
-            self.last_error_kind = "config"
+            self._note_error(reason, "config")
             _log_llm_failure(RuntimeError(reason), prompt, model=self.vl_model,
                              caller=_caller_info(), category="config", kind="config")
             return degraded_content(reason)
         try:
             b64 = base64.b64encode(image_bytes).decode("utf-8")
         except Exception as e:
-            self.last_error = str(e)[:300]
-            self.last_error_kind = "config"
+            self._note_error(str(e)[:300], "config")
             _log_llm_failure(e, prompt, model=self.vl_model, caller=_caller_info(),
                              category="config", kind="config")
             return degraded_content("图片编码失败，无法调用多模态模型；原始错误：%s" % str(e))

@@ -93,6 +93,22 @@ except Exception as e:                                   # pragma: no cover
         st.code(traceback.format_exc(limit=6))
     st.stop()
 
+def _llm_err_seq():
+    """读取 LLM 失败序号（core/llm.py 每写一次 last_error 就 +1）。
+
+    用它而不是用错误字符串做比对：两个不同页面完全可能报出**一模一样**的
+    错误串（同一个 401），字符串比对分不清"这次是哪个页面新写的"。
+    """
+    try:
+        return int(getattr(getattr(ctx, "llm", None), "last_error_seq", 0) or 0)
+    except Exception:
+        return 0
+
+
+# F7 基准快照：**侧边栏渲染之前**取。侧边栏的「🔌 测试连通性」也是一次真实调用，
+# 它失败时同样应该让横幅出现在当前页（否则 degrade-api 的实测 D/F 会翻回「无」）。
+_SEQ_BEFORE = _llm_err_seq()
+
 # ---------- 侧边栏兜底：侧边栏异常不应导致主体不可用 ----------
 try:
     menu = render_sidebar(ctx)
@@ -121,14 +137,11 @@ try:
 except Exception:                                        # pragma: no cover
     pass
 
-# ---------- LLM 失败横幅（框架层统一消费 core/llm.py 的 last_error） ----------
-# Key 无效 / 限流 429 / 超时 / 断网时，core/llm.py 只记录 last_error 并返回伪响应，
-# 各页面会把伪响应当答案渲染——用户既看到"假答案"又无从排查。这里在主体区顶部
-# 按错误类型给出人话指引 + 日志位置；下次调用成功后 last_error 清空，横幅自动消失。
-try:
-    llm_failure_banner(ctx)
-except Exception:                                        # pragma: no cover
-    pass
+_page_name = None
+for prefix, (fn, _n) in _PAGES.items():
+    if str(menu).startswith(prefix):
+        _page_name = _n
+        break
 
 _hit = False
 for prefix, (fn, name) in _PAGES.items():
@@ -138,3 +151,30 @@ for prefix, (fn, name) in _PAGES.items():
         break
 if not _hit:
     st.info("📭 未匹配到页面路由，已在左侧导航重新选择。")
+_seq_after = _llm_err_seq()
+
+# ---------- LLM 失败横幅（框架层统一消费 core/llm.py 的 last_error） ----------
+# Key 无效 / 限流 429 / 超时 / 断网时，core/llm.py 只记录 last_error 并返回伪响应，
+# 各页面会把伪响应当答案渲染——用户既看到"假答案"又无从排查。这里按错误类型给出
+# 人话指引 + 日志位置；下次调用成功后 last_error 清空，横幅自动消失。
+#
+# 为什么放在页面渲染**之后**（Round 12 F2）：last_error 是页面内那次 LLM 调用
+# 失败时才被写上的。横幅若在页面之前渲染，读到的永远是"上一轮"的状态——
+# 失败当轮看不到横幅，要等下一次任意交互触发 rerun 才出现，等于"横幅永不出现"。
+# 挪到页面之后，失败当轮即可见。（代价：横幅显示在主体区底部而非顶部。）
+#
+# F7 收敛：横幅只挂在**产生它的那一页**。last_error 一旦被写，直到下一次调用
+# 成功才清空，所以"在问答页失败 → 切到文献库还挂着"会被读成"这一页坏了"。
+# 判据 = 本轮本页是否新写过 last_error（序号变了），**不用页面清单**（清单会随
+# 功能漂移，写错等于把真横幅藏掉）。
+# 基准快照取在侧边栏之前，所以侧边栏「🔌 测试连通性」失败也算"本页本轮产生"。
+try:
+    _err = getattr(getattr(ctx, "llm", None), "last_error", None)
+    if not _err:
+        st.session_state.pop("_llm_err_page", None)
+    elif _page_name and _seq_after != _SEQ_BEFORE:
+        st.session_state["_llm_err_page"] = _page_name
+    if _page_name and st.session_state.get("_llm_err_page") == _page_name:
+        llm_failure_banner(ctx)
+except Exception:                                        # pragma: no cover
+    pass

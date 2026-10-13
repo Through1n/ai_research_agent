@@ -5,7 +5,7 @@ import streamlit as st
 from services import extern
 from tools import definitions as df
 from ui.common import (ensure_state, page_header, net_error, friendly_error, show_error, pretty_table,
-                       empty_state, llm_guard, long_block, step_text)
+                       empty_state, llm_guard, long_block, step_text, show_llm_result)
 
 # 推荐列表最多展示条数
 MAX_REC_SHOW = 6
@@ -179,8 +179,9 @@ def _quality(ctx):
             try:
                 with st.spinner(step_text("🧹 正在分析引用含金量", len(lines), len(lines))):
                     out = ctx.llm.chat([{"role": "user", "content": prompt}], temperature=0.2)
-                st.success("✅ 分析完成")
-                long_block(getattr(out, "content", str(out)), title="引用含金量分析报告", limit=200)
+                # 离线占位响应走可见的降级态：绝不渲染「✅ 分析完成」（Round 12 S1/S4）
+                show_llm_result(out, success_msg="✅ 分析完成",
+                                title="引用含金量分析报告", action="引用含金量分析", limit=200)
             except Exception as e:
                 friendly_error("引用含金量分析", e,
                                reasons=["大模型返回超时 / 额度不足", "粘贴内容过长"],

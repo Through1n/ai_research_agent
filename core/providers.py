@@ -114,12 +114,28 @@ def custom_provider(spec):
 
 
 def resolve_key(prov, manual=""):
-    """Key 优先级：用户在界面手动填写 > 对应 Provider 的环境变量。"""
+    """Key 优先级：界面手动填写 > 环境变量 > Streamlit Secrets（云平台）。
+
+    最后一级是给 Streamlit Community Cloud / HuggingFace Spaces 用的：那里没有
+    .env 文件（被 .gitignore 排除），官方入口是 Secrets，没有这层兜底云上就
+    一个 Key 都拿不到，整站静默降级成"离线模式"。
+    """
     if manual and manual.strip():
         return manual.strip()
     if not prov.needs_key:
         return "local"  # 本地/免密端点用占位值激活客户端
-    return os.getenv(prov.key_env, "") or os.getenv("LLM_API_KEY", "")
+
+    def _secret(name):
+        try:
+            from config import _st_secret
+            return _st_secret(name)
+        except Exception:
+            return ""
+
+    return (os.getenv(prov.key_env, "")
+            or os.getenv("LLM_API_KEY", "")
+            or _secret(prov.key_env)
+            or _secret("LLM_API_KEY"))
 
 
 def get_provider(pid):
