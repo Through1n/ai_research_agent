@@ -33,8 +33,12 @@ venv/
 # 交付物以 md 为源，PDF 由 `python scripts/make_tech_pdf.py` 现生成，整目录忽略。
 docs/_build/
 
-# 引用校验器的前后快照（scratch，每次跑会覆盖）
+# 引用校验器快照：默认当 scratch 忽略，但 _chk_before/_chk_after 是文档第 6 行
+# 「修复前 1-4 章抽样 103 条中 86 条对不上 / 修复后 215 条 0 疑似」的一手证据，
+# 属交付物，单独放行（其它 _chk_* 仍忽略）。
 docs/review/_chk_*.txt
+!docs/review/_chk_before.txt
+!docs/review/_chk_after.txt
 
 # 截图工作稿：_crop_*（裁剪试作）/ _full_*（重拍前长图原稿）/ _p*_v（版本稿）。
 # 正式图只有 p0-p6.png，这些是过程稿，不进包。

@@ -726,7 +726,6 @@ docker compose down         # 停止
 | 7 | `t_run_python` 临时目录无 finally 清理（每次调用泄漏一个 `ai4s_code_*`） | `tools/definitions.py` | 量级小（KB 级/次），修复已列入待办 |
 | 8 | `commit()` 未清洗文件名（含 `/` 时建路径失败） | `services/library.py:768 commit` | 正常文件名不受影响；建议 `os.path.basename()` + 非法字符替换 |
 | 9 | `st.components.v1.html` 已被 Streamlit 标记弃用 | `ui/common.py embed_html` | streamlit 1.63 正常工作；迁移 `st.iframe` 需回归高度自适应 JS |
-| 10 | 文档侧：`docs/shots/` 目前被 `.gitignore` 排除 | `.gitignore:20` | 本地存在、随项目交付；若推 GitHub 需加 `!docs/shots/` 例外或 `git add -f`，否则 README 图片在远端为裂图 |
 
 ## 6.6 质量过程：八轮评审与修复闭环
 

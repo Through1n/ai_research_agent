@@ -1,0 +1,528 @@
+==============================================================================
+行号引用校验：_before.md（第 1-576 行）
+==============================================================================
+总计 103 条：OK 13 / SUSPECT 86 / UNKNOWN 4
+
+------------------------------------------------------------------------------
+【SUSPECT】86 条 —— 该行未包含上下文提到的符号
+
+  文档 L42  `ui/page_graph.py:57`
+    判定    : 未命中 
+    候选符号: _build_demo
+    该行实际: "PageRank": [round(float(pr.get(n, 0)), 4) for n in nodes],
+    建议行号: _build_demo@77(def)
+
+  文档 L103  `services/parsing.py:129`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: _detect_two_columns
+    该行实际: if not lines:
+    建议行号: _detect_two_columns@171(def)
+
+  文档 L114  `services/library.py:163`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: words = re.findall(r"[A-Za-z][\w'’\-]*", line)
+    建议行号: check_duplicate@290(def), group_versions@1099(def), version_diff@1183(def), detect_scanned@573(ref), ocr_page_text@417(ref), infer_headings_from_text@727(ref), _validate_prepared@484(def)
+
+  文档 L114  `services/library.py:700`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: extracted_pages = sum(1 for text in page_texts if (text or "").strip())
+    建议行号: check_duplicate@290(def), group_versions@1099(def), version_diff@1183(def), detect_scanned@573(ref), ocr_page_text@417(ref), infer_headings_from_text@727(ref), _validate_prepared@484(def)
+
+  文档 L114  `services/parsing.py:36`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: r"^[ \t]*(?:"
+    建议行号: detect_scanned@55(def), ocr_page_text@350(def), extract_toc@588(def), infer_headings_from_text@526(def), extract_tables@606(def), extract_figures@685(def), _nearest_caption@663(def)
+
+  文档 L114  `services/parsing.py:540`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: if text and size > 0:
+    建议行号: detect_scanned@55(def), ocr_page_text@350(def), extract_toc@588(def), infer_headings_from_text@526(def), extract_tables@606(def), extract_figures@685(def), _nearest_caption@663(def)
+
+  文档 L114  `services/parsing.py:558`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: if not (larger or bold_heading or numbered):
+    建议行号: detect_scanned@55(def), ocr_page_text@350(def), extract_toc@588(def), infer_headings_from_text@526(def), extract_tables@606(def), extract_figures@685(def), _nearest_caption@663(def)
+
+  文档 L114  `services/parsing.py:637`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: continue
+    建议行号: detect_scanned@55(def), ocr_page_text@350(def), extract_toc@588(def), infer_headings_from_text@526(def), extract_tables@606(def), extract_figures@685(def), _nearest_caption@663(def)
+
+  文档 L114  `services/library.py:353`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: try:
+    建议行号: check_duplicate@290(def), group_versions@1099(def), version_diff@1183(def), detect_scanned@573(ref), ocr_page_text@417(ref), infer_headings_from_text@727(ref), _validate_prepared@484(def)
+
+  文档 L114  `services/library.py:784`
+    判定    : 未命中 裸行号（继承最近前驱 services/library.py）
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: arxiv_id = arxiv_id or _guess_arxiv(filename)
+    建议行号: check_duplicate@290(def), group_versions@1099(def), version_diff@1183(def), detect_scanned@573(ref), ocr_page_text@417(ref), infer_headings_from_text@727(ref), _validate_prepared@484(def)
+
+  文档 L114  `services/parsing.py:308`
+    判定    : 未命中 裸行号（继承最近前驱 services/parsing.py）
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: def native_page_texts(doc):
+    建议行号: detect_scanned@55(def), ocr_page_text@350(def), extract_toc@588(def), infer_headings_from_text@526(def), extract_tables@606(def), extract_figures@685(def), _nearest_caption@663(def)
+
+  文档 L114  `services/parsing.py:478`
+    判定    : 未命中 裸行号（继承最近前驱 services/parsing.py）
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: if sum(len(item) for item in buf) + len(block) > CHUNK_SIZE:
+    建议行号: detect_scanned@55(def), ocr_page_text@350(def), extract_toc@588(def), infer_headings_from_text@526(def), extract_tables@606(def), extract_figures@685(def), _nearest_caption@663(def)
+
+  文档 L114  `services/parsing.py:615`
+    判定    : 未命中 裸行号（继承最近前驱 services/parsing.py）
+    候选符号: check_duplicate, group_versions, version_diff, detect_scanned, ocr_page_text, extract_toc, infer_headings_from_text, extract_tables, extract_figures, _nearest_caption, _validate_prepared
+    该行实际: for ti, tab in enumerate(page_tables):
+    建议行号: detect_scanned@55(def), ocr_page_text@350(def), extract_toc@588(def), infer_headings_from_text@526(def), extract_tables@606(def), extract_figures@685(def), _nearest_caption@663(def)
+
+  文档 L126  `services/library.py:32`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: _paper_fingerprints, version_diff
+    该行实际: "Llion Jones; Aidan N. Gomez; Lukasz Kaiser; Illia Polosukhin",
+    建议行号: _paper_fingerprints@71(def), version_diff@1183(def)
+
+  文档 L126  `services/library.py:784`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: _paper_fingerprints, version_diff
+    该行实际: arxiv_id = arxiv_id or _guess_arxiv(filename)
+    建议行号: _paper_fingerprints@71(def), version_diff@1183(def)
+
+  文档 L135  `core/llm.py:29-33`
+    判定    : 未命中 
+    候选符号: RETRY_BACKOFF, SDK_MAX_RETRIES, llm_failures, log, safe_render
+    该行实际: LLMClient.chat / stream / vision / json_chat / _create / available
+    建议行号: RETRY_BACKOFF@42(def), SDK_MAX_RETRIES@43(def), llm_failures@10(ref), log@10(ref)
+
+  文档 L135  `ui/common.py:226`
+    判定    : 未命中 
+    候选符号: RETRY_BACKOFF, SDK_MAX_RETRIES, llm_failures, log, safe_render
+    该行实际: return "没有访问该文件的权限"
+    建议行号: llm_failures@340(ref), log@191(ref), safe_render@390(def)
+
+  文档 L136  `services/library.py:16`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: PDF_BATCH_SIZE, _extract_page_with_timeout, _memory_probe
+    该行实际: 
+    建议行号: PDF_BATCH_SIZE@17(def), _extract_page_with_timeout@431(def)
+
+  文档 L136  `services/library.py:300`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: PDF_BATCH_SIZE, _extract_page_with_timeout, _memory_probe
+    该行实际: threshold = threshold if threshold is not None else DEDUP_THRESHOLD
+    建议行号: PDF_BATCH_SIZE@17(def), _extract_page_with_timeout@431(def)
+
+  文档 L137  `core/guardrails.py:117`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: redact_secrets, validate_code, gitignore, dockerignore
+    该行实际: f"（阈值 {threshold:.0%}），可能脱离原文")
+    建议行号: redact_secrets@130(def)
+
+  文档 L237  `core/agent.py:411`
+    判定    : 未命中 
+    候选符号: run, route, EXPERTS, reg, execute, name, args, ctx, AGENT_MAX_ITERS
+    该行实际: 
+    建议行号: run@414(def), route@14(ref), EXPERTS@23(ref), reg@467(def), execute@150(ref), name@96(def), args@98(def), ctx@13(ref), AGENT_MAX_ITERS@21(ref)
+
+  文档 L237  `core/router.py:99`
+    判定    : 未命中 
+    候选符号: run, route, EXPERTS, reg, execute, name, args, ctx, AGENT_MAX_ITERS
+    该行实际: if hit:
+    建议行号: run@17(ref), route@104(def), EXPERTS@22(def), ctx@12(ref)
+
+  文档 L239  `core/router.py:17-36`
+    判定    : 未命中 
+    候选符号: keyword_route
+    该行实际: 本次路由命中（与既有 per-run 调用语义等价），仅省去重复调用成本。
+    建议行号: keyword_route@85(def)
+
+  文档 L239  `core/router.py:80`
+    判定    : 未命中 裸行号（继承最近前驱 core/router.py）
+    候选符号: keyword_route
+    该行实际: "检索到多篇文献且目标涉及引用关系，转交图谱综述专家",
+    建议行号: keyword_route@85(def)
+
+  文档 L254  `app.py:84-94`
+    判定    : 未命中 
+    候选符号: _PAGES
+    该行实际: # ---------- 服务容器初始化兜底 ----------
+    建议行号: _PAGES@105(def)
+
+  文档 L254  `app.py:96-101`
+    判定    : 未命中 
+    候选符号: _PAGES
+    该行实际: # ---------- 侧边栏兜底：侧边栏异常不应导致主体不可用 ----------
+    建议行号: _PAGES@105(def)
+
+  文档 L254  `ui/sidebar.py:34-83`
+    判定    : 未命中 
+    候选符号: _PAGES
+    该行实际: "🛠️ 怎么办：重试一次；仍失败请检查 storage 目录写权限。",
+
+  文档 L278  `core/providers.py:33-74`
+    判定    : 未命中 
+    候选符号: LLM_PROVIDERS_EXTRA
+    该行实际: PROVIDERS = [
+    建议行号: LLM_PROVIDERS_EXTRA@7(ref)
+
+  文档 L294  `services/parsing.py:308`
+    判定    : 未命中 
+    候选符号: ocr_page_text
+    该行实际: def native_page_texts(doc):
+    建议行号: ocr_page_text@350(def)
+
+  文档 L298  `services/parsing.py:293`
+    判定    : 未命中 
+    候选符号: ocr_supported, is_ocr_error_text, commit
+    该行实际: """提取单页栏感知文本；``return_blocks=True`` 时同时返回带 column 的块。"""
+    建议行号: ocr_supported@335(def), is_ocr_error_text@86(def)
+
+  文档 L298  `services/parsing.py:44`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: ocr_supported, is_ocr_error_text, commit
+    该行实际: r")",
+    建议行号: ocr_supported@335(def), is_ocr_error_text@86(def)
+
+  文档 L317  `services/state.py:47`
+    判定    : 未命中 
+    候选符号: DefaultEmbeddingFunction
+    该行实际: ONNXMiniLM_L6_V2 实例：
+    建议行号: DefaultEmbeddingFunction@46(ref)
+
+  文档 L327  `services/state.py:45`
+    判定    : 未命中 
+    候选符号: chromadb, PersistentClient, rank_bm25
+    该行实际: 
+    建议行号: chromadb@7(ref), PersistentClient@68(ref), rank_bm25@110(ref)
+
+  文档 L327  `services/state.py:84-90`
+    判定    : 未命中 
+    候选符号: chromadb, PersistentClient, rank_bm25
+    该行实际: self.bm25 = self._build_bm25()
+    建议行号: chromadb@7(ref), PersistentClient@68(ref), rank_bm25@110(ref)
+
+  文档 L337  `services/graph.py:18`
+    判定    : 未命中 
+    候选符号: networkx
+    该行实际: import threading
+    建议行号: networkx@19(ref)
+
+  文档 L351  `services/parsing.py:30`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: open_doc, fitz, open, requirements
+    该行实际: # 避免每次调用都 re.compile，输出完全等价）。
+    建议行号: open_doc@49(def), fitz@7(ref), open@51(ref)
+
+  文档 L357  `core/llm.py:176`
+    判定    : 未命中 
+    候选符号: client, chat, completions, create, stream, call_llm_with_retry, parse_json
+    该行实际: class _ErrInfo:
+    建议行号: client@644(def), chat@468(def), completions@451(ref), create@451(ref), stream@488(def), call_llm_with_retry@608(def), parse_json@660(def)
+
+  文档 L357  `core/llm.py:190`
+    判定    : 未命中 裸行号（继承最近前驱 core/llm.py）
+    候选符号: client, chat, completions, create, stream, call_llm_with_retry, parse_json
+    该行实际: resp = getattr(e, "response", None)
+    建议行号: client@644(def), chat@468(def), completions@451(ref), create@451(ref), stream@488(def), call_llm_with_retry@608(def), parse_json@660(def)
+
+  文档 L357  `core/llm.py:264`
+    判定    : 未命中 裸行号（继承最近前驱 core/llm.py）
+    候选符号: client, chat, completions, create, stream, call_llm_with_retry, parse_json
+    该行实际: 
+    建议行号: client@644(def), chat@468(def), completions@451(ref), create@451(ref), stream@488(def), call_llm_with_retry@608(def), parse_json@660(def)
+
+  文档 L359  `core/llm.py:31`
+    判定    : 未命中 裸行号（继承最近前驱 core/llm.py）
+    候选符号: RETRY_BACKOFF, SDK_MAX_RETRIES, llm_failures, log, error_type, model, caller, n_messages, messages_preview
+    该行实际: """
+    建议行号: RETRY_BACKOFF@42(def), SDK_MAX_RETRIES@43(def), llm_failures@10(ref), log@10(ref), error_type@383(ref), model@439(def), caller@464(def), n_messages@389(ref), messages_preview@390(ref)
+
+  文档 L389  `services/extern.py:159`
+    判定    : 未命中 
+    候选符号: github_repo_info
+    该行实际: return "", "", f"{raw_err}；README 抓取失败：{type(e).__name__}: {str(e)[:60]}"
+    建议行号: github_repo_info@162(def)
+
+  文档 L390  `services/citation_quality.py:403`
+    判定    : 未命中 
+    候选符号: SOURCES, low_confidence, _low_confidence_reasons
+    该行实际: 
+    建议行号: low_confidence@457(ref), _low_confidence_reasons@456(def)
+
+  文档 L390  `services/citation_quality.py:195`
+    判定    : 未命中 裸行号（继承最近前驱 services/citation_quality.py）
+    候选符号: SOURCES, low_confidence, _low_confidence_reasons
+    该行实际: return False
+    建议行号: low_confidence@457(ref), _low_confidence_reasons@456(def)
+
+  文档 L394  `core/sandbox.py:328`
+    判定    : 行号越界（文件共 51 行） 裸行号（继承最近前驱 core/sandbox.py）
+    候选符号: —
+    该行实际: <超出文件末尾>
+
+  文档 L394  `core/sandbox.py:296`
+    判定    : 行号越界（文件共 51 行） 裸行号（继承最近前驱 core/sandbox.py）
+    候选符号: —
+    该行实际: <超出文件末尾>
+
+  文档 L398  `services/rag.py:97`
+    判定    : 未命中 裸行号（继承上文 services/rag.py）
+    候选符号: ctx, vdb, bm25, rrf_fuse, search_literature
+    该行实际: 规则：某论文较新版本在池内覆盖 >= min_keep 条时，丢弃该论文旧版本的
+    建议行号: ctx@4(ref), bm25@190(ref), rrf_fuse@246(def)
+
+  文档 L408  `services/rag.py:16`
+    判定    : 未命中 
+    候选符号: RELEVANCE_FLOOR, top_score
+    该行实际: 轻量实现，每来源上限 max(2, final_k/候选来源数)，单来源池不截断）；
+    建议行号: RELEVANCE_FLOOR@46(def), top_score@640(ref)
+
+  文档 L409  `core/guardrails.py:51`
+    判定    : 未命中 
+    候选符号: SUSPICION_THRESHOLD, _overlap
+    该行实际: def _anchor_tokens(text, n=2):
+    建议行号: SUSPICION_THRESHOLD@30(def), _overlap@64(def)
+
+  文档 L410  `services/rag.py:17`
+    判定    : 未命中 
+    候选符号: MAX_REPAIR, temperature
+    该行实际: ② 强命中时离线符号对齐变体照常参与检索（零 LLM 成本，见
+    建议行号: MAX_REPAIR@47(def), temperature@135(def)
+
+  文档 L411  `services/writing.py:1036`
+    判定    : 未命中 
+    候选符号: MIN_REF_ENTRIES
+    该行实际: if n in seen_bad:
+    建议行号: MIN_REF_ENTRIES@60(def)
+
+  文档 L420  `services/rag.py:182`
+    判定    : 未命中 
+    候选符号: MAX_VARIANT_DENSE
+    该行实际: return {}
+    建议行号: MAX_VARIANT_DENSE@48(def)
+
+  文档 L420  `services/rag.py:245`
+    判定    : 未命中 裸行号（继承最近前驱 services/rag.py）
+    候选符号: MAX_VARIANT_DENSE
+    该行实际: 
+    建议行号: MAX_VARIANT_DENSE@48(def)
+
+  文档 L422  `services/rag.py:97`
+    判定    : 未命中 
+    候选符号: rrf_fuse
+    该行实际: 规则：某论文较新版本在池内覆盖 >= min_keep 条时，丢弃该论文旧版本的
+    建议行号: rrf_fuse@246(def)
+
+  文档 L430  `services/library.py:16`
+    判定    : 未命中 
+    候选符号: PDF_BATCH_SIZE
+    该行实际: 
+    建议行号: PDF_BATCH_SIZE@17(def)
+
+  文档 L432  `services/library.py:17`
+    判定    : 未命中 
+    候选符号: PDF_PAGE_TIMEOUT_SECONDS, _extract_page_with_timeout, failed_pages
+    该行实际: PDF_BATCH_SIZE = 20
+    建议行号: PDF_PAGE_TIMEOUT_SECONDS@18(def), _extract_page_with_timeout@431(def), failed_pages@336(def)
+
+  文档 L432  `services/library.py:300`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: PDF_PAGE_TIMEOUT_SECONDS, _extract_page_with_timeout, failed_pages
+    该行实际: threshold = threshold if threshold is not None else DEDUP_THRESHOLD
+    建议行号: PDF_PAGE_TIMEOUT_SECONDS@18(def), _extract_page_with_timeout@431(def), failed_pages@336(def)
+
+  文档 L439  `services/parsing.py:129`
+    判定    : 未命中 
+    候选符号: _detect_two_columns, _gutter_free_ratio
+    该行实际: if not lines:
+    建议行号: _detect_two_columns@171(def), _gutter_free_ratio@150(def)
+
+  文档 L439  `services/parsing.py:196-201`
+    判定    : 未命中 裸行号（继承最近前驱 services/parsing.py）
+    候选符号: _detect_two_columns, _gutter_free_ratio
+    该行实际: 
+    建议行号: _detect_two_columns@171(def), _gutter_free_ratio@150(def)
+
+  文档 L439  `services/parsing.py:108`
+    判定    : 未命中 裸行号（继承最近前驱 services/parsing.py）
+    候选符号: _detect_two_columns, _gutter_free_ratio
+    该行实际: "bbox": tuple(line.get("bbox") or (0.0, 0.0, 0.0, 0.0)),
+    建议行号: _detect_two_columns@171(def), _gutter_free_ratio@150(def)
+
+  文档 L445  `services/citation_quality.py:42`
+    判定    : 未命中 
+    候选符号: _CACHE, _TITLE_CACHE
+    该行实际: TITLE_MATCH_MIN = 0.60        # 返回条目与查询标题的最低相似度，低于此值视为未命中
+    建议行号: _CACHE@72(def), _TITLE_CACHE@73(def)
+
+  文档 L445  `services/citation_quality.py:43`
+    判定    : 未命中 裸行号（继承最近前驱 services/citation_quality.py）
+    候选符号: _CACHE, _TITLE_CACHE
+    该行实际: TITLE_STRONG_MIN = 0.85       # 「高置信标题匹配」阈值：达到此值时进入「被引数优先」选优
+    建议行号: _CACHE@72(def), _TITLE_CACHE@73(def)
+
+  文档 L446  `services/citation_quality.py:211`
+    判定    : 未命中 裸行号（继承上文 services/citation_quality.py）
+    候选符号: low_confidence
+    该行实际: 
+    建议行号: low_confidence@457(ref)
+
+  文档 L447  `services/parsing.py:293`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: ocr_supported
+    该行实际: """提取单页栏感知文本；``return_blocks=True`` 时同时返回带 column 的块。"""
+    建议行号: ocr_supported@335(def)
+
+  文档 L454  `ui/page_reading.py:200`
+    判定    : 未命中 
+    候选符号: cleanup_stale_figure_dirs
+    该行实际: if "Timeout" in name:
+    建议行号: cleanup_stale_figure_dirs@218(def)
+
+  文档 L469  `services/rag.py:132`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: annotate_paragraphs, retrieve_per_paper, build_grouped_context
+    该行实际: resp = call_llm_with_retry(
+    建议行号: annotate_paragraphs@387(def), retrieve_per_paper@654(def), build_grouped_context@710(def)
+
+  文档 L488  `core/guardrails.py:181`
+    判定    : 未命中 
+    候选符号: ACADEMIC_SYSTEM
+    该行实际: if len(_anchor_tokens(body)) < 2:
+    建议行号: ACADEMIC_SYSTEM@470(def)
+
+  文档 L489  `services/rag.py:353`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: compare_messages
+    该行实际: key = (query, tuple(cids), fp)
+    建议行号: compare_messages@737(def)
+
+  文档 L490  `services/graph.py:644`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: generate_review, _deterministic_review
+    该行实际: clusters = []
+    建议行号: generate_review@770(def), _deterministic_review@712(def)
+
+  文档 L490  `services/graph.py:595`
+    判定    : 未命中 裸行号（继承最近前驱 services/graph.py）
+    候选符号: generate_review, _deterministic_review
+    该行实际: def _communities(G):
+    建议行号: generate_review@770(def), _deterministic_review@712(def)
+
+  文档 L491  `services/writing.py:1113`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: _outline_prompt
+    该行实际: return result
+    建议行号: _outline_prompt@1121(def)
+
+  文档 L492  `services/writing.py:1493`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: figure_caption
+    该行实际: return res
+    建议行号: figure_caption@1795(def)
+
+  文档 L493  `services/graph.py:595`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: _deterministic_review
+    该行实际: def _communities(G):
+    建议行号: _deterministic_review@712(def)
+
+  文档 L503  `services/rag.py:410-413`
+    判定    : 未命中 
+    候选符号: score_sources, RELEVANCE_FLOOR
+    该行实际: c["para_idx"] = int(before) + 1
+    建议行号: score_sources@423(def), RELEVANCE_FLOOR@46(def)
+
+  文档 L503  `services/rag.py:168`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: score_sources, RELEVANCE_FLOOR
+    该行实际: text = "".join(parts)
+    建议行号: score_sources@423(def), RELEVANCE_FLOOR@46(def)
+
+  文档 L503  `services/rag.py:16`
+    判定    : 未命中 裸行号（继承最近前驱 services/rag.py）
+    候选符号: score_sources, RELEVANCE_FLOOR
+    该行实际: 轻量实现，每来源上限 max(2, final_k/候选来源数)，单来源池不截断）；
+    建议行号: score_sources@423(def), RELEVANCE_FLOOR@46(def)
+
+  文档 L505  `core/guardrails.py:31`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: top_score, LLM
+    该行实际: 
+
+  文档 L515  `core/guardrails.py:127`
+    判定    : 未命中 裸行号（继承上文 core/guardrails.py）
+    候选符号: _overlap, SUSPICION_THRESHOLD, validate_grouped_citations
+    该行实际: return False, ""
+    建议行号: _overlap@64(def), SUSPICION_THRESHOLD@30(def), validate_grouped_citations@165(def)
+
+  文档 L515  `core/guardrails.py:152`
+    判定    : 未命中 裸行号（继承上文 core/guardrails.py）
+    候选符号: _overlap, SUSPICION_THRESHOLD, validate_citations
+    该行实际: invalid = sorted(n for n in nums if n < 1 or n > n_sources)
+    建议行号: _overlap@64(def), SUSPICION_THRESHOLD@30(def), validate_citations@140(def)
+
+  文档 L523  `services/rag.py:418-429`
+    判定    : 未命中 
+    候选符号: temperature, MAX_REPAIR
+    该行实际: if na == 0 or nb == 0:
+    建议行号: temperature@135(def), MAX_REPAIR@47(def)
+
+  文档 L529  `services/writing.py:726`
+    判定    : 未命中 裸行号（继承上文 services/writing.py）
+    候选符号: reference_whitelist, _locate_reference_section, _split_author_year_flow, _flow_text, _is_noise, _quality_report, low_confidence
+    该行实际: }
+    建议行号: reference_whitelist@879(def), _locate_reference_section@569(def), _split_author_year_flow@461(def), _flow_text@356(def), _is_noise@639(def), _quality_report@699(def), low_confidence@61(ref)
+
+  文档 L529  `services/writing.py:546`
+    判定    : 未命中 裸行号（继承上文 services/writing.py）
+    候选符号: reference_whitelist, _locate_reference_section, _split_author_year_flow, _flow_text, _is_noise, _quality_report, low_confidence
+    该行实际: r"ieee|acm|springer|lncs|lecture\s+notes|nature|science|communications|conference|"
+    建议行号: reference_whitelist@879(def), _locate_reference_section@569(def), _split_author_year_flow@461(def), _flow_text@356(def), _is_noise@639(def), _quality_report@699(def), low_confidence@61(ref)
+
+  文档 L530  `services/writing.py:1152`
+    判定    : 未命中 裸行号（继承上文 services/writing.py）
+    候选符号: generate_outline_verified, _strip_generated_references, sanitize_placeholders, _sanitize_citations, build_references_section, validate_reference_whitelist
+    该行实际: Threats to Validity / Conclusion。
+    建议行号: generate_outline_verified@1234(def), _strip_generated_references@212(def), sanitize_placeholders@154(def), _sanitize_citations@950(def), build_references_section@195(def), validate_reference_whitelist@999(def)
+
+  文档 L531  `services/writing.py:1036`
+    判定    : 未命中 裸行号（继承上文 services/writing.py）
+    候选符号: validate_reference_whitelist, References
+    该行实际: if n in seen_bad:
+    建议行号: validate_reference_whitelist@999(def), References@4(ref)
+
+  文档 L554  `ui/page_writing.py:213`
+    判定    : 未命中 
+    候选符号: _llm_text, Placeholder, TODO, round8_fixR6_references, _render_reference_provenance
+    该行实际: with st.spinner("🤖 正在生成 Figure Caption…"):
+    建议行号: Placeholder@370(ref), TODO@370(ref), _render_reference_provenance@220(def)
+
+  文档 L558  `core/guardrails.py:108`
+    判定    : 未命中 按 basename 唯一解析
+    候选符号: validate_code, eval, exec, open, subprocess, socket, _tail_text, check_injection, redact_secrets
+    该行实际: for n in sorted(ctxs, key=lambda x: str(x)):
+    建议行号: check_injection@121(def), redact_secrets@130(def)
+
+  文档 L558  `core/guardrails.py:117`
+    判定    : 未命中 裸行号（继承最近前驱 core/guardrails.py）
+    候选符号: validate_code, eval, exec, open, subprocess, socket, _tail_text, check_injection, redact_secrets
+    该行实际: f"（阈值 {threshold:.0%}），可能脱离原文")
+    建议行号: check_injection@121(def), redact_secrets@130(def)
+
+------------------------------------------------------------------------------
+【UNKNOWN】4 条 —— 无符号上下文，人工判定
+  文档 L134   config.py:74                       无符号上下文，无法判定 | import streamlit as st
+  文档 L338   services/graph.py:483              无符号上下文，无法判定 | if use_external:
+  文档 L471   config.py:74                       无符号上下文，无法判定 | import streamlit as st
+  文档 L573   app.py:16                          无符号上下文，无法判定 | LOG_FILE = os.path.join(LOG_DIR, "errors.log")
+
+==============================================================================
