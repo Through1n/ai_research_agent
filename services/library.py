@@ -121,6 +121,17 @@ _BOILERPLATE_RE = re.compile(
     r"copyright|all rights reserved|permission to reproduce|abstract\b)",
     re.IGNORECASE,
 )
+
+# ---------- 摘要定位用的预编译正则（原 extract_abstract 内联编译，提升为模块级常量） ----------
+# 与原始内联写法 (?:?im) 等价的标志位，输出完全等价。
+_ABSTRACT_LINE_RE = re.compile(r"^\s*abstract\s*[:\-–—.]?\s*$", re.IGNORECASE | re.MULTILINE)
+_ABSTRACT_INLINE_RE = re.compile(r"\babstract\b\s*[:\-–—.\s]", re.IGNORECASE)
+_ABSTRACT_ANY_RE = re.compile(r"\babstract\b", re.IGNORECASE)
+_ABSTRACT_BOILER_RE = re.compile(
+    r"^.{0,400}?(?:permission to reproduce|all rights reserved|"
+    r"this paper is provided|copyright)\b.{0,200}?\n",
+    re.IGNORECASE | re.DOTALL,
+)
 # 首页样板常跨行断句：以连接词/冠词结尾的行几乎不可能是标题。
 # 注意：这里**不能**收录 for / of / to / in 等介词——学术标题里极其常见
 # （"Transformers for Language Understanding"、"Attention for Vision"），
@@ -242,19 +253,17 @@ def extract_abstract(full_text, limit=600):
     text = str(full_text or "")
     head = text[:2500]
     # 学术论文首页的 "Abstract" 通常单独成行或后接换行/冒号；宽松匹配多种排版
-    matches = list(re.finditer(r"(?im)^\s*abstract\s*[:\-–—.]?\s*$", head))
+    matches = list(_ABSTRACT_LINE_RE.finditer(head))
     if not matches:
-        matches = list(re.finditer(r"(?i)\babstract\b\s*[:\-–—.\s]", head))
+        matches = list(_ABSTRACT_INLINE_RE.finditer(head))
     if not matches:
-        matches = list(re.finditer(r"(?i)\babstract\b", head))
+        matches = list(_ABSTRACT_ANY_RE.finditer(head))
     match = matches[-1] if matches else None
     if match:
         body = text[match.end():match.end() + limit]
     else:
         # 无 Abstract 标记：跳过以版权/许可声明开头的首页样板
-        stripped = re.sub(
-            r"(?is)^.{0,400}?(?:permission to reproduce|all rights reserved|"
-            r"this paper is provided|copyright)\b.{0,200}?\n", "", text, count=1)
+        stripped = _ABSTRACT_BOILER_RE.sub("", text, count=1)
         body = stripped if len(stripped.strip()) > limit // 2 else text
         body = body[:limit]
     return re.sub(r"\s+", " ", body).strip()

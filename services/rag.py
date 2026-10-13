@@ -29,7 +29,9 @@ Round 9 改动（S1：检索问答链路 + 抗幻觉）：
 - 抗幻觉：答案中找不到来源依据的数字/实体编码进入 result["unverified"] 并在
   答案末尾附核验说明。
 """
+import hashlib
 import re
+import threading
 import time
 
 import numpy as np
@@ -325,9 +327,35 @@ def cap_by_source(ordered_ids, by_id, final_k, intent_rankings=None, scores=None
     return picked
 
 
+# ---------- LLM 重排结果缓存（话术 10：相同 query + 相同候选集 → 同一次重排结果） ----------
+# 重排只依赖 (query, 候选集, 候选文本)；相同输入下缓存命中可省掉一次 LLM 调用，
+# 且返回的序与首次完全一致（语义等价）。key 含文本指纹，文献库重建（文本变化）后自然失效。
+_rerank_cache = {}
+_rerank_cache_lock = threading.Lock()
+_RERANK_CACHE_MAX = 256
+
+
 def llm_rerank(ctx, query, cids, chunk_by_id):
-    """让 LLM 按相关性对候选片段重排（cross-encoder 式），返回重排后的 id 顺序。"""
-    listing = "\n".join(f"({i}) {chunk_by_id[cid]['text'][:300]}" for i, cid in enumerate(cids))
+    """让 LLM 按相关性对候选片段重排（cross-encoder 式），返回重排后的 id 顺序。
+
+    相同 (query, 候选集, 文本指纹) 的结果做线程安全缓存：命中即返回首次重排序，
+    省去重复 LLM 调用；缓存 key 含候选文本指纹，文献库重建（文本变化）后自然失效，
+    不影响答案与候选本身。
+    """
+    if not cids:
+        return list(cids)
+    try:
+        fp = hashlib.md5(
+            "".join((chunk_by_id.get(c, {}) or {}).get("text", "")[:120] for c in cids).encode("utf-8")
+        ).hexdigest()
+    except Exception:
+        fp = ""
+    key = (query, tuple(cids), fp)
+    with _rerank_cache_lock:
+        hit = _rerank_cache.get(key)
+    if hit is not None:
+        return list(hit)
+    listing = "\n".join(f"({i}) {(chunk_by_id.get(c, {}) or {}).get('text', '')[:300]}" for i, c in enumerate(cids))
     prompt = f"""用户问题：{query}
 下列是候选文献片段，请按与问题的相关性从高到低排序，只输出 JSON：{{"order":[编号,...]}}
 片段：
@@ -336,7 +364,12 @@ def llm_rerank(ctx, query, cids, chunk_by_id):
         data = _llm_json(ctx, [{"role": "user", "content": prompt}], temperature=0.0)
         order = data.get("order") or []
         reranked = [cids[i] for i in order if isinstance(i, int) and 0 <= i < len(cids)]
-        return reranked + [c for c in cids if c not in reranked]
+        result = reranked + [c for c in cids if c not in reranked]
+        with _rerank_cache_lock:
+            _rerank_cache[key] = list(result)
+            if len(_rerank_cache) > _RERANK_CACHE_MAX:
+                _rerank_cache.pop(next(iter(_rerank_cache)), None)
+        return result
     except Exception:
         return cids
 
@@ -502,10 +535,22 @@ def retrieve(ctx, query, dense_k=None, sparse_k=None, final_k=None, use_rerank=F
     t0 = time.time()
     # ---------- Phase 1：原查询双路检索 + 相关度打分（零 LLM 调用） ----------
     _say("① 原查询混合检索（Dense + BM25）…")
-    # 话术 7：Phase 1 同样走预计算向量路径。collection.query(query_texts=...) 内部
-    # 会调用 chroma 自带的 DefaultEmbeddingFunction，而它每次调用都重建 ONNX
-    # 会话（~128ms）；改用自己的持久 embed_fn 只需实际推理时间。两条路径返回
-    # 的 id 序列已实测一致，失败则回退原路径。
+    # 话术 10（性能）：Dense（embed + 向量检索）与 Sparse（BM25）两路相互独立，
+    # 用一条后台线程并行跑 BM25，主线程跑 Dense，重叠 I/O 与 ONNX 推理，
+    # 缩短首字/结果等待。RRF 融合对 ranking 输入顺序不敏感，并行不改变融合结果。
+    # ⚠️ 失败语义必须与原来的串行调用保持一致：BM25 抛异常时不能在线程里被吞成 []，
+    # 否则「检索失败」与「空结果」不可区分，链路会静默退化成纯 dense 检索而不报错。
+    # 做法：异常回填到 s0_err，join 后由主线程原样重抛。
+    s0_holder, s0_err = {}, {}
+
+    def _run_sparse():
+        try:
+            s0_holder["s0"] = sparse_search(ctx, query, sparse_k, source=source_filter)
+        except Exception as e:      # pragma: no cover - 失败路径与原有串行行为一致
+            s0_err["e"] = e
+
+    _th = threading.Thread(target=_run_sparse, daemon=True)
+    _th.start()
     d0 = None
     try:
         _qv = ctx.embed([query])
@@ -517,7 +562,10 @@ def retrieve(ctx, query, dense_k=None, sparse_k=None, final_k=None, use_rerank=F
         d0 = dense_search(ctx, query, dense_k)
     if source_filter:
         d0 = [i for i in d0 if by_id.get(i, {}).get("source") == source_filter]
-    s0 = sparse_search(ctx, query, sparse_k, source=source_filter)
+    _th.join()
+    if "e" in s0_err:   # 还原原始失败语义：BM25 异常照旧抛给上层处理
+        raise s0_err["e"]
+    s0 = s0_holder.get("s0", [])
     fused0 = rrf_fuse([d0, s0], final_k)
     srcs0 = annotate_paragraphs([dict(by_id[cid]) for cid in fused0 if cid in by_id], ctx)
     sc0 = score_sources(ctx, query, srcs0)

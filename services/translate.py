@@ -34,6 +34,8 @@
 """
 import importlib
 import re
+import time
+import threading
 
 try:  # PyMuPDF >= 1.24 推荐 import pymupdf；老版本只有 fitz。二者 API 一致
     import pymupdf as fitz
@@ -49,6 +51,33 @@ _MIN_GUTTER = 12.0           # 中缝最小宽度（pt），小于此值视为�
 _COL_BINS = 140              # x 方向覆盖率剖面的采样桶数
 _LOW_COVER_RATIO = 0.25      # 低于搜索区中位覆盖率的该比例 → 视为中缝
 _CJK_FONTNAME = "china-s"    # PyMuPDF 内置简体中文（Droid Sans Fallback）
+
+# ---------------- 翻译结果 TTL 缓存（默认路径 memoization） ----------------
+# 针对划词/原位等「同一段可能被反复翻译」的场景：相同原文在 TTL 内直接命中缓存，
+# 避免重复打满翻译限流。仅对默认翻译器（services.writing.translate_to_chinese，确定性 prompt）
+# 生效；传入自定义 call 时不缓存，避免跨 translator 串结果。不缓存空结果 / 以「【LLM」开头的
+# 降级文案，确保限流/不可用期间的伪响应不会被冻结成"译文"。
+_TRANSLATE_CACHE_TTL = 600.0
+_TRANSLATE_CACHE_MAX = 512
+_translate_cache = {}
+_translate_cache_lock = threading.Lock()
+
+
+def _translate_cache_get(text):
+    now = time.monotonic()
+    item = _translate_cache.get(text)
+    if item is not None and item[1] > now:
+        return item[0]
+    _translate_cache.pop(text, None)
+    return None
+
+
+def _translate_cache_put(text, value):
+    now = time.monotonic()
+    with _translate_cache_lock:
+        if len(_translate_cache) >= _TRANSLATE_CACHE_MAX:
+            _translate_cache.pop(next(iter(_translate_cache)), None)
+        _translate_cache[text] = (value, now + _TRANSLATE_CACHE_TTL)
 
 
 # =====================================================================
@@ -1338,6 +1367,10 @@ def math_safe_translate(ctx, text, call=None):
         src = str(text or "")
         if not src.strip():
             return "", "内容为空"
+        if call is None:
+            cached = _translate_cache_get(src)
+            if cached is not None:
+                return cached, ""
         masked, store = protect_math(src)
         fn = call
         if fn is None:
@@ -1347,7 +1380,11 @@ def math_safe_translate(ctx, text, call=None):
         out = "" if out is None else str(out)
         if not out.strip():
             return "", "模型返回空内容"
-        return restore_math(out, store), ""
+        zh = restore_math(out, store)
+        # 仅缓存默认路径的成功译文；降级文案（以「【LLM」开头）不入缓存。
+        if call is None and not zh.lstrip().startswith("【LLM"):
+            _translate_cache_put(src, zh)
+        return zh, ""
     except Exception as e:
         return "", "%s: %s" % (type(e).__name__, str(e)[:120])
 

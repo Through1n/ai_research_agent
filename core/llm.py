@@ -32,6 +32,7 @@
 import os
 import json
 import re
+import threading
 import time
 import types
 from openai import OpenAI
@@ -139,6 +140,37 @@ try:
 except Exception:                                     # pragma: no cover - 旧版 SDK 缺类
     _OAuthError = _OPermissionError = _ORateLimitError = ()
     _OAPITimeoutError = _OAPIConnectionError = _OInternalServerError = _OBadRequestError = ()
+
+
+# ---------- LLMClient 连接池复用缓存（话术 10：避免每次调用重建 OpenAI 客户端/连接池） ----------
+# call_llm_with_retry 原本每次调用都 new 一个 LLMClient（连带新建 TCP/TLS 连接池，
+# 实测每次约数十 ms 开销）。相同 (key, base_url, model, timeout) 复用同一实例：
+# OpenAI 客户端内部连接池可并发复用、线程安全，不改变任何重试/降级语义。
+_CLIENT_CACHE = {}
+_CLIENT_CACHE_LOCK = threading.Lock()
+_CLIENT_CACHE_MAX = 16
+
+
+def _get_cached_client(api_key, base_url, model, timeout):
+    """复用相同参数的 LLMClient；锁外构造避免阻塞其它调用，构造后再校验一次缓存。"""
+    k = (api_key, base_url, model, timeout)
+    with _CLIENT_CACHE_LOCK:
+        c = _CLIENT_CACHE.get(k)
+        if c is not None:
+            return c
+    try:
+        c = LLMClient(api_key=api_key, base_url=base_url, model=model, timeout=timeout)
+    except Exception:
+        # 极端情况下构造失败也直接抛，交由上层降级逻辑处理（与原行为一致）
+        raise
+    with _CLIENT_CACHE_LOCK:
+        existing = _CLIENT_CACHE.get(k)
+        if existing is not None:
+            return existing
+        if len(_CLIENT_CACHE) >= _CLIENT_CACHE_MAX:
+            _CLIENT_CACHE.clear()
+        _CLIENT_CACHE[k] = c
+    return c
 
 
 class _ErrInfo:
@@ -609,8 +641,8 @@ def call_llm_with_retry(messages, *, model=None, temperature=None, max_tokens=No
     except Exception:
         t = 90.0
 
-    client = LLMClient(api_key=api_key, base_url=base_url,
-                       model=model or default_model, timeout=t)
+    client = _get_cached_client(api_key, base_url,
+                                model or default_model, t)
     kwargs = dict(model=model or default_model, messages=messages)
     if temperature is not None:
         kwargs["temperature"] = temperature

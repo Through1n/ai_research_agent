@@ -26,6 +26,25 @@ _CAPTION_RE = re.compile(
 _HEADING_NUMBER_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5})[.)]?\s+\S")
 _HEADING_CN_RE = re.compile(r"^\s*第\s*([一二三四五六七八九十百零〇\d]+)\s*(章|节|篇|部分)\s*\S*")
 
+# 参考文献区/条目切分用的预编译正则（原 split_reference_entries 内联编译，提升为模块级常量，
+# 避免每次调用都 re.compile，输出完全等价）。
+_REF_HEAD_TRIM_RE = re.compile(
+    r"^\s*(?:references|bibliography|works\s+cited|参考文献)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_REF_ENTRY_START_RE = re.compile(
+    r"^[ \t]*(?:"
+    r"\[\d{1,4}\][ \t]+|"
+    r"\d{1,4}[.)][ \t]+|"
+    r"\((?:19|20)\d{2}[a-z]?\)[ \t]+|"
+    r"arXiv\s*:\s*\d{4}\.\d{4,5}(?:v\d+)?\b|"
+    r"(?:[A-ZÀ-ÖØ-Þ][\wÀ-öø-ÿ'’\-]+(?:\s*,?\s*(?:[A-Z]\.?|[A-ZÀ-ÖØ-Þ][\wÀ-öø-ÿ'’\-]+)){0,5}"
+    r"(?:\s+(?:et\s+al\.?|and\s+[A-ZÀ-ÖØ-Þ][\wÀ-öø-ÿ'’\-]+))?)"
+    r"[.,]?[ \t]+\((?:19|20)\d{2}[a-z]?\)"
+    r")",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 def open_doc(path_or_bytes, filetype="pdf"):
     if isinstance(path_or_bytes, (bytes, bytearray)):
@@ -358,7 +377,13 @@ def ocr_page_text(page, llm, zoom=2.0):
 
 
 def ocr_document(doc, llm, pages=None, progress_cb=None, zoom=2.0):
-    """对无文本层页面逐页渲染并调用多模态模型 OCR，单页失败不影响后续页。"""
+    """对无文本层页面逐页渲染并调用多模态模型 OCR，单页失败不影响后续页。
+
+    注：生产入库路径（services/library.py:prepare_pdf）在扫描件场景下已用
+    ``OCR_PARALLEL = 3`` 的 ThreadPoolExecutor 并发 OCR（视觉调用为网络 I/O 密集，
+    并发后近似降到 1/N，且受该视觉接口限流约束取 3 而非更大）——此处串行 ocr_document
+    仅作独立/兜底调用入口，二者语义一致，未被改动。
+    """
     try:
         idxs = list(pages) if pages is not None else list(range(doc.page_count))
         texts = [""] * doc.page_count
@@ -809,19 +834,8 @@ def split_reference_entries(text):
     """
     try:
         source = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-        source = re.sub(r"(?im)^\s*(?:references|bibliography|works\s+cited|参考文献)\s*$", "", source)
-        start_re = re.compile(
-            r"(?im)^[ \t]*(?:"
-            r"\[\d{1,4}\][ \t]+|"
-            r"\d{1,4}[.)][ \t]+|"
-            r"\((?:19|20)\d{2}[a-z]?\)[ \t]+|"
-            r"arXiv\s*:\s*\d{4}\.\d{4,5}(?:v\d+)?\b|"
-            r"(?:[A-ZÀ-ÖØ-Þ][\wÀ-öø-ÿ'’\-]+(?:\s*,?\s*(?:[A-Z]\.?|[A-ZÀ-ÖØ-Þ][\wÀ-öø-ÿ'’\-]+)){0,5}"
-            r"(?:\s+(?:et\s+al\.?|and\s+[A-ZÀ-ÖØ-Þ][\wÀ-öø-ÿ'’\-]+))?)"
-            r"[.,]?[ \t]+\((?:19|20)\d{2}[a-z]?\)"
-            r")"
-        )
-        matches = list(start_re.finditer(source))
+        source = _REF_HEAD_TRIM_RE.sub("", source)
+        matches = list(_REF_ENTRY_START_RE.finditer(source))
         entries = []
         if matches:
             for index, match in enumerate(matches):

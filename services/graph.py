@@ -15,6 +15,7 @@ import re
 import math
 import time
 import statistics
+import threading
 import networkx as nx
 
 from services.library import cosine
@@ -37,6 +38,42 @@ PREFER_CTX_LLM = True
 # frontier 各分量权重（缺失分量时按剩余权重归一化，不做零分惩罚）
 _FRONTIER_WEIGHTS = {"low_indegree": 0.25, "recency": 0.20,
                      "out_degree": 0.15, "interdiscipline": 0.25, "external": 0.15}
+
+
+# ---------- 增量构建缓存（源集未变则不重建，避免重复 O(n²) 建图） ----------
+# 命中条件：论文顺序 + 每篇标题/版本/arXiv + 各篇 chunk 文本总量 均不变 → 图谱必然相同。
+# 仅当 progress_cb 为 None（非 UI 实时进度场景）时启用，保证 UI 进度回调仍逐次触发。
+# 不同库状态对应不同 key，故不会跨库串结果；key 含文本量，正文编辑后自动失效重算。
+_BUILD_CACHE = {}
+_BUILD_CACHE_LOCK = threading.Lock()
+_BUILD_CACHE_MAX = 16
+
+
+def _build_graph_cache_key(ctx):
+    """为当前文献库生成一个内容敏感的缓存键；构造失败返回 None（不缓存）。"""
+    try:
+        parts = []
+        for name in ctx.paper_order:
+            info = ctx.papers.get(name, {})
+            text_len = sum(len(c.get("text", ""))
+                           for c in ctx.chunks if c.get("source") == name)
+            parts.append((name, info.get("title", ""), info.get("version", ""),
+                          info.get("arxiv_id", ""), text_len))
+        return tuple(parts)
+    except Exception:
+        return None
+
+
+def _build_graph_cache_get(key):
+    with _BUILD_CACHE_LOCK:
+        return _BUILD_CACHE.get(key)
+
+
+def _build_graph_cache_put(key, value):
+    with _BUILD_CACHE_LOCK:
+        if len(_BUILD_CACHE) >= _BUILD_CACHE_MAX:
+            _BUILD_CACHE.clear()           # 简单限容：跨库重建多时丢弃旧缓存
+        _BUILD_CACHE[key] = value
 
 
 def _llm_text(ctx, prompt_or_messages, temperature=LLM_TEMPERATURE):
@@ -163,6 +200,13 @@ def _candidates(ref_a, idx, freq, own, n_nodes):
 
 def build_graph(ctx, progress_cb=None):
     """构建有向引用图（A→B 表示 A 引用 B），节点为逻辑著作最新版本。"""
+    # 增量缓存：源集未变（同 key）直接复用上次结果，避免重复的 O(n²) 建图与 embedding。
+    cache_key = None if progress_cb else _build_graph_cache_key(ctx)
+    if cache_key is not None:
+        cached = _build_graph_cache_get(cache_key)
+        if cached is not None:
+            return cached
+
     from services import library as _lib
     G = nx.DiGraph()
     rep_of_group = {gid: _lib.latest_of(files)[0] for gid, files in _lib.group_versions(ctx).items()}
@@ -199,7 +243,11 @@ def build_graph(ctx, progress_cb=None):
                 G.add_node(b, title=titles[b], version=ctx.papers[b].get("version", ""))
                 G.add_edge(a, b, evidence=ev)
                 edges.append((a, b, ev))
-    return G, edges
+
+    result = (G, edges)
+    if cache_key is not None:
+        _build_graph_cache_put(cache_key, result)
+    return result
 
 
 def _semantic_cite(ctx, title_b, entries, entry_vecs):

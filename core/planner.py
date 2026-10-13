@@ -13,7 +13,9 @@
     fallback_plan(goal, expert) -> list[str]（既有单测直接使用，长度 ≥3，签名与返回类型不变）
     plan(ctx, goal, expert)     依然可调用（返回结构化任务；展示用字符串走 plan_strings()）
 """
+import copy
 import re
+import threading
 
 from core.router import EXPERTS, allowed_tools
 
@@ -222,8 +224,23 @@ _PLAN_PROMPT = """你是 Agent 的任务规划器。请把用户目标拆解为 
 用户目标：{goal}"""
 
 
+# ---------- 规划结果线程安全缓存（话术 10：相同 (goal, expert) 跳过重复 LLM 规划） ----------
+_plan_cache = {}
+_plan_cache_lock = threading.Lock()
+_PLAN_CACHE_MAX = 256
+
+
+def _plan_cache_evict():
+    if len(_plan_cache) > _PLAN_CACHE_MAX:
+        _plan_cache.pop(next(iter(_plan_cache)), None)
+
+
 def plan(ctx, goal, expert):
-    """返回结构化子任务列表（list[dict]）。LLM 不可用/解析失败时回落到离线拆解。"""
+    """返回结构化子任务列表（list[dict]）。LLM 不可用/解析失败时回落到离线拆解。
+
+    话术 10：LLM 规划结果按 (prompt, model) 做线程安全缓存，相同输入命中即跳过 LLM
+    调用、返回缓存深拷贝（避免调用方就地改 status/note 污染缓存）；不改变拆解结果。
+    """
     goal = goal or ""
     try:
         if getattr(ctx, "llm", None) is not None and getattr(ctx.llm, "available", False):
@@ -231,11 +248,23 @@ def plan(ctx, goal, expert):
                 label=EXPERTS[expert]["label"], expert=expert,
                 tools=", ".join(EXPERTS[expert]["tools"]),
                 experts=", ".join(EXPERTS.keys()), goal=goal[:1200])
+            cache_key = (prompt, getattr(ctx.llm, "model", None))
+            with _plan_cache_lock:
+                cached = _plan_cache.get(cache_key)
+            if cached is not None:
+                return copy.deepcopy(cached)
             try:
                 raw = ctx.llm.json_chat([{"role": "user", "content": prompt}], temperature=0.2)
                 tasks = normalize_tasks(raw, expert, goal)
                 if tasks:
-                    return tasks
+                    # 缓存存快照、返回也給调用方独立副本：调用方会在执行期就地改写
+                    # status / note（⏳→✅/❌）。若缓存与返回值共用同一对象，运行态会
+                    # 被写进缓存，导致下次相同 goal 一上来就显示上一次的终态。
+                    snapshot = copy.deepcopy(tasks)
+                    with _plan_cache_lock:
+                        _plan_cache[cache_key] = snapshot
+                        _plan_cache_evict()
+                    return copy.deepcopy(tasks)
             except Exception:
                 pass
     except Exception:

@@ -11,7 +11,12 @@
 向后兼容（外部既有调用不动）：
     EXPERTS / keyword_route(goal) -> str / route(ctx, goal) -> (expert, reason)
     allowed_tools(expert) -> list[str]
+
+Round 10（性能）：route_detail 对 LLM 意图分类结果做线程安全缓存（key = prompt+model），
+相同 query 命中即跳过 LLM 调用；LLM 分类本身非确定性，但相同输入返回首结果不改变
+本次路由命中（与既有 per-run 调用语义等价），仅省去重复调用成本。
 """
+import threading
 
 
 EXPERTS = {
@@ -102,11 +107,25 @@ def route(ctx, goal):
     return key, reason
 
 
+# ---------- 路由结果线程安全缓存（话术 10：相同 query 跳过重复 LLM 分类） ----------
+_route_cache = {}
+_route_cache_lock = threading.Lock()
+_ROUTE_CACHE_MAX = 256
+
+
+def _route_cache_evict():
+    if len(_route_cache) > _ROUTE_CACHE_MAX:
+        _route_cache.pop(next(iter(_route_cache)), None)
+
+
 def route_detail(ctx, goal):
     """返回 (expert_key, reason, matched_keywords)。
 
     与 route() 的差别：把"为什么选它"解释出来——LLM 给的理由，或关键词规则命中的词表，
     供 UI 展示路由决策依据。
+
+    话术 10：LLM 分类结果按 (prompt, model) 做线程安全缓存，相同输入命中即返回首结果、
+    跳过 LLM 调用；返回的是不可变元组，安全共享，不改变本次路由命中。
     """
     goal = goal or ""
     try:
@@ -116,11 +135,20 @@ def route_detail(ctx, goal):
 可选专家：
 {listing}
 用户目标：{goal}"""
+            cache_key = (prompt, getattr(ctx.llm, "model", None))
+            with _route_cache_lock:
+                cached = _route_cache.get(cache_key)
+            if cached is not None:
+                return cached
             try:
                 data = ctx.llm.json_chat([{"role": "user", "content": prompt}], temperature=0.0)
                 key = (data or {}).get("expert")
                 if key in EXPERTS:
-                    return key, str((data or {}).get("reason", "") or "LLM 意图分类"), []
+                    result = (key, str((data or {}).get("reason", "") or "LLM 意图分类"), [])
+                    with _route_cache_lock:
+                        _route_cache[cache_key] = result
+                        _route_cache_evict()
+                    return result
             except Exception:
                 pass
     except Exception:
