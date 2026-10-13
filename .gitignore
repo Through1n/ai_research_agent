@@ -4,6 +4,8 @@
 !.env.example
 *.key
 *.pem
+# Streamlit Secrets：云平台密钥入口，本地调试也可能建，一旦提交等于泄露真实 Key
+.streamlit/secrets.toml
 
 # ---------- 内部工作记录（不进公开仓库）----------
 .workbuddy/
@@ -25,6 +27,15 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# ---------- 技术文档出图产物（scripts/make_tech_pdf.py）----------
+# 中间 HTML 把截图内联成 base64（单文件 8MB+），且排版扫描会产生多个命名变体，
+# 这两类一律忽略；只保留最终 PDF（交付物）。
+docs/_build/*.html
+docs/_build/*_*.pdf
+
+# ---------- 运行时日志 ----------
+logs/
 
 # ---------- 系统 / 编辑器 ----------
 .DS_Store

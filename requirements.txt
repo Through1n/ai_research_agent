@@ -1,11 +1,22 @@
 streamlit>=1.63,<1.64
-PyMuPDF>=1.24.3
-chromadb>=0.5
-openai>=1.40
-pandas>=2.0
-numpy>=1.26
+# 上界的意义：不锁死小版本，但挡住"将来冒出来的跨大版本"——那会解析出一个
+# 本地从未测过的组合，装得上却跑不起来。上界一律取「当前实测版本的下一个大版本」，
+# 保证现在解析出来的仍是本地已验证的那套（chromadb 1.5.9 / pandas 3.0.5 / numpy 2.4.6）。
+PyMuPDF>=1.24.3,<2.0
+chromadb>=0.5,<2.0
+openai>=1.40,<4.0
+pandas>=2.0,<4.0
+numpy>=1.26,<3.0
 plotly>=5.20
 networkx>=3.2
+# 注意：这里**故意不装 matplotlib**。render_dot 的降级顺序是
+#   graphviz 包 → dot -Tsvg → matplotlib(PNG) → 零依赖 DOT→SVG
+# （services/writing.py:1506-1544）。云平台装不了系统包 graphviz，会落到
+# matplotlib 那级；而 matplotlib 默认字体无 CJK，拓扑图的中文标签（"交互层"
+# "Agent 内核"这类由中文 prompt 生成的 label）会渲染成方框 □。
+# 不装 matplotlib 反而会落到下一级「零依赖 DOT→SVG」——它是浏览器渲染的，
+# 中文正常。也就是说**装了更差**。Docker 侧因为装了 graphviz，走 dot -Tsvg，
+# 本来也用不到 matplotlib。
 arxiv>=2.1
 pillow>=10
 python-dotenv>=1.0

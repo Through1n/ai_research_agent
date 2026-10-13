@@ -1,16 +1,178 @@
+# ============================================================================
+#  AI4S 科研助手 Agent —— Streamlit 应用镜像
+#  基线：python:3.11-slim（Debian slim；glibc ≥ 2.28，满足 PyMuPDF/onnxruntime 的
+#        manylinux_2_28 wheel 要求。具体 Debian 代号随上游 tag 变化，未锁定）
+#
+#  构建：docker build -t ai4s-research-agent .
+#  运行：docker compose up -d   （推荐，见 docker-compose.yml）
+#
+#  设计要点（逐条依据见 docs/review/round12_deploy_docker.md）：
+#   1. 依赖层与代码层分离，改业务代码不重装依赖（层缓存）
+#   2. 全依赖均有 cp311 manylinux wheel，无需 build-essential（已用 pip 解析器核验）
+#   3. 构建期预热 ONNX embedding 模型并烤进镜像 → 容器冷启动零外网（否则演示数据加载死锁）
+#   4. 非 root 用户 app(uid 10001) 运行，仅运行时目录可写
+#      ⚠️ 预热必须在 `USER app` **之后**做，这样缓存文件直接归 app 所有
+#      ⚠️ 预热失败 = 构建失败（有意设计），逃生开关见第 5 层注释
+#   5. HEALTHCHECK 走 Streamlit 官方 /_stcore/health 端点
+#   6. 启动参数显式化（address/静态服务/上传上限等不再依赖 .streamlit/config.toml）
+#
+#  ⚠️ 构建期需要外网：pip（PyPI）+ graphviz（Debian 源）+ ONNX 模型（AWS S3）
+# ============================================================================
+
 FROM python:3.11-slim
 
+# ---------- 运行期环境变量（构建期同样生效）----------
+# PYTHONUNBUFFERED          : streamlit 日志实时输出到 `docker logs`，不缓冲
+# PIP_NO_CACHE_DIR          : 不落 pip 缓存，镜像更小
+# PYTHONDONTWRITEBYTECODE   : 不生成 __pycache__（/app 对运行用户只读，避免写失败噪音）
+# HOME                      : 非 root 用户主目录。chroma 默认 ONNX embedding 模型缓存在
+#                             $HOME/.cache/chroma/onnx_models/all-MiniLM-L6-v2
+#                             （chromadb 源码 onnx_mini_lm_l6_v2.py: DOWNLOAD_PATH = Path.home()/...）
+#                             构建期就是在这个位置预热的（见第 5 层）
+# HF_ENDPOINT               : 国内 HuggingFace 镜像；config.py 里用
+#                             os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com") 设置，
+#                             外部注入优先，运行期可在 compose 里覆盖。
+#                             ⚠️ 注意它对 chroma 的 ONNX 模型下载**无效**——那个走 AWS S3，
+#                                真正的解法是第 5 层的构建期预热。保留此变量是因为
+#                                config.py 会 setdefault 它，且 .env.example 有文档，
+#                                对其它走 HuggingFace 的库仍可能有用。
+#                             （此处**故意不写行号**：config.py 仍在被多人并行编辑，
+#                              我核到过 :103 → :126 → :131 三个值，写行号等于给后来人加"回头重核"义务）
+#
+# ⚠️ 业务密钥（ZHIPU_API_KEY / LLM_API_KEY / ...）一律运行期注入，
+#    严禁写进本文件或打进镜像（.dockerignore 已排除 .env）
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/home/app \
     HF_ENDPOINT=https://hf-mirror.com
 
 WORKDIR /app
 
+# ---------- 第 1 层：依赖（仅 requirements.txt 变化时重建）----------
 COPY requirements.txt .
+# 核验结论：requirements.txt 的直接依赖 + 全部传递依赖在 cp311 / manylinux x86_64 下
+# 均存在二进制 wheel（含 onnxruntime、grpcio、psutil、PyMuPDF、tokenizers、pyarrow），
+# 因此不需要 apt 安装 build-essential / gcc / python3-dev，保持 slim 基线体积。
+# 若将来某个依赖回落到 sdist，需要在此层临时加：
+#   RUN apt-get update && apt-get install -y --no-install-recommends gcc python3-dev \
+#       && pip install -r requirements.txt \
+#       && apt-get purge -y --auto-remove gcc python3-dev && rm -rf /var/lib/apt/lists/*
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
+# ---------- 第 2 层：系统级运行时依赖（graphviz）----------
+# ⚠️ 这与上一层"Python 依赖能否编译"是两回事：Python 依赖全部有 wheel，不需要 gcc；
+#    这里装的是**运行时二进制**，给 services/writing.py 的 Graphviz 渲染用：
+#      services/writing.py:1496   dot_exe = shutil.which("dot") or ""
+#      services/writing.py:1517   subprocess.run([dot_exe, "-Tsvg"], ...)
+#    没有 dot → 写作页的 Graphviz 图跳过真实渲染，只走"零依赖"兜底。
+#
+# 【为什么故意不装 matplotlib —— 别再把它加回 requirements.txt】
+#   render_dot（services/writing.py:1480）的降级顺序：
+#     ① Python graphviz 包(:1507) → ② dot -Tsvg 子进程(:1517) → ③ matplotlib(:1531) → ④ 零依赖 SVG(:1537)
+#   matplotlib **已被有意从 requirements.txt 移除**，所以第 ③ 级恒不可用，链路实际是两级：
+#     容器（有 dot）走 ② 真实 Graphviz；云平台（无 dot）走 ④ 零依赖 SVG（浏览器渲染，中文正常）。
+#   装回 matplotlib 的后果：云平台会在第 ③ 级返回**服务端渲染的 PNG**，matplotlib 默认字体
+#   DejaVu Sans 无 CJK 字形且不自动 fallback，而本项目 DOT 标签由中文 prompt 生成 → 中文变方框 □。
+#   也就是说**装了更差**。同理也不需要装 fonts-wqy-microhei：光装字体不改代码仍然无效
+#   （代码里没有任何 rcParams / font.sans-serif 配置）。
+#   ~30MB，性价比高。装完清 apt 列表。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends graphviz \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------- 第 3 层：业务代码 ----------
 COPY . .
+
+# ---------- 第 4 层：非 root 用户 + 可写目录 ----------
+# config.py 启动时会 mkdir storage/uploads、storage/chroma、pdf（_mkdirs 那段）；
+# app.py:15 的 LOG_DIR="logs" 是相对 CWD（/app）的，属主必须是运行用户，否则异常日志会被静默吞掉。
+# 这一层先于第 5 层的模型预热执行 —— chown /home/app 之后，app 用户才有地方写模型缓存。
+RUN useradd --create-home --home-dir /home/app --uid 10001 app \
+    && mkdir -p /app/storage /app/logs /app/pdf /home/app/.cache \
+    && chown -R app:app /app/storage /app/logs /app/pdf /home/app
+
+USER app
+
+# ---------- 第 5 层：构建期预热 ONNX embedding 模型（关键：让容器冷启动零外网）----------
+# ⚠️ 必须在 `USER app` **之后**执行：这样缓存目录与文件直接归 app 所有，
+#    运行时不会因为属主是 root 而读不到模型（读不到就会再去联网下载，预热白做）。
+#    上一层的 `chown -R app:app /home/app` 正是为了让这一步有地方可写。
+#
+# 【为什么必须做】services/state.py:55-59 首次 embed 会从 AWS S3 下载 all-MiniLM-L6-v2：
+#     chromadb ONNXMiniLM_L6_V2.MODEL_DOWNLOAD_URL
+#       = "https://chroma-onnx-models.s3.amazonaws.com/all-MiniLM-L6-v2/onnx.tar.gz"
+#     DOWNLOAD_PATH = Path.home()/".cache"/"chroma"/"onnx_models"/"all-MiniLM-L6-v2"
+#   · 它**不走 HuggingFace**，所以镜像里的 HF_ENDPOINT 对它完全无效
+#   · 下载失败 → 回退 chroma_ef.DefaultEmbeddingFunction()，而该函数内部**依然是**
+#     ONNXMiniLM_L6_V2，照样抛异常 → 「🚀 一键加载演示数据」三篇全"⚠️ 失败"、
+#     文献库仍为空，页面只给"再点一次"= 死锁
+#   → 这里在构建期（有网）把模型烤进镜像，运行期不再联网。
+#
+# 【三个必须遵守的细节】
+#   1. 位置已在 USER app 之后（见本层开头），不要再挪到 USER 之前
+#   2. 显式 HOME=/home/app：DOWNLOAD_PATH 在 import 时求值 Path.home()，
+#      而 Path.home() 读 HOME 环境变量。顶层 ENV 已设为 /home/app，
+#      这里再显式传一次，避免依赖 ENV 声明顺序（写成 root 的 /root 就全错了）
+#   3. 末尾校验 6 个必需文件（chromadb 的 _download_model_if_not_exists 只认这 6 个），
+#      缺失即 assert 失败 → **构建直接失败**
+#
+# 【构建失败策略：就是要让它失败】宁可构建期炸掉让使用者立刻知道，
+# 也不要产出一个"能起来但 AI 功能全废"的镜像 —— 后者要到评审现场才暴露。
+#
+# 【构建机连不上 S3 时的逃生开关】
+#   方案 A（推荐）：注释掉本行 RUN，改为从已备好的宿主机缓存 COPY：
+#     COPY --chown=app:app ./onnx_models /home/app/.cache/chroma/onnx_models
+#     （宿主机先跑一次 python -c "from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 \
+#        import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()(['warmup'])" 生成 ~/.cache/chroma/onnx_models）
+#   方案 B：直接注释掉本行继续构建，代价是首次运行仍需联网下载
+#          （国内服务器访问 AWS S3 可能很慢或直接失败，不建议）
+RUN HOME=/home/app python -c "from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2 as M; import os; M()(['warmup']); d = os.path.join(str(M.DOWNLOAD_PATH), 'onnx'); need = ['config.json', 'model.onnx', 'special_tokens_map.json', 'tokenizer_config.json', 'tokenizer.json', 'vocab.txt']; miss = [f for f in need if not os.path.exists(os.path.join(d, f))]; assert not miss, 'ONNX warmup failed, missing files: %s' % miss; print('[build] ONNX embedding warmed at', d)"
 
 EXPOSE 8501
 
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# ---------- 健康检查 ----------
+# Streamlit 1.63 官方健康端点：/_stcore/health
+#   来源：streamlit/web/server/starlette/starlette_routes.py:153 BASE_ROUTE_CORE="_stcore"
+#        streamlit/web/server/starlette/starlette_routes.py:161 ROUTE_HEALTH=f"{BASE_ROUTE_CORE}/health"
+#   语义：runtime 就绪返回 200，未就绪返回 503（urlopen 抛 HTTPError → 非零退出）
+# start-period 给首次启动留出宽限：初始化 chroma 持久化库 + 载入已烤进镜像的 ONNX 模型
+# （模型已在第 5 层预热，运行期不再联网下载，故 120s 是相当宽裕的余量）
+# slim 镜像不带 curl，用 python 标准库探测，零额外依赖
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD python -c "import sys, urllib.request; r = urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=4); sys.exit(0 if r.status == 200 else 1)"
+
+# ---------- 启动 ----------
+# 命令行参数优先级高于 .streamlit/config.toml，以下显式覆盖桌面态配置：
+#   --server.address=0.0.0.0          必须显式给：config.toml 的 address 已被注释（留给云平台决定），
+#                                     不给则容器只监听回环，容器外访问不到
+#   --server.headless=true            不开浏览器、不弹 "Welcome to Streamlit"
+#   --server.enableCORS=false         允许跨源访问（内网反代 / 非同源前端场景）
+#   --server.enableStaticServing=true 必须开：ui/page_writing.py:495 从 /app/static/mermaid.min.js
+#                                     本地加载 mermaid；该项默认 false，不开会退化到 CDN（离线即失效）
+#   --server.maxUploadSize=100        单位 MB。⚠️ **第八轮更正：此前的 200 是错的，且理由写反了**
+#                                     旧注释写"代码无自定义上限（streamlit 默认即 200）"——**这是事实错误**：
+#                                     config.py 有 `MAX_UPLOAD_MB = _env_int("MAX_UPLOAD_MB", 100)`，
+#                                     ui/page_library.py 在解析**之前**做 `_mb > MAX_UPLOAD_MB` 判断并 `st.stop()`，
+#                                     即应用层硬上限就是 **100 MB**，超限必然被拒。
+#                                     为什么必须改成 100 而不是留 200：超限文件在 `data = f.read()` 处
+#                                     **整份读进内存**后才走到那个判断——200 会让一个 150MB 的 PDF
+#                                     先上传完、再占 150MB 内存、然后才被拒。设成 100 可在**上传层**就拦掉，
+#                                     省带宽也省内存（compose 已限 4GB）。
+#                                     ⚠️ 若通过 `MAX_UPLOAD_MB` 调高应用层上限，**必须同步调大此值**，
+#                                        否则 streamlit 会先拦住、应用层根本看不到文件。
+#                                     ⚠️ 上传体积共**三道闸门**（Nginx client_max_body_size →
+#                                        本 flag → 应用层 MAX_UPLOAD_MB），现已全部对齐为 100；
+#                                        三处量的是**请求体**而非文件本身，multipart 编码有开销，
+#                                        所以"恰好 100MB"的文件会在外层被拦 —— 实际可上传略小于 100MB。
+#                                        （Nginx 那道在 DEPLOY.md §C-4，不在本文件。）
+#   --browser.gatherUsageStats=false  关闭遥测
+CMD ["streamlit", "run", "app.py", \
+     "--server.port=8501", \
+     "--server.address=0.0.0.0", \
+     "--server.headless=true", \
+     "--server.enableCORS=false", \
+     "--server.enableStaticServing=true", \
+     "--server.maxUploadSize=100", \
+     "--browser.gatherUsageStats=false"]

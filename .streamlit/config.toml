@@ -11,7 +11,13 @@ font = "sans-serif"
 # 静态资源服务：把 ./static 映射到 /app/static/<file>，mermaid.min.js 随软件本地分发（零插件可用）
 enableStaticServing = true
 headless = true
-address = "127.0.0.1"
+# address 不再写死：写死成 127.0.0.1 会让云平台（Streamlit Community Cloud /
+# HuggingFace Spaces）只能绑到本地回环，公网访问不到——这两处无法像 Docker 那样
+# 用命令行 --server.address=0.0.0.0 覆盖，是"页面一直转圈打不开"的典型原因。
+# · 本地：启动科研助手.bat / 桌面版已显式带 --server.address=127.0.0.1，行为与原来一致
+# · Docker：Dockerfile 的 CMD 带 --server.address=0.0.0.0，优先级高于本文件
+# · 云平台：不设，交由平台决定
+# address = "127.0.0.1"
 baseUrlPath = ""
 enableCORS = false
 enableXsrfProtection = false
@@ -22,5 +28,9 @@ gatherUsageStats = false
 # openInExternalBrowser 已在 streamlit 1.63 移除，保留会刷 WARNING；headless=true 本就不开浏览器
 
 [client]
-showErrorDetails = true
+# 公网部署必须关：开启时未捕获异常会把完整 traceback（含服务器绝对路径、内部
+# 模块名、请求细节）直接甩到评委浏览器上，既不体面也泄露内部信息。
+# 本项目的异常处理本来就是 friendly_error 的中文友好提示，关掉不影响排障——
+# 真要看 traceback 时把这里临时改回 true，或去看容器日志 / logs/ 目录。
+showErrorDetails = false
 toolbarMode = "minimal"

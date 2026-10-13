@@ -4,6 +4,10 @@
 !.env.example
 *.key
 *.pem
+# Streamlit Secrets：与 .env 同等敏感。本地调试可能建到 .streamlit/secrets.toml，
+# 一旦被 COPY 进镜像，真实 Key 就随镜像分发出去了。注意只排除 secrets.toml，
+# 不要把整个 .streamlit/ 排除——config.toml 是运行时必需的（见下方说明）。
+.streamlit/secrets.toml
 
 # ===== 版本控制 / CI =====
 .git/
@@ -40,11 +44,26 @@ __pycache__/
 # ===== 前端 =====
 node_modules/
 
-# ===== Streamlit 本地配置（Docker CMD 已显式指定端口/地址）=====
-.streamlit/
+# ===== Streamlit 本地配置 =====
+# ⚠️ 不要忽略！.streamlit/config.toml 内有两样运行时必需的东西：
+#   1) [theme] 学术风配色（评审观感）
+#   2) [server] enableStaticServing=true —— ui/page_writing.py:495 依赖它把
+#      /app/static/mermaid.min.js 本地提供给前端；该项默认 false，丢了会退化到 CDN
+# 其中的 address 已由配置作者注释掉（留给云平台决定），Docker 侧由 Dockerfile CMD 的
+# --server.address=0.0.0.0 显式指定，不影响容器外访问。
+# 配套：同目录的 secrets.toml 已在文件开头「密钥 / 环境变量」一节排除（第 10 行），
+#       不要把这条重复写在这里 —— 曾出现过两处重复，易被误读成两条不同规则。
 
 # ===== 文档 / 截图 / 评审材料（不参与运行）=====
 docs/
+# ⚠️ 注意：pdf/ 与 demo_data/ 不能忽略
+#   · pdf/         —— config.py 的 PDF_DIR（非桌面态）= ROOT/pdf，
+#                     services/library.py:983 的「批量导入官方语料」从这里读盘
+#   · demo_data/   —— config.py 的 DEMO_DIR + DEMO_PAPERS 演示语料
+#                     （ui/page_writing.py:105-106 读 demo_data/data.csv）
+#   （pdf/ 约 31MB 会打进镜像，属已知体积代价，见部署报告）
+#
+# ⚠️ static/ 不能忽略：mermaid.min.js（3.2MB），理由见上方 .streamlit 说明
 
 # ===== 系统 / 编辑器 =====
 .DS_Store
@@ -56,3 +75,6 @@ Thumbs.db
 tests/
 version_history/
 LICENSE
+.workbuddy/
+# 桌面打包态资源（Docker 走 Web 模式，AI4S_DESKTOP=0，桌面包不参与运行）
+# 注：AI4SResearchAgent.spec / installer.iss / *.bat / *.vbs 已在上方排除
