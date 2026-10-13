@@ -29,10 +29,16 @@ venv/
 .ruff_cache/
 
 # ---------- 技术文档出图产物（scripts/make_tech_pdf.py）----------
-# 中间 HTML 把截图内联成 base64（单文件 8MB+），且排版扫描会产生多个命名变体，
-# 这两类一律忽略；只保留最终 PDF（交付物）。
-docs/_build/*.html
-docs/_build/*_*.pdf
+# 中间 HTML 把截图内联成 base64（单文件 8MB+），成品 PDF 4.4MB，均属构建产物。
+# 交付物以 md 为源，PDF 由 `python scripts/make_tech_pdf.py` 现生成，整目录忽略。
+docs/_build/
+
+# 引用校验器的前后快照（scratch，每次跑会覆盖）
+docs/review/_chk_*.txt
+
+# 截图工作稿：_crop_*（裁剪试作）/ _full_*（重拍前长图原稿）/ _p*_v（版本稿）。
+# 正式图只有 p0-p6.png，这些是过程稿，不进包。
+docs/shots/_*.png
 
 # ---------- 运行时日志 ----------
 logs/
