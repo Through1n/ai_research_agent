@@ -510,15 +510,25 @@ def render(ctx):
                      max_rows=MAX_FAILED_SHOW)
         with st.container(border=True):
             st.markdown("**🗑️ 删除文献**")
-            delf = st.selectbox("选择要删除的文献", ctx.files, key="lib_rm_sel")
+            # ⚠️ 删除后 options（ctx.files）会变短，而 selectbox 的选中值存在
+            # session_state 里不会自动失效——残留的旧文件名已不在新选项中，
+            # 下一轮渲染会拿它当选中项。必须在实例化 selectbox **之前**清掉
+            # （实例化之后回填自己的 key 会抛 StreamlitWidgetAlreadyInstantiatedError）。
+            _rm_key = "lib_rm_sel"
+            if st.session_state.get(_rm_key) not in ctx.files:
+                st.session_state[_rm_key] = None
+            delf = st.selectbox("选择要删除的文献", ctx.files, key=_rm_key)
             if st.button("🗑️ 确认删除所选文献", key="lib_rm_btn"):
-                try:
-                    library.remove_paper(ctx, delf)
-                    set_flash("success", f"✅ 已删除：{delf}")
-                    st.rerun()
-                except Exception as e:
-                    friendly_error("删除文献", e, reasons=["文件被占用 / 向量库写入失败"],
-                                   actions=["重试一次", "重启应用后重试"])
+                if not delf:
+                    st.info("📭 请先在上方选择要删除的文献。")
+                else:
+                    try:
+                        library.remove_paper(ctx, delf)
+                        set_flash("success", f"✅ 已删除：{delf}")
+                        st.rerun()
+                    except Exception as e:
+                        friendly_error("删除文献", e, reasons=["文件被占用 / 向量库写入失败"],
+                                       actions=["重试一次", "重启应用后重试"])
 
     st.markdown("---")
     # ---------------- 版本管理与差异 ----------------

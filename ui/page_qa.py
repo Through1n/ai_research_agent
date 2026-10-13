@@ -225,14 +225,24 @@ def render(ctx):
                 + (f"（第 {pending.get('para_idx')} 段）" if pending.get("para_idx") else "")
                 + f"。请到左侧导航切换到「📖 版式阅读与翻译」查看（session_state['{JUMP_KEY}']）。")
 
-    # 示例问题：一行紧凑 chips（st.pills 原生胶囊样式，点击直接填入并提问），
-    # 降低首屏决策成本——借鉴 Consensus「Suggested Follow-Up Questions」/ Elicit 极简界面。
-    _sel = st.pills("💡 试试这些问题（点击直接提问）", EX, key="qa_ex_pills",
-                   selection_mode="single", default=None)
+    # 示例问题：一行紧凑 chips（st.pills 原生胶囊样式）
+    # —— 借鉴 Consensus「Suggested Follow-Up Questions」/ Elicit 极简界面，降低首屏决策成本。
+    # ⚠️ 这里有两个坑（都是本项目踩过的）：
+    #   ① widget 实例化后**禁止**回填它自己的 key（StreamlitWidgetAlreadyInstantiatedError），
+    #      所以不能写 st.session_state["qa_ex_pills"] = None 来复位；
+    #   ② 但也不能什么都不做——pills 的选中态会保留，rerun 后 _sel 仍为真 → 无限 rerun。
+    # 解法沿用导航那套「独立影子键」：只在选项值**发生变化**时填入输入框并 rerun 一次，
+    # 影子键不是 widget 的 key，写入安全。
+    # 说明：点击仅「填入」输入框（与改造前示例按钮语义一致），需用户再点「🔎 提问」才真正
+    # 发起检索——避免误触就直接打真实模型。
+    _sel = st.pills("💡 试试这些问题（点击填入下方输入框，再点「🔎 提问」）",
+                    EX, key="qa_ex_pills", selection_mode="single", default=None)
     if _sel:
-        st.session_state["qa_q"] = _sel if isinstance(_sel, str) else (_sel[0] if _sel else "")
-        st.session_state["qa_ex_pills"] = None
-        st.rerun()
+        _val = _sel if isinstance(_sel, str) else (_sel[0] if _sel else "")
+        if _val and _val != st.session_state.get("_qa_ex_prev"):
+            st.session_state["qa_q"] = _val
+            st.session_state["_qa_ex_prev"] = _val   # 影子键：非 widget key，可安全写
+            st.rerun()
 
     # ---------- 范围选择（单篇锁定 / 多篇对比） ----------
     scope = st.radio("检索范围", ["全部文献", "单篇"], horizontal=True, key="qa_scope_mode")
