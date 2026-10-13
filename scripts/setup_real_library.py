@@ -6,7 +6,7 @@
 扫描件 OCR）重建文献库，并打印实测表。
 
 用法（必须用 ai_research 环境的 Python，base 环境会误判缺模块）：
-    C:/Users/Administrator/anaconda3/envs/ai_research/python.exe scripts/setup_real_library.py
+    python scripts/setup_real_library.py   # 须用 ai_research 环境的 Python（base 环境会误判缺模块）
 
 可选参数：
     --pdf-dir <目录>     指定 PDF 目录（默认 <项目根>/pdf）

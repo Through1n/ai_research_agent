@@ -311,14 +311,37 @@ def part1():
     class StubClient:
         chat = StubChat()
 
-    c = L.LLMClient(api_key="x", base_url=None, model="m")
-    c._client = StubClient()
-    t0 = time.time()
-    r = c._create(model="m", messages=[{"role": "user", "content": "hi"}])
-    dt = time.time() - t0
+    # 用记录器替换真实 sleep：直接断言"请求的退避时长"，而不是量墙钟。
+    # 为什么改测量方式：首次 _create 有约 3.2s 的冷启动开销，实测三次为
+    # 12.22 / 9.02 / 9.03s —— 墙钟区间 8.5~10.5 会间歇性 FAIL，量的是噪声
+    # 而不是退避序列本身。改为记录 _sleep_backoff 被请求的时长后，断言变成
+    # 确定值；若有人删掉 sleep，记录器不会被调用，照样能抓到。
+    # patch time.sleep（不是 _sleep_backoff！），让真实 _sleep_backoff 照跑。
+    #
+    # 为什么必须是 time.sleep：第一版我 patch 的是 _sleep_backoff 本身，等于把
+    # 真实退避函数整个旁路掉——那样 core/llm.py:316 的 time.sleep 从未执行，
+    # 有人把它删掉本断言照样 PASS，是一个"改弱了的测试"（由 deploy-audit 复核抓出）。
+    # 改 patch time.sleep 后：真实退避逻辑照常走（含 retry_after 加工分支），
+    # 只把"睡"这一下换成记录，于是既确定性、又覆盖"到底有没有真的睡"。
+    slept = []
+    _real_sleep = L.time.sleep
+
+    def _record_sleep(secs):
+        slept.append(secs)
+
+    L.time.sleep = _record_sleep
+    try:
+        c = L.LLMClient(api_key="x", base_url=None, model="m")
+        c._client = StubClient()
+        r = c._create(model="m", messages=[{"role": "user", "content": "hi"}])
+    finally:
+        L.time.sleep = _real_sleep
     check("C _create：失败后共 4 次调用（1 次 + 3 次退避重试）", stub_root.calls == 4,
           f"calls={stub_root.calls}")
-    check("C _create：退避总时长 ≈ 1.5+3.0+4.5 = 9s", 8.5 <= dt <= 10.5, f"{dt:.2f}s")
+    check("C _create：实际睡眠序列（经 retry_after 加工后）为 1.5/3.0/4.5",
+          tuple(slept) == (1.5, 3.0, 4.5), f"slept={slept}")
+    check("C _create：退避总时长 == 1.5+3.0+4.5 = 9s（确定性断言，不再量墙钟）",
+          abs(sum(slept) - 9.0) < 1e-6, f"sum={sum(slept):.2f}s")
     check("C _create：3 次失败后返回伪响应且不抛异常",
           isinstance(r.content if hasattr(r, "content") else r.choices[0].message.content, str)
           and "暂时不可用" in r.choices[0].message.content)

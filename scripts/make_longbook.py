@@ -1,7 +1,12 @@
 """生成 540 页的长文档压测 PDF（用于验证切块/索引/内存控制；非官方教材，属鲁棒性测试夹具）。"""
 import pymupdf as fitz
+from pathlib import Path
 
-DST = r"C:\Users\Administrator\ai_research_agent\pdf\LongBook_540p_fixture.pdf"
+# 输出路径按仓库根目录推导，不写死任何机器相关的绝对路径。
+# 此前是 r"C:\Users\<用户名>\ai_research_agent\pdf\..."，scripts/ 会随镜像/仓库
+# 一起分发，等于把本机用户名公开出去。
+_ROOT = Path(__file__).resolve().parent.parent
+DST = str(_ROOT / "pdf" / "LongBook_540p_fixture.pdf")
 PAGES = 540
 
 doc = fitz.open()
