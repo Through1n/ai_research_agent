@@ -187,13 +187,13 @@ repro-pack 先报"completed"但**磁盘零文件**；team-lead 发更正指令�
 
 | # | 项 | 性质 |
 |---|---|---|
-| 1 | ~~**在线演示尚未真正部署**~~ → **已部署并验证**：https://ai4s-research-agent.app.workbuddy.host/ （`/_stcore/health` 200、首页 Streamlit 壳、`/app/static/mermaid.min.js` 3,335,717B 与本地逐字节一致）。未注入 API Key，默认离线演示态 | ✅ 已解决（见文末补充节） |
-| 2 | `docs/团队信息.md` 与 README「👥 团队信息」仍是占位模板（README 实测 12 处 `【占位符】` + 1 处 `TODO`，团队信息.md 实测 13 处 `[待填写]` 类） | **待用户填写**（赛题硬性要求，唯一剩余人工项） |
+| 1 | ~~**在线演示尚未真正部署**~~ → **已部署；两个线上访问问题已定位并修复，待重部署复验**：https://ai4s-research-agent.app.workbuddy.host/ （传输层已实测：`/_stcore/health` 200、首页 Streamlit 壳、`/app/static/mermaid.min.js` 3,335,717B 与本地逐字节一致；但 2026-10-14 浏览器级验收为全白、9/9 页点不到——根因 WebSocket Origin 403 与冷启动模型下载堵首帧均已修复，见 `docs/线上验收报告.md`）。未注入 API Key，默认离线演示态 | 🟡 部分解决（待重部署复验） |
+| 2 | `docs/团队信息.md` 与 README「👥 团队信息」仍是占位模板（README 实测 12 行 / 26 个 `【占位符】` + 1 处 `TODO`，团队信息.md 实测 29 行 / 71 个占位 token，两文件合计 98 处） | **待用户填写**（赛题硬性要求，唯一剩余人工项） |
 | 3 | git 作者是占位符 `ai_research_agent <author@local.dev>`，88 个提交全是同一作者。若团队信息填多人，评委可能问"协作在哪" | 已知，`docs/提交历史分析.md` 已如实记录 |
 | 4 | `.workbuddy/` 目录在磁盘上存在（`du -sh` = **88K**，内部记忆与临时记录），已被 `.gitignore` 忽略不会入库；但**若交付方式是整个目录拷贝而非 clone，评委会看到它** | 已知，建议交付用 clone / 打包时排除 |
 | 5 | `requirements.txt` 的 4 条跨平台建议（plotly/arxiv/pillow 加上界、chromadb 在 ARM 上的告警说明）**尚未落地**，文件未改动 | 待决，非阻断 |
 | 6 | `--img-max` / `--mermaid-h` 两个旋钮改变了官方出图命令，旧命令会量出 31 页 | 已在 §5.3 与本轮 memory 记录中同步 |
-| 7 | 部署包在仓库外（`C:/Users/Administrator/ai4s_deploy_bundle`，8.2M 精简副本），**不在 git 里**；若之后要改线上版本，需重新拷贝再发布 | 已知，`start_app.sh`（PORT 兜底）只存在于部署包中 |
+| 7 | 部署包在仓库外（`C:/Users/Administrator/ai4s_deploy_bundle`，精简副本 + 88MB 预置 ONNX 模型后约 96M），**不在 git 里**；若之后要改线上版本，需重新拷贝再发布 | 已知，`start_app.sh`（PORT 兜底 + 模型预置）只存在于部署包中；收编进仓库 `scripts/` 为待办（验收报告 F3） |
 
 ---
 
@@ -256,14 +256,18 @@ Error: Invalid value for '--server.port' (env var: 'STREAMLIT_SERVER_PORT'): '' 
 | `/_stcore/health` | HTTP 200，0.46s |
 | 首页 | HTTP 200，返回真 Streamlit 壳（Apache 许可头 + `<title>Streamlit</title>`） |
 | `/app/static/mermaid.min.js` | HTTP 200，**3,335,717B，与本地逐字节相同** → 同时证明整包上传完整 + `--server.enableStaticServing` 生效 |
+| 浏览器级首帧 | ~~183s 超时未出现~~ → 双根因（WS Origin 403 + 冷启动下载堵首帧）已修复，判决性测试首帧 **1.4s** 到达；**待重部署后线上复验**（见 `docs/线上验收报告.md` §6） |
 
 **地址**：https://ai4s-research-agent.app.workbuddy.host/
 
 ### 10.5 已知边界（如实告知用户）
 
 - 未注入 API Key → 默认离线演示态（点「🚀 一键加载演示数据」全链路可用）；
-  首次加载需下载 chroma 自带 ONNX embedding ~90MB，慢 30–60s，**只慢第一次**。
+  线上部署已将 ONNX embedding 模型随包预置、不再发生下载；**本地冷缓存**首次需下载
+  chroma 自带模型（解包后 6 文件共 91.4MB），慢 30–60s，只慢第一次。
 - 这是应用发布服务托管的域名；若赛务更认 streamlit.io，可按 `docs/部署操作手册.md`
   五步另行部署（入口文件与 secrets 模板已就绪）。
-- 占位符数量已 grep 后写入文档：README 12 处 `【占位符】` + 1 处 `TODO`，
-  团队信息.md 13 处 `[待填写]` 类（初稿写"约 20 处"被自己 grep 打回，改实测数）。
+- 占位符数量已 grep 后写入文档：`docs/团队信息.md` 29 行 / 71 个占位 token + `README.md`
+  12 行 / 26 个 `【占位符】` + 1 处 `TODO` = 98 处，与 `scripts/_check_placeholders.py`
+  实测一致（当前退出码 1，全部填完归 0）。初稿写"约 20 处"、round14 正文曾写"13 处"，
+  均被后续 grep 实测打回，以 98 处为准。

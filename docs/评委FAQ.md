@@ -16,7 +16,7 @@
 
 | 路径 | 命令 / 操作 | 耗时 | 适合谁 |
 |---|---|---|---|
-| **A. 在线演示地址** | 浏览器打开 **https://ai4s-research-agent.app.workbuddy.host/** | 0 分钟 | 所有人首选 |
+| **A. 在线演示地址** | 浏览器打开 **https://ai4s-research-agent.app.workbuddy.host/**（已部署；WebSocket 跨源与冷启动两项线上访问问题已修复，重部署复验阶段，打开异常请走 B / C） | 0 分钟 | 首选（复验期以 B / C 兜底） |
 | **B. Docker** | `docker build -f Dockerfile.quick -t ai4s-quick .`<br>`docker run --rm -p 8501:8501 ai4s-quick` | 构建 5–10 分钟 | 本机有 Docker |
 | **C. 一键脚本** | Windows 双击 `start.bat`；macOS/Linux `./start.sh` | 首次 3–8 分钟 | 想验证源码可复现 |
 
