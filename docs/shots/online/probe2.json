@@ -1,0 +1,42 @@
+{
+  "nav_sec": 16.4,
+  "console": [
+    [
+      "warning",
+      "Unrecognized feature: 'ambient-light-sensor'."
+    ],
+    [
+      "warning",
+      "Unrecognized feature: 'battery'."
+    ],
+    [
+      "warning",
+      "Unrecognized feature: 'document-domain'."
+    ],
+    [
+      "warning",
+      "Unrecognized feature: 'layout-animations'."
+    ],
+    [
+      "warning",
+      "Unrecognized feature: 'legacy-image-formats'."
+    ],
+    [
+      "warning",
+      "Unrecognized feature: 'oversized-images'."
+    ],
+    [
+      "warning",
+      "Unrecognized feature: 'vr'."
+    ],
+    [
+      "warning",
+      "Unrecognized feature: 'wake-lock'."
+    ],
+    [
+      "warning",
+      "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing."
+    ]
+  ],
+  "pageerrors": []
+}
