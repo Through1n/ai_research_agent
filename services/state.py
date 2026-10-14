@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import threading
 import numpy as np
 import streamlit as st
 import chromadb
@@ -50,6 +51,10 @@ def _build_embed_fn():
     实测每次 embed 都重新 initialize_session（约 128ms），占单次调用固定
     开销的 80%+（1 条文本 155ms 里有 128ms 是建会话）。一次检索调 5 次
     embed，等于白付 640ms。持有单例后会话只建一次。
+
+    ⚠️ 调用前先看 `_EMBED_*` 一节：本函数在冷缓存下会**同步阻塞**在 83MB
+    的 S3 下载上（chroma 的 tenacity 重试 3 次且无超时上限），绝不能在
+    Streamlit 首帧路径上直接调。统一走 `warm_embed_async()` / `get_embed_fn()`。
     """
     try:
         from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import (
@@ -62,12 +67,110 @@ def _build_embed_fn():
         return chroma_ef.DefaultEmbeddingFunction()
 
 
+# ---------- embedding 模型：后台预热 + 按需取用（话术 19 白屏根因修复） ----------
+# 线上验收实测（2026-10-14）：页面全白、body 仅 4 字、9/9 页点击不到、
+# JS 错误 0、等待 183s 导航框仍未出现。根因不是 WebSocket（那条已修），而是：
+#   app.py:86 模块级 get_container() → Container.__init__ → _build_embed_fn()
+#   → ONNXMiniLM_L6_V2() + fn(["warmup"]) → chroma onnx_mini_lm_l6_v2.py:269
+#   __call__ 内 _download_model_if_not_exists() → 从 S3 拉 83,178,821B 的
+#   onnx.tar.gz（sha256 钉版）。境内网络该域名"连接建立但 body 传输挂死"
+#   （实测 5s 0 字节），下载永不完成。
+# 而 Streamlit 的渲染模型是「整段脚本跑完才发首帧」——脚本卡在这一行，
+# 一帧都发不出来，于是全白 + 零交互 + 零报错（唯一线索是右上角 Stop 按钮，
+# 它表示"脚本仍在运行"）。
+#
+# 讽刺点：warmup 是话术 7 为本地提速故意加在启动期的。本地热缓存下它是优化，
+# 线上冷缓存下它堵死首帧——**同一个优化在不同缓存状态下语义相反**。
+#
+# 修法（两层，缺一不可）：
+#   ① 代码层：加载改后台线程，首帧不再等模型（本文件）；
+#   ② 部署层：把模型随发布包预置进镜像 ~/.cache/chroma/onnx_models，
+#      连下载都不发生（见 start_app.sh / 部署说明）。
+_EMBED_LOCK = threading.Lock()
+_EMBED_FN = None            # 已就绪的 embedding 函数（None = 尚未就绪）
+_EMBED_ERR = None           # 加载失败原因（人话，供 UI 展示）
+_EMBED_WARMING = False      # 后台预热线程是否在跑
+_EMBED_READY = threading.Event()   # 就绪/失败信号，供有界等待
+
+
+def _embed_worker():
+    """后台预热线程体：真正加载模型并回填结果（异常必须落 err，不许吞）。"""
+    global _EMBED_FN, _EMBED_ERR, _EMBED_WARMING
+    try:
+        fn = _build_embed_fn()
+        with _EMBED_LOCK:
+            if _EMBED_FN is None:
+                _EMBED_FN = fn
+    except Exception as e:                               # noqa: BLE001
+        with _EMBED_LOCK:
+            if _EMBED_ERR is None:
+                _EMBED_ERR = "%s: %s" % (type(e).__name__, str(e)[:200])
+    finally:
+        with _EMBED_LOCK:
+            _EMBED_WARMING = False
+        _EMBED_READY.set()
+
+
+def warm_embed_async():
+    """启动后台预热（幂等，永不阻塞调用方）。
+
+    容器构造时调用一次即可；模型已就绪或已在预热中则直接返回。
+    """
+    global _EMBED_WARMING
+    with _EMBED_LOCK:
+        if _EMBED_FN is not None or _EMBED_WARMING:
+            return
+        _EMBED_WARMING = True
+    threading.Thread(target=_embed_worker, name="ai4s-embed-warm",
+                     daemon=True).start()
+
+
+def embed_status():
+    """返回 {"ready": bool, "warming": bool, "error": str|None}，供 UI 展示加载态。"""
+    with _EMBED_LOCK:
+        return {"ready": _EMBED_FN is not None,
+                "warming": _EMBED_WARMING,
+                "error": _EMBED_ERR}
+
+
+def get_embed_fn(wait_sec=None):
+    """取用 embedding 函数；未就绪时**有界**等待，超时抛人话 RuntimeError。
+
+    设计要点：等待必须有上界。原实现在 Container.__init__ 里同步等一个
+    可能永不完成的下载，等于把"慢"放大成"死"；这里超时后明确告诉用户
+    「模型仍在后台加载，可先用关键词检索」，把控制权交还给用户。
+    """
+    if wait_sec is None:
+        try:
+            wait_sec = float(os.environ.get("AI4S_EMBED_WAIT_SEC", "90") or 90)
+        except Exception:
+            wait_sec = 90.0
+    if _EMBED_FN is not None:
+        return _EMBED_FN
+    if not _EMBED_READY.wait(timeout=max(0.0, wait_sec)):
+        st = embed_status()
+        raise RuntimeError(
+            "本地 embedding 模型仍在后台加载中（已等待 %.0f 秒）。"
+            "云端冷启动首次需加载约 90MB 模型，请稍后重试；"
+            "急用可先走关键词（BM25）检索。%s"
+            % (wait_sec, ("加载失败：" + st["error"]) if st.get("error") else "")
+        )
+    if _EMBED_FN is not None:
+        return _EMBED_FN
+    raise RuntimeError(
+        "本地 embedding 模型加载失败：%s。可先使用关键词（BM25）检索。"
+        % (embed_status().get("error") or "未知错误")
+    )
+
+
 class Container:
     def __init__(self):
         # 多模态/向量
         self._chroma = chromadb.PersistentClient(path=str(CHROMA_DIR))
         self.collection = self._chroma.get_or_create_collection("papers")
-        self.embed_fn = _build_embed_fn()
+        # ⚠️ 不要在这里同步调 _build_embed_fn()：见 _EMBED_* 一节的故障复盘。
+        # 改为后台预热——首帧不再等 90MB 模型下载（话术 19 白屏根因修复）。
+        warm_embed_async()
 
         # 文献库元数据 + 分块（chunks 同时持久化到 library.json）
         lib = self._load_library()
@@ -98,8 +201,18 @@ class Container:
         }, ensure_ascii=False), encoding="utf-8")
 
     # ---------- 检索基础 ----------
+    @property
+    def embed_fn(self):
+        """按需取用的 embedding 函数。
+
+        保留属性形态是为了兼容既有调用方；语义已从「构造期就绪」变为
+        「首次取用时就绪（后台预热中，可能有界等待）」。新代码建议直接用
+        模块级 `get_embed_fn()`，语义更直白。
+        """
+        return get_embed_fn()
+
     def embed(self, texts):
-        vecs = self.embed_fn(texts)
+        vecs = get_embed_fn()(texts)
         return [np.asarray(v).tolist() for v in vecs]
 
     def rebuild_bm25(self):

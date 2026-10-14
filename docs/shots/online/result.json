@@ -1,0 +1,85 @@
+{
+  "first_paint_sec": 183.1,
+  "nav_appeared_sec": null,
+  "title": "AI4S 科研助手 Agent",
+  "home_body_len": 4,
+  "pages": [
+    {
+      "menu": "🤖 0. 智能总助手",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o1_智能总助手.png"
+    },
+    {
+      "menu": "📁 1. 文献库管理",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o2_文献库管理.png"
+    },
+    {
+      "menu": "💬 2. 跨文献问答与溯源",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o3_跨文献问答与.png"
+    },
+    {
+      "menu": "📖 3. 版式阅读与智能翻译",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o4_版式阅读与智.png"
+    },
+    {
+      "menu": "🔍 4. 论文检索与追踪",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o5_论文检索与追.png"
+    },
+    {
+      "menu": "🕸️ 5. 引用图谱与综述",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o6_引用图谱与综.png"
+    },
+    {
+      "menu": "✍️ 6. 写作辅助与可视化",
+      "clicked": false,
+      "render_sec": 3.6,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o7_写作辅助与可.png"
+    },
+    {
+      "menu": "🏗️ A. 系统架构设计",
+      "clicked": false,
+      "render_sec": 3.6,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o8_系统架构设计.png"
+    },
+    {
+      "menu": "💡 B. 技术创新亮点",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 4,
+      "shot": "docs/shots/online\\o9_技术创新亮点.png"
+    }
+  ],
+  "js_errors_after_nav": [],
+  "page_errors": [],
+  "demo": {
+    "load_demo_sec": null,
+    "load_demo_ok": false,
+    "body_after_demo_len": 4
+  },
+  "qa": {},
+  "graph": {},
+  "caption": {},
+  "client_timezone": "Asia/Shanghai",
+  "server_date_header": "Wed, 14 Oct 2026 15:35:27 GMT",
+  "js_errors_total": 0,
+  "page_errors_total": 0
+}

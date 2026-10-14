@@ -116,7 +116,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.2 功能需求（按五大类逐条）
 
-**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:290 check_duplicate`）；版本识别与差异总结（`services/library.py:1099 group_versions`、`services/library.py:1183 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:55 detect_scanned`、`services/parsing.py:350 ocr_page_text`）；标题树（书签优先 `services/parsing.py:588 extract_toc`，无书签走 `services/parsing.py:526 infer_headings_from_text`）；表格抽取（`services/parsing.py:606 extract_tables`）；插图↔图注关联（`services/parsing.py:685 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:663 _nearest_caption`）；公式识别与 LaTeX 转换；损坏/截断/加密 PDF 拦截（`services/library.py:484 _validate_prepared`，缺页 >30% 拒收）。
+**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:322 check_duplicate`）；版本识别与差异总结（`services/library.py:1131 group_versions`、`services/library.py:1215 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:55 detect_scanned`、`services/parsing.py:350 ocr_page_text`）；标题树（书签优先 `services/parsing.py:588 extract_toc`，无书签走 `services/parsing.py:526 infer_headings_from_text`）；表格抽取（`services/parsing.py:606 extract_tables`）；插图↔图注关联（`services/parsing.py:685 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:663 _nearest_caption`）；公式识别与 LaTeX 转换；损坏/截断/加密 PDF 拦截（`services/library.py:516 _validate_prepared`，缺页 >30% 拒收）。
 
 **② 抗幻觉 RAG**：单篇问答（超参数/硬件/BLEU 类细粒度问题）；多篇跨文献对比（2–5 篇，`MAX_COMPARE_PAPERS=5`）；单篇范围锁定；查询扩展（中文问英文文献）；内联【n】溯源与可点击页码锚点；引用一致性逐句校验；拒答与自动修复。
 
@@ -128,7 +128,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.3 用户故事（端到端走查）
 
-**故事 A：版本去重（演示路径 2，离线可复现）。** `1706.03762v7.pdf` 与改名的 `1706.03762v1.pdf` 先后入库。系统对每篇算"前 4000 字向量 + 5 段指纹"（`services/library.py:71 _paper_fingerprints`），上传 v1 时查重命中 **0.963228**（阈值 0.90，取"分段指纹 top3 均值"；整篇相似度仅 0.891292 单独看会漏判），界面给出"⚠️ 语义查重命中"与三个决策按钮，选"保留两版"后可对比差异（`services/library.py:1183 version_diff`）。全程不依赖文件名。
+**故事 A：版本去重（演示路径 2，离线可复现）。** `1706.03762v7.pdf` 与改名的 `1706.03762v1.pdf` 先后入库。系统对每篇算"前 4000 字向量 + 5 段指纹"（`services/library.py:98 _paper_fingerprints`），上传 v1 时查重命中 **0.963228**（阈值 0.90，取"分段指纹 top3 均值"；整篇相似度仅 0.891292 单独看会漏判），界面给出"⚠️ 语义查重命中"与三个决策按钮，选"保留两版"后可对比差异（`services/library.py:1215 version_diff`）。全程不依赖文件名。
 
 **故事 B：抗幻觉问答（演示路径 3）。** 问"训练用了什么 GPU？数量和型号？"→ 查询扩展出英文变体 → Dense+Sparse 双路召回 → RRF 融合 6 条 → 上下文以 `[1] 来源：《1706.03762v7.pdf》 第8页第3段` 注入 → LLM 生成带【1】角标的答案 → 逐句校验通过 → 点溯源卡片"第 8 页"徽章页内跳转，或"📖 打开阅读页"直达原版式页面。若改问"量子纠缠"（库内无关），拒答闸门在**调用 LLM 之前**直接回复"未在文献库中找到可靠依据，为避免幻觉我不作答"。
 
@@ -138,7 +138,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 - **可复现**：Streamlit 锁定 1.63.x；检索/切块/去重参数全部环境变量可覆盖（`config.py:134-140`，均走 `_env_int`）。
 - **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:545`）。
-- **长文档工程化**：20 页一批解析建块（`services/library.py:17 PDF_BATCH_SIZE = 20`）、单页 30s 守护线程超时跳过（`services/library.py:431 _extract_page_with_timeout`）、每 50 页进度回调、psutil 内存探针（`scripts/_memory_probe.py :: peak_mb`）。
+- **长文档工程化**：20 页一批解析建块（`services/library.py:17 PDF_BATCH_SIZE = 20`）、单页 30s 守护线程超时跳过（`services/library.py:463 _extract_page_with_timeout`）、每 50 页进度回调、psutil 内存探针（`scripts/_memory_probe.py :: peak_mb`）。
 - **安全**：API Key 只经环境变量/会话注入；输出侧密钥正则脱敏（`core/guardrails.py:130 redact_secrets`）；Python 工具经 AST 白名单沙箱（`core/sandbox.py:27 validate_code`）；`.env` 同时被 `.gitignore` 与 `.dockerignore` 排除，不入仓库、不入镜像。
 - **诚实降级**：每个外部依赖（LLM、embedding、外部 API、LaTeX 编译器、Graphviz）都有明确降级路径并向用户说明原因与建议动作，绝不静默失败、绝不编造数据。
 
@@ -188,7 +188,7 @@ flowchart TD
 
 分层依赖严格自上而下、不反向：`ui/` → `services/` → `core/`，`tools/` 依赖 `services/`；`storage/` 的路径常量集中在 `config.py`（`STORAGE_DIR` 等）、主读写入口是 `services/state.py`，**另有 3 处直连落盘**：`core/llm.py`（失败日志与配置错误日志）、`services/citation_quality.py`（引用质量磁盘缓存）、`services/library.py`（上传目录与重建前备份）；此外插图解析经 `services/parsing.py` 写入 `UPLOAD_DIR/figs/`，路径由 `ui/page_library.py` 传入。两条主调用链：
 
-1. **功能页链路**：`app.py` 侧边栏菜单 → `ui/page_*.py` → `services/state.py:174 get_container()` 拿统一上下文 `ctx`（含 `collection`/BM25、chunks、LLM 客户端、embedding）→ 直接调 `services/*`；
+1. **功能页链路**：`app.py` 侧边栏菜单 → `ui/page_*.py` → `services/state.py:287 get_container()` 拿统一上下文 `ctx`（含 `collection`/BM25、chunks、LLM 客户端、embedding）→ 直接调 `services/*`；
 2. **Agent 链路**：`ui/page_agent.py` → `core/agent.py:414 run()` → `core/router.py:104 route()` 选专家 → 按 `core/router.py:22 EXPERTS[e]["tools"]` 白名单过滤 `tools/registry.py` 的 schema → LLM Function Calling → `reg.execute(name, args, ctx)` → 结果回灌 → 循环至给出最终答案（`AGENT_MAX_ITERS=8`）。
 
 **路由细节**（`EXPERTS@core/router.py:22`）：6 个专家 = qa / search / graph / writing / reading / parsing，各持工具白名单；LLM 不可用时 `keyword_route@core/router.py:85` 兜底。
@@ -200,11 +200,11 @@ flowchart TD
 | `ctx.papers / ctx.chunks` | `library.json` | 文献元数据与检索语料 |
 | `ctx.collection / ctx.bm25` | Chroma collection / rank-bm25 | Dense / Sparse 检索 |
 | `ctx.llm` | 侧边栏 Provider 配置 | 统一 LLM 调用（含 available 判定） |
-| `ctx.embed(texts)` | `services/state.py:101 embed` | 查询/论文向量、去重指纹（方法而非常量） |
+| `ctx.embed(texts)` | `services/state.py:214 embed` | 查询/论文向量、去重指纹（方法而非常量） |
 | `ctx.likes` | 点赞账本 | 个性化推荐 |
 | `ctx.memory` | `core/memory.py :: Memory` | 长期记忆；`profile()` 取用户画像、`recall/remember` 存追踪订阅与检查点 |
 
-> **一处必须澄清的写法**：早期稿本记作 `ctx.vdb`，但代码中**不存在**该属性（全仓 `grep -rn "vdb"` 零命中）；真实句柄是 `services/state.py:69` 创建的 `ctx.collection`（`services/rag.py:231 dense_search` 即经它查询）。同理，追踪的订阅表与检查点也不是 `ctx` 直接属性，而是存在 `ctx.memory` 的 kv 中（键 `track_subscriptions` / `track_seen`，`services/track.py:13-14`）。
+> **一处必须澄清的写法**：早期稿本记作 `ctx.vdb`，但代码中**不存在**该属性（全仓 `grep -rn "vdb"` 零命中）；真实句柄是 `services/state.py:170` 创建的 `ctx.collection`（`services/rag.py:231 dense_search` 即经它查询）。同理，追踪的订阅表与检查点也不是 `ctx` 直接属性，而是存在 `ctx.memory` 的 kv 中（键 `track_subscriptions` / `track_seen`，`services/track.py:13-14`）。
 
 ## 3.4 界面与导航
 
@@ -268,7 +268,7 @@ flowchart TD
 
 | 项 | 结论 |
 |---|---|
-| 选了什么 | chromadb ONNX `ONNXMiniLM_L6_V2`（384 维）单例，装载于 `services/state.py:43 _build_embed_fn`（取不到时回退 `DefaultEmbeddingFunction`，见 `:62`） |
+| 选了什么 | chromadb ONNX `ONNXMiniLM_L6_V2`（384 维）单例，装载于 `services/state.py:44 _build_embed_fn`（取不到时回退 `DefaultEmbeddingFunction`，见 `:67`） |
 | 为什么选 | ①**随依赖分发**：不必单独引入 sentence-transformers / modelscope 下载链路；②**可离线复现**：模型已在本机缓存，断网仍产出与线上一致的向量，官方四个用例均在该 embedding 下完成；③**维度权衡**：384 维在千级 chunk 规模下内存与召回质量平衡；④与向量库同源，规避"embedding 与库版本不匹配"的隐性故障 |
 | 放弃了什么 / 代价 |  中文专用模型（如 bge-small-zh）在纯中文语义上的优势；更强多语言模型在长文本上的表现 ；代价： 中文提问 × 英文文献的余弦天然偏低，单独看整篇相似度会漏判（实测 v1/v7 整篇相似度仅 0.891292，低于 0.90 阈值）  |
 | 如何对冲 | 查询扩展生成多英文变体 + dense 路取各变体最大分 + BM25 词面补充 + **分段指纹兜底**（实测 v1/v7 由指纹均值 **0.963228** 命中，完全改名后仍 **1.000000** 命中） |
@@ -277,8 +277,8 @@ flowchart TD
 
 | 项 | 结论 |
 |---|---|
-| 选了什么 | `chromadb.PersistentClient`（`services/state.py:68`），配 `rank_bm25` 的 BM25Plus 做稀疏侧索引（`services/state.py:108 _build_bm25`） |
-| 为什么选 | ①**嵌入式运行**：pip 安装即用，不引入 Docker sidecar / 独立服务进程，评委一句 `streamlit run app.py` 就能跑起来；②同进程 `ctx.collection` 句柄（`services/state.py:69`）便于 UI / Agent / 工具共享状态；③`EphemeralClient()` 可一键切内存态，官方验证脚本据此做到 **零污染测试** |
+| 选了什么 | `chromadb.PersistentClient`（`services/state.py:169`），配 `rank_bm25` 的 BM25Plus 做稀疏侧索引（`services/state.py:221 _build_bm25`） |
+| 为什么选 | ①**嵌入式运行**：pip 安装即用，不引入 Docker sidecar / 独立服务进程，评委一句 `streamlit run app.py` 就能跑起来；②同进程 `ctx.collection` 句柄（`services/state.py:170`）便于 UI / Agent / 工具共享状态；③`EphemeralClient()` 可一键切内存态，官方验证脚本据此做到 **零污染测试** |
 | 放弃了什么 / 代价 |  Milvus / Weaviate / Qdrant 的分布式横向扩展与 ANN 参数调优空间 ；代价： 规模上限于单机部署  |
 | 如何对冲 | paper_id / page / para 等元数据以 JSON Metadata 随 chunk 存储，检索结果在应用层按文献过滤；多篇对比走 `retrieve_per_paper` 每篇保底 3 条 |
 
@@ -336,7 +336,7 @@ flowchart TD
 
 ### 4.2.6 检索集成（`services/state.py` + `services/rag.py`）
 
-统一上下文 `ctx` 同时持有 **Chroma（Dense）** 与 **BM25Plus（Sparse）** 两个句柄：`ctx.collection`（`services/state.py:69`）负责嵌入检索、`ctx.bm25`（`services/state.py:108 _build_bm25`）负责词面检索，由 `services/rag.py` 编排"查询扩展 → 双路召回 → `services/rag.py:258 rrf_fuse`（c=60）→ 上下文编号"。任何要用检索的服务（问答页 / 图谱 / Agent 工具 `search_literature`）都复用同一份索引与参数，**不存在两处口径不一致**。
+统一上下文 `ctx` 同时持有 **Chroma（Dense）** 与 **BM25Plus（Sparse）** 两个句柄：`ctx.collection`（`services/state.py:170`）负责嵌入检索、`ctx.bm25`（`services/state.py:221 _build_bm25`）负责词面检索，由 `services/rag.py` 编排"查询扩展 → 双路召回 → `services/rag.py:258 rrf_fuse`（c=60）→ 上下文编号"。任何要用检索的服务（问答页 / 图谱 / Agent 工具 `search_literature`）都复用同一份索引与参数，**不存在两处口径不一致**。
 
 ## 4.3 优化策略
 
@@ -367,7 +367,7 @@ flowchart TD
 | 优化项 | 参数 | 实测（541 页官方教材，`round4_worker9_official.md` §3） |
 |---|---|---|
 | 分批解析建块 | `services/library.py:17 PDF_BATCH_SIZE = 20` | 解析阶段 **4.02s** |
-| 批内句柄复用 + 单页超时跳过 | 同批共用一个文档实例，批末关闭；`services/library.py:18 PDF_PAGE_TIMEOUT_SECONDS = 30` 守护线程（`services/library.py:431 _extract_page_with_timeout`） | 消除 541 次重复 open；注入挂死页时仅该页失败，`failed_pages` 精确记录 |
+| 批内句柄复用 + 单页超时跳过 | 同批共用一个文档实例，批末关闭；`services/library.py:18 PDF_PAGE_TIMEOUT_SECONDS = 30` 守护线程（`services/library.py:463 _extract_page_with_timeout`） | 消除 541 次重复 open；注入挂死页时仅该页失败，`failed_pages` 精确记录 |
 | 进度回调 | 每 50 页 + 末页 | 541 页共 **11 次**回调，UI 不假死 |
 | 向量化与索引（commit） | 1305 chunk embedding（ONNX/CPU）+ BM25 重建 | **21.30s**（耗时主要在此，非解析） |
 | **整体结果** | — | **537/541 页提取（4 页无文本层）、1305 chunks、0 失败页、25.32s（46.8ms/页）、峰值 RSS 893.1MB** |
@@ -591,7 +591,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 上传即自动解析入库：分批（20 页/批）解析建块 + 内容级语义去重 + 版本识别。**双栏判定**是本轮重点修复项——`_detect_two_columns@services/parsing.py:171` 现在要求 4 条必要条件同时满足：两侧块数 ≥3、横跨否决（任何块横跨候选分栏线每侧重叠 >5pt 即判单栏，`_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:17` 判据落点 `services/parsing.py:242`）、竖直空白带占比 >0.6、栏宽平衡 ≥0.3。实测单栏语料 1111 页误判率从 19.1% 降至 **0%**，真双栏 BERT 正文页 10/10 正确识别。
 
-**长文档工程化**（`services/library.py:533 prepare_pdf`）：541 页《Understanding Deep Learning》官方实测 **537 页成功提取 / 25.32s（46.8ms/页）/ 0 失败页**；4 个无原生文本层的空白页不计入失败页，`failed_pages = 0`。注入挂死页时单页 30s 超时线程跳过，其余页照常入库。**幽灵文献拦截**（`_validate_prepared :206`）：损坏/加密/0 页/成功页 <70% 的 PDF 一律拒绝入库，commit 双保险（`:768 commit`），24/24 拦截用例通过。
+**长文档工程化**（`services/library.py:565 prepare_pdf`）：541 页《Understanding Deep Learning》官方实测 **537 页成功提取 / 25.32s（46.8ms/页）/ 0 失败页**；4 个无原生文本层的空白页不计入失败页，`failed_pages = 0`。注入挂死页时单页 30s 超时线程跳过，其余页照常入库。**幽灵文献拦截**（`_validate_prepared :206`）：损坏/加密/0 页/成功页 <70% 的 PDF 一律拒绝入库，commit 双保险（`:800 commit`），24/24 拦截用例通过。
 
 细粒度解析区提供：标题树（书签优先，无书签走字号/编号推断）、表格抽取、插图↔图注关联展示、公式 LaTeX 提取、结构化参考文献。扫描件（`1706.03762v1_img.pdf`）自动判定并走多模态 OCR（整页转 PNG + vision 模型，prompt 要求按阅读顺序、公式转 LaTeX、表格转 Markdown），**Round 7/8 首次真实实测**：前 3 页原生文本 0 字符 → `detect_scanned=True`，单页 OCR **2833 字符 / 9.3s**，词级准确率 93.9% / 召回 98.5%（详见 4.1.2）。
 
@@ -733,7 +733,7 @@ docker compose down         # 停止
 | 5 | `para_idx` 为估算值：跨页 chunk 与 150 字重叠导致段号漂移 | `annotate_paragraphs@services/rag.py:399` | 定位到页级精确、段级近似；根治方案见 Roadmap（chunk 不跨页 + 原生段落 bbox） |
 | 6 | 部分启发式阈值在现有语料调优，异形排版可能保守回退 | 双栏判定/作者块识别 | 全部失败路径可回退且不崩溃 |
 | 7 | `t_run_python` 临时目录无 finally 清理（每次调用泄漏一个 `ai4s_code_*`） | `tools/definitions.py` | 量级小（KB 级/次），修复已列入待办 |
-| 8 | `commit()` 未清洗文件名（含 `/` 时建路径失败） | `services/library.py:768 commit` | 正常文件名不受影响；建议 `os.path.basename()` + 非法字符替换 |
+| 8 | `commit()` 未清洗文件名（含 `/` 时建路径失败） | `services/library.py:800 commit` | 正常文件名不受影响；建议 `os.path.basename()` + 非法字符替换 |
 | 9 | `st.components.v1.html` 已被 Streamlit 标记弃用 | `ui/common.py embed_html` | streamlit 1.63 正常工作；迁移 `st.iframe` 需回归高度自适应 JS |
 
 ## 6.6 质量过程：Round 1–12 评审与修复闭环
@@ -965,7 +965,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 | 变量 | 默认值 | 读取位置 | 说明 |
 |---|---|---|---|
-| `LLM_PROVIDER` | `zhipu` | `services/state.py:81` | 启动默认 Provider，可选 `zhipu`/`deepseek`/`qwen`/`openai`/`ollama` |
+| `LLM_PROVIDER` | `zhipu` | `services/state.py:184` | 启动默认 Provider，可选 `zhipu`/`deepseek`/`qwen`/`openai`/`ollama` |
 | `ZHIPU_API_KEY` | 空 | `config.py:120` | 智谱 Key；`glm-4-flash` 文本 + `glm-4v` 视觉（唯一内置视觉模型） |
 | `DEEPSEEK_API_KEY` | 空 | `core/providers.py:46` | DeepSeek；无视觉模型，OCR 自动降级离线解析 |
 | `DASHSCOPE_API_KEY` | 空 | `core/providers.py:54` | 通义千问；含 `qwen-vl-plus` 视觉模型 |
