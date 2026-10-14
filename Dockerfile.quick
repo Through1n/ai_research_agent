@@ -1,0 +1,150 @@
+# ============================================================================
+#  AI4S 科研助手 Agent —— 评委快速复现镜像（Dockerfile.quick）
+#
+#  定位：给评委 / 复现者「一条命令跑起来」，功能与根目录 Dockerfile 完全一致，
+#        额外做了一件事：容器启动时**自动加载演示数据**（连侧边栏按钮都不用点）。
+#
+#  构建（必须在仓库根目录执行，构建上下文是 . ）：
+#      docker build -f Dockerfile.quick -t ai4s-quick .
+#  运行：
+#      docker run --rm -p 8501:8501 ai4s-quick
+#      # 想体验大模型功能时再注入自己的 Key（运行期注入，绝不写进镜像）：
+#      docker run --rm -p 8501:8501 -e ZHIPU_API_KEY=你的Key ai4s-quick
+#  打开：
+#      http://localhost:8501
+#
+#  【与根目录 Dockerfile 的关系】沿用其五层结构与全部实测结论：
+#    · python:3.11-slim 基线 + UTF-8 显式锁定
+#    · 依赖层与代码层分离（改业务代码不重装依赖）
+#    · apt 装 graphviz 运行时二进制（render_dot 第②级 dot -Tsvg）
+#    · 非 root 用户 app(uid 10001) + /app/storage 种子（类型按代码读取方式写死）
+#    · 构建期预热 ONNX embedding 模型（.key：演示数据加载要用到 embedding，
+#      容器冷启动时若无网络会卡死，所以必须在有网的构建期烤进镜像）
+#    · HEALTHCHECK 走 Streamlit 官方 /_stcore/health
+#
+#  【相对 Dockerfile 的唯一实质差异】最后的 CMD：
+#      Dockerfile       → 直接 `streamlit run app.py`，演示数据要人工点按钮
+#      Dockerfile.quick → 先跑 `_quick_load_demo.py` 预加载演示数据，再 exec streamlit
+#
+#  ⚠️ 构建期需要外网：pip（PyPI）+ graphviz（Debian 源）+ ONNX 模型（AWS S3）
+#  ⚠️ 本文件不含任何真实 API Key；业务密钥一律运行期注入
+# ============================================================================
+
+FROM python:3.11-slim
+
+# ---------- 运行期环境变量（构建期同样生效）----------
+# 各项取值的逐条依据见根目录 Dockerfile 第 24-67 行注释，此处保持一致，不再重复。
+# 不设 HF_ENDPOINT：config.py 已改为「仅桌面态启用 HF 国内镜像」，容器属非桌面态，
+#   注入该变量会绕过代码里的环境判断；且 chroma 的 ONNX 模型走的是 AWS S3，
+#   本来就不受该变量影响（真正解法是下面第 5 层的构建期预热）。
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUTF8=1 \
+    LANG=C.UTF-8 \
+    HOME=/home/app
+
+WORKDIR /app
+
+# ---------- 第 1 层：依赖（仅 requirements.txt 变化时重建）----------
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# ---------- 第 2 层：系统级运行时依赖（graphviz）----------
+# 给 services/writing.py 的 dot -Tsvg 用；与上一层的 Python 依赖能否编译无关。
+# 【为什么故意不装 matplotlib】详见根目录 Dockerfile 第 88-98 行：
+#   requirements.txt 有意不含 matplotlib，render_dot 在容器内走 ② dot -Tsvg，
+#   缺 dot 时落到 ④ 零依赖 DOT→SVG（浏览器渲染，中文正常）；
+#   装回 matplotlib 反而会让云平台在第 ③ 级返回「中文变方框」的 PNG。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends graphviz \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------- 第 3 层：业务代码 ----------
+COPY . .
+
+# ---------- 第 4 层：非 root 用户 + 可写目录 + storage 零崩溃种子 ----------
+# 种子内容的三个类型约束（library.json 必须是 dict、memory.json 必须带 notes/kv、
+# user_profile.json 必须是 dict）来自根目录 Dockerfile 第 123-131 行，
+# 依据是 services/state.py / core/memory.py 的实际读取方式，改之前先看那里。
+RUN useradd --create-home --home-dir /home/app --uid 10001 app \
+    && mkdir -p /app/storage /app/storage/uploads /app/storage/chroma /app/storage/cache \
+                /app/storage/pdf /app/logs /app/pdf /home/app/.cache \
+    && printf '%s' '{"papers": {}, "paper_order": [], "chunks": [], "likes": {}}' > /app/storage/library.json \
+    && printf '%s' '{"notes": [], "kv": {}}' > /app/storage/memory.json \
+    && printf '%s' '{}' > /app/storage/user_profile.json \
+    && printf '%s' '{}' > /app/storage/cache/citation_cache.json \
+    && : > /app/logs/.keep \
+    && chown -R app:app /app/storage /app/logs /app/pdf /home/app
+
+USER app
+
+# ---------- 第 5 层：构建期预热 ONNX embedding 模型（关键：容器冷启动零外网）----------
+# 必须在 `USER app` 之后执行，保证缓存文件归 app 所有；
+# 末尾断言 6 个必需文件，缺一个就构建失败（宁可构建期炸，也不产出跑不起来的镜像）。
+# 具体的表单名与会走的 URL 见根目录 Dockerfile 第 151-184 行。
+RUN HOME=/home/app python -c "from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2 as M; import os; M()(['warmup']); d = os.path.join(str(M.DOWNLOAD_PATH), 'onnx'); need = ['config.json', 'model.onnx', 'special_tokens_map.json', 'tokenizer_config.json', 'tokenizer.json', 'vocab.txt']; miss = [f for f in need if not os.path.exists(os.path.join(d, f))]; assert not miss, 'ONNX warmup failed, missing files: %s' % miss; print('[build] ONNX embedding warmed at', d)"
+
+# ---------- 第 6 层：写在镜像里的演示数据预加载脚本（本文件相对 Dockerfile 的核心差异）----------
+# 为什么要单独写这个脚本：侧边栏「🚀 一键加载演示数据」是 Streamlit 按钮回调，
+# 只能在页面里点；容器冷启动后评委打开是**空库**。这里把同一段逻辑做成命令行脚本，
+# 让容器启动时自动跑一遍，评委打开就是「文献库 3 篇」的可用状态。
+#
+# 逻辑与 ui/sidebar.py:430-447 逐行对齐：
+#   · DEMO_PAPERS 在 config.py，键是文件名，值是含 "text" 的元信息字典
+#   · `if fn not in ctx.files` —— 幂等，已加载的不重复写（同一份 storage 反复重启不会灌重复数据）
+#   · 直接实例化 Container()，不用 services.state.get_container()，
+#     后者依赖 st.session_state，脱离 Streamlit 运行时不可用
+#   · 整段包成 shell 中的 `|| true`：预加载失败**不能**挡住应用启动，
+#     最坏情况是评委手动点一次侧边栏按钮
+RUN printf '%s\n' \
+  '"""Quick-start 演示数据预加载器（镜像内 /app/_quick_load_demo.py）。"""' \
+  'import os, sys' \
+  'sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # 保证任何 cwd 下都能 import services/config' \
+  'from services.state import Container' \
+  'from services import library' \
+  'from config import DEMO_PAPERS' \
+  '' \
+  'ctx = Container()' \
+  'added, failed = [], []' \
+  'for fn, info in DEMO_PAPERS.items():' \
+  '    if fn in ctx.files:' \
+  '        continue' \
+  '    try:' \
+  '        library.add_text_corpus(ctx, fn, info.get("text", ""), info)' \
+  '        added.append(fn)' \
+  '    except Exception as e:' \
+  '        failed.append("%s: %s" % (fn, str(e)[:120]))' \
+  '        print("[quick] FAIL %s: %s" % (fn, str(e)[:120]), file=sys.stderr)' \
+  'for fn in added:' \
+  '    print("[quick] loaded demo paper:", fn)' \
+  'print("[quick] demo preload done: %d added, %d failed, library has %d papers"' \
+  '      % (len(added), len(failed), len(ctx.files)))' \
+  > /app/_quick_load_demo.py
+
+EXPOSE 8501
+
+# ---------- 健康检查 ----------
+# Streamlit 1.63 官方端点：/_stcore/health（就绪 200，未就绪 503）
+# slim 镜像不带 curl，用 python 标准库探测，零额外依赖
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD python -c "import sys, urllib.request; r = urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=4); sys.exit(0 if r.status == 200 else 1)"
+
+# ---------- 启动 ----------
+# ① 先跑预加载器（失败只告警，不停应用，失败时评委仍可手动点侧边栏按钮）
+# ② 再 exec 替换当前 shell 为 streamlit 进程（保证它能直接收到 SIGTERM，优雅退出）
+# 启动参数与根目录 Dockerfile 的 CMD 完全一致，说明见其第 200-223 行：
+#   address=0.0.0.0 —— 容器不监听全网卡，宿主 -p 映射就不通
+#   enableStaticServing=true —— 写作页 mermaid 从 /app/static 本地加载，离线不降级到 CDN
+#   maxUploadSize=100 —— 与 config.py 的 MAX_UPLOAD_MB 应用层上限对齐（100 MB）
+CMD ["/bin/sh", "-c", \
+     "python /app/_quick_load_demo.py || echo '[quick] 演示数据预加载失败，可在侧边栏手动点「🚀 一键加载演示数据』'; \
+      exec streamlit run app.py \
+        --server.port=8501 \
+        --server.address=0.0.0.0 \
+        --server.headless=true \
+        --server.enableCORS=false \
+        --server.enableStaticServing=true \
+        --server.maxUploadSize=100 \
+        --browser.gatherUsageStats=false"]

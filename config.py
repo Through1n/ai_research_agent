@@ -127,8 +127,8 @@ LLM_TIMEOUT = _env_float("LLM_TIMEOUT", 45.0)
 # 现场想更严可设 LLM_TIMEOUT=25，慢生成仍可享 45s 窗口。
 LLM_RETRY_BUDGET_SEC = _env_float("LLM_RETRY_BUDGET_SEC", 20.0)
 
-# HuggingFace 国内镜像（供 chroma 默认 embedding 首次下载）
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# HuggingFace 镜像：仅桌面态（国内）启镜像；云平台留空走 huggingface.co（境外连镜像更慢/易超时）
+if DESKTOP_MODE: os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 # ---------- 检索 / 解析参数 ----------
 CHUNK_SIZE = _env_int("CHUNK_SIZE", 1200)                  # 切块目标字符数
