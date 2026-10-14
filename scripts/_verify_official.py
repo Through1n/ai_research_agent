@@ -549,9 +549,25 @@ def case_d_multiple(results, temp_root):
 
 
 def _validate_files():
-    missing = [str(path) for path in OFFICIAL.values() if not path.is_file()]
-    if missing:
-        raise FileNotFoundError("缺少官方文件：" + ", ".join(missing))
+    """官方测试件缺失时给人话指引，而不是抛一层裸 FileNotFoundError。
+
+    背景（Round 15）：pdf/ 下的 6 个 PDF 不再随仓库分发（其中 22MB 教材原著有版权
+    风险），改为 `sh scripts/fetch_pdfs.sh` 现拉现用。全新 clone 后直接跑本脚本，
+    原来只在 open() 处炸 traceback，用户看不出"要先去拉文件"。
+    """
+    missing = [name for name, path in OFFICIAL.items() if not path.is_file()]
+    if not missing:
+        return
+    raise SystemExit(
+        "缺少官方测试 PDF：%s\n"
+        "这些文件不再随仓库分发，请先执行：\n"
+        "    sh scripts/fetch_pdfs.sh\n"
+        "其中 arXiv 三件与两个夹具（扫描件 / 540 页长文档）会自动就位；\n"
+        "UnderstandingDeepLearning_02_09_26_C.pdf（22MB 教材）受版权保护，需按脚本内\n"
+        "说明从官网 https://udlbook.github.io/ 自行放置到 pdf/。\n"
+        "若只想跑其余用例，可临时从本脚本的 OFFICIAL 字典里删掉对应条目。"
+        % "、".join(missing)
+    )
 
 
 def main():

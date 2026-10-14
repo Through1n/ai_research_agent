@@ -64,3 +64,9 @@ build_log.txt
 
 # ---------- 应用发布标记文件（内部产物，非交付物）----------
 .wbapp_*.genie
+
+# ---------- 官方测试 PDF（Round 15：不再随仓库分发，改为现拉现用） ----------
+# UnderstandingDeepLearning_02_09_26_C.pdf 是 22MB 受版权保护教材原著，随公开仓库
+# 分发有法律风险。六件测试 PDF 统一改为 `sh scripts/fetch_pdfs.sh` 现拉现用：
+#   arXiv 三件下载、扫描件/长文档夹具本地生成、教材按官网说明自行放置。
+pdf/*.pdf
