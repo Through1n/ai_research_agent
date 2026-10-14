@@ -187,12 +187,13 @@ repro-pack 先报"completed"但**磁盘零文件**；team-lead 发更正指令�
 
 | # | 项 | 性质 |
 |---|---|---|
-| 1 | **在线演示尚未真正部署**。`streamlit_app.py` / secrets 模板 / 手册已就绪，但 share.streamlit.io 上的 New app 需要 GitHub 账号交互授权，agent 做不了 | **待用户操作**（P0，赛题硬性要求） |
-| 2 | `docs/团队信息.md` 仍是 `[待填写]` 占位模板；README「👥 团队信息」一节同样是 TODO | **待用户填写** |
-| 3 | git 作者是占位符 `ai_research_agent <author@local.dev>`，87 个提交全是同一作者。若团队信息填多人，评委可能问"协作在哪" | 已知，`docs/提交历史分析.md` 已如实记录 |
+| 1 | ~~**在线演示尚未真正部署**~~ → **已部署并验证**：https://ai4s-research-agent.app.workbuddy.host/ （`/_stcore/health` 200、首页 Streamlit 壳、`/app/static/mermaid.min.js` 3,335,717B 与本地逐字节一致）。未注入 API Key，默认离线演示态 | ✅ 已解决（见文末补充节） |
+| 2 | `docs/团队信息.md` 与 README「👥 团队信息」仍是占位模板（README 实测 12 处 `【占位符】` + 1 处 `TODO`，团队信息.md 实测 13 处 `[待填写]` 类） | **待用户填写**（赛题硬性要求，唯一剩余人工项） |
+| 3 | git 作者是占位符 `ai_research_agent <author@local.dev>`，88 个提交全是同一作者。若团队信息填多人，评委可能问"协作在哪" | 已知，`docs/提交历史分析.md` 已如实记录 |
 | 4 | `.workbuddy/` 目录在磁盘上存在（`du -sh` = **88K**，内部记忆与临时记录），已被 `.gitignore` 忽略不会入库；但**若交付方式是整个目录拷贝而非 clone，评委会看到它** | 已知，建议交付用 clone / 打包时排除 |
 | 5 | `requirements.txt` 的 4 条跨平台建议（plotly/arxiv/pillow 加上界、chromadb 在 ARM 上的告警说明）**尚未落地**，文件未改动 | 待决，非阻断 |
 | 6 | `--img-max` / `--mermaid-h` 两个旋钮改变了官方出图命令，旧命令会量出 31 页 | 已在 §5.3 与本轮 memory 记录中同步 |
+| 7 | 部署包在仓库外（`C:/Users/Administrator/ai4s_deploy_bundle`，8.2M 精简副本），**不在 git 里**；若之后要改线上版本，需重新拷贝再发布 | 已知，`start_app.sh`（PORT 兜底）只存在于部署包中 |
 
 ---
 
@@ -202,3 +203,67 @@ repro-pack 先报"completed"但**磁盘零文件**；team-lead 发更正指令�
 - 所有"已完成"的声明都经磁盘 + 亲自读内容 + 逐条 grep/`sed -n` 核实；两处行号差 1 的错误是这轮抓出来的。
 - 所有数量断言（页数 / 引用条数 / 测试数 / 报告份数 / 提交数）均以当次命令输出为准，未沿用旧值。
 - `git` 操作由 team-lead 在本轮结束时统一执行，未 `git add -A`。
+
+---
+
+## 10. 补充节 · 在线演示已部署（Round 14 收尾追加）
+
+用户问"GitHub 账号交互授权怎么给你"，先查证再回答：
+
+| 通路 | 实测状态 |
+|---|---|
+| `git push` | ✅ 通（Windows 凭据管理器，账号 `Through1n`，本轮 push 成功） |
+| GitHub 连接器 | ✅ `connected / bound / enabled`，实测 `get_me` → `login: Through1n` |
+
+**两条路都不需要用户再授权。** 但 Streamlit Cloud 那条约不到——它要的是"浏览器里用
+GitHub 账号登录 share.streamlit.io"的 OAuth 动作本身，给 agent 任何 token 都替代不了。
+
+### 10.1 改走应用发布，先解决"仓库 919M 传不上去"
+
+整包 919M（`dist/` 498M PyInstaller 产物 + `storage/` 200M 运行时 + `build/` 137M）。
+在仓库外建精简部署包（8.2M），只留运行时必需：
+
+```
+app.py config.py requirements.txt streamlit_app.py
+core/ services/ tools/ ui/          # 四层代码
+static/ lib/                        # mermaid.min.js、vis-network、tom-select
+demo_data/                          # 3 个演示文件（Transformer v7 / BERT / data.csv）
+scripts/                            # ← 关键，见下
+```
+
+> **`scripts/` 不能漏**：`ui/page_reading.py:81` 运行时 `from scripts._memory_probe import ...`，
+> 漏掉整个目录会在阅读页导入时炸。已 grep 全仓确认这是唯一一处运行时依赖 scripts/ 的地方。
+
+### 10.2 部署前先本地实测（不能只跑 smoke_ui）
+
+在部署包里实跑 `streamlit run app.py --server.port=8599 --server.headless=true`
++ AppTest → **0 异常、演示按钮在位**；测完清掉产生的 `storage/`、`logs/`、`pdf/` 与 `__pycache__`。
+
+### 10.3 第一次部署失败，原因是 `$PORT` 空串
+
+```
+Error: Invalid value for '--server.port' (env var: 'STREAMLIT_SERVER_PORT'): '' is not a valid integer.
+```
+
+依赖安装是**成功的**（streamlit 已可用），纯粹是沙箱没把 PORT 注入 startCmd 执行环境。
+修法：部署包内加 `start_app.sh`，`PORT="${PORT:-8501}"` 兜底，startCmd 改 `sh start_app.sh`。
+**没有改用户项目里任何文件。**
+
+### 10.4 部署后验证（不信工具的 verified，自己探）
+
+| 检查 | 结果 |
+|---|---|
+| `/_stcore/health` | HTTP 200，0.46s |
+| 首页 | HTTP 200，返回真 Streamlit 壳（Apache 许可头 + `<title>Streamlit</title>`） |
+| `/app/static/mermaid.min.js` | HTTP 200，**3,335,717B，与本地逐字节相同** → 同时证明整包上传完整 + `--server.enableStaticServing` 生效 |
+
+**地址**：https://ai4s-research-agent.app.workbuddy.host/
+
+### 10.5 已知边界（如实告知用户）
+
+- 未注入 API Key → 默认离线演示态（点「🚀 一键加载演示数据」全链路可用）；
+  首次加载需下载 chroma 自带 ONNX embedding ~90MB，慢 30–60s，**只慢第一次**。
+- 这是应用发布服务托管的域名；若赛务更认 streamlit.io，可按 `docs/部署操作手册.md`
+  五步另行部署（入口文件与 secrets 模板已就绪）。
+- 占位符数量已 grep 后写入文档：README 12 处 `【占位符】` + 1 处 `TODO`，
+  团队信息.md 13 处 `[待填写]` 类（初稿写"约 20 处"被自己 grep 打回，改实测数）。

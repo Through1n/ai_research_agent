@@ -61,3 +61,6 @@ dist-release/
 *.pyc
 version_info.txt
 build_log.txt
+
+# ---------- 应用发布标记文件（内部产物，非交付物）----------
+.wbapp_*.genie
