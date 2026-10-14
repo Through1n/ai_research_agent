@@ -271,11 +271,22 @@ def _score_rows(ctx, cand, uid):
         prof = ctx.memory.profile() or {}
     except Exception:
         prof = {}
-    qvecs = ctx.embed([str(p.get("summary", ""))[:1500] for p in cand])
+    try:
+        qvecs = ctx.embed([str(p.get("summary", ""))[:1500] for p in cand])
+    except Exception:
+        # 语义向量不可用：相关性维度全部按 0.0 处理（与下方
+        # `except Exception: rel = 0.0` 的既有范式一致）。用 [None]*len(cand)
+        # 占位而非 []——[] 会让 zip 直接截空、把整个候选列表清空，
+        # 那是把「向量路失败」误做成「没有候选」。降级必须让用户看见：
+        # caption 说明哪个维度被清零、排序靠什么。
+        qvecs = [None] * len(cand)
+        st.caption("⚠️ 语义向量不可用（本地 embedding 模型未就绪或推理失败）："
+                   "「与本地文献库主题相近度」已按 0 分处理，排序改由开源代码 / "
+                   "社区点赞 / 研究画像决定；可稍后重试恢复语义排序。")
     rows = []
     for p, v in zip(cand, qvecs):
         try:
-            rel = float(np.dot(centroid, np.asarray(v, dtype=float))) if centroid is not None else 0.0
+            rel = float(np.dot(centroid, np.asarray(v, dtype=float))) if (centroid is not None and v is not None) else 0.0
         except Exception:
             rel = 0.0
         gh = 0.15 if p.get("github") else 0.0

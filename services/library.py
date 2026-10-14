@@ -63,9 +63,36 @@ def cosine(a, b):
     return float(a @ b / (na * nb)) if na and nb else 0.0
 
 
+def _mark_embed_degraded(ctx, exc):
+    """把 embedding 失败原因写到 ctx.embed_degraded_reason（首次失败即写入，后续不覆盖）。
+
+    失败语义纪律：降级值（None / []）与「真的没有结果」在下游不可区分，所以降级
+    必须同时留下人话原因，让 UI 层如实展示「哪一步降级了、后果是什么」，而不是
+    静默返回降级值。读取/写入均**不依赖 Container.__init__ 初始化该字段**
+    （services/state.py 由他人维护、禁改）：读走 getattr 默认 None，写走 try 兜底。
+    """
+    if getattr(ctx, "embed_degraded_reason", None):
+        return                      # 只保留首次失败的原因，后续不覆盖
+    try:
+        detail = (str(exc) or type(exc).__name__)[:200]
+    except Exception:                                     # noqa: BLE001
+        detail = "未知错误"
+    try:
+        ctx.embed_degraded_reason = detail
+    except Exception:                                     # noqa: BLE001
+        pass
+
+
 def _paper_embedding(ctx, full_text):
     # 取前 4000 字（覆盖摘要/引言/方法主体）做论文级向量
-    return ctx.embed([full_text[:4000]])[0]
+    try:
+        return ctx.embed([full_text[:4000]])[0]
+    except Exception as exc:
+        # 版本匹配 / 跨版本去重是增强能力而非入库硬前提：embedding 失败不拦入库，
+        # 返回降级值 None（下游已能处理，见 prepare_pdf 的 `if full_text else None`
+        # 既有写法），但必须记录人话原因供 UI 展示——绝不静默 None。
+        _mark_embed_degraded(ctx, exc)
+        return None
 
 
 def _paper_fingerprints(ctx, full_text, k=5, seg=1200):
@@ -76,7 +103,12 @@ def _paper_fingerprints(ctx, full_text, k=5, seg=1200):
     samples = [full_text[i * step: i * step + seg] for i in range(k)]
     if samples[-1] != full_text[-seg:]:
         samples.append(full_text[-seg:])  # 末尾（参考文献区）也取一指纹
-    return ctx.embed(samples)
+    try:
+        return ctx.embed(samples)
+    except Exception as exc:
+        # 同 _paper_embedding：降级为 [] + 记录人话原因，不静默返回空列表
+        _mark_embed_degraded(ctx, exc)
+        return []
 
 
 def _norm_title(t):

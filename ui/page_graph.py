@@ -81,6 +81,10 @@ def _build_demo(ctx):
 
     仅在⬆️真实引用边为空且用户点按钮时触发；每张图取最相似的 1 条示意关系，
     方向按年份从新到旧（近似「新论文参考旧工作」），输出处明确标注「示意，非真实引用」。
+
+    embedding 不可用（模型未就绪 / 推理失败）时降级为「关键词重合度」建边：
+    零依赖、不再调用 embedding；返回值第 6 项为降级说明（空串 = 未降级），
+    由调用方写进图谱包，跨 rerun 仍对用户可见——绝不做静默降级。
     """
     import networkx as nx
     reps = list(dict.fromkeys(_lib.latest_of(files)[0]
@@ -92,20 +96,48 @@ def _build_demo(ctx):
         body = "\n".join(c.get("text", "") for c in ctx.chunks if c.get("source") == n)
         title = _title(ctx, n)
         text[n] = (title + "。 " + body)[:1200] or title
-    vecs = ctx.embed([text[n] for n in reps])
+    try:
+        vecs = ctx.embed([text[n] for n in reps])
+    except Exception:
+        vecs = None
 
-    def cos(a, b):
-        a = np.asarray(a, dtype=float)
-        b = np.asarray(b, dtype=float)
-        d = (np.linalg.norm(a) * np.linalg.norm(b))
-        return float(np.dot(a, b) / d) if d else 0.0
+    if vecs is not None:
+
+        def cos(a, b):
+            a = np.asarray(a, dtype=float)
+            b = np.asarray(b, dtype=float)
+            d = (np.linalg.norm(a) * np.linalg.norm(b))
+            return float(np.dot(a, b) / d) if d else 0.0
+
+        def sim_of(i, j):
+            return cos(vecs[i], vecs[j])
+
+        sim_label = "主题相似度"
+        degrade_note = ""
+    else:
+        # 语义向量不可用：改用已组好的「标题+正文片段」文本做关键词重合度
+        # （走 services.state.tokenize，零外部依赖，不再调用 embedding）。
+        # ⚠️ 口径差异必须让用户看见：重合只代表用词相近，不代表主题真实相似。
+        from services.state import tokenize as _tokenize
+        toks = [set(_tokenize(text[n])) for n in reps]
+
+        def sim_of(i, j):
+            a, b = toks[i], toks[j]
+            if not a or not b:
+                return 0.0
+            return len(a & b) / ((len(a) * len(b)) ** 0.5)
+
+        sim_label = "关键词重合度"
+        degrade_note = ("⚠️ 语义向量不可用（本地 embedding 模型未就绪或推理失败），"
+                        "已降级为关键词重合度建边：边仅代表标题/正文用词重合，"
+                        "不代表主题真实相似（仍为示意关系，非真实引用）。")
 
     G = nx.DiGraph()
     for n in reps:
         G.add_node(n, title=_title(ctx, n), version=ctx.papers.get(n, {}).get("version", ""))
     edges = []
     for i, a in enumerate(reps):
-        sims = sorted(((cos(vecs[i], vecs[j]), reps[j]) for j in range(len(reps)) if j != i),
+        sims = sorted(((sim_of(i, j), reps[j]) for j in range(len(reps)) if j != i),
                       reverse=True)
         if not sims:
             continue
@@ -118,13 +150,13 @@ def _build_demo(ctx):
         src, dst = (a, b) if ya >= yb else (b, a)
         if not G.has_edge(src, dst):
             G.add_edge(src, dst)
-            ev = f"演示模式：主题相似度 {float(sim):.0%}（示意关系，非真实引用）"
+            ev = f"演示模式：{sim_label} {float(sim):.0%}（示意关系，非真实引用）"
             edges.append((src, dst, ev))
     if not edges:
         raise ValueError("论文主题差异过大，未能生成示意关系")
     metrics = g.analyze(G)
     corner, edge = g.classify_papers(G, metrics)
-    return G, edges, metrics, corner, edge
+    return G, edges, metrics, corner, edge, degrade_note
 
 
 def _make_pack(G, edges, metrics, corner, edge, demo=False):
@@ -138,6 +170,9 @@ def _render_pack(ctx, pack):
     if pack.get("demo"):
         st.warning("🎭 当前为**演示模式示意图谱**：依据主题相似度生成，**不代表真实引用关系**。"
                    "需真实引用请上传含 References 章节的完整 PDF。")
+        if pack.get("degrade_note"):
+            # 语义向量不可用 → 关键词重合度建边的口径说明（随包持久化，跨 rerun 仍可见）
+            st.caption(pack["degrade_note"])
     html = pack.get("html") or ""
     if not html:
         st.caption("⚠️ 图谱可视化 HTML 不可用（下方表格版图论指标不受影响）。")
@@ -268,13 +303,14 @@ def render(ctx):
         if st.button("🎭 演示模式示意图谱"):
             with st.spinner(step_text("🎭 正在生成演示模式示意图谱")):
                 try:
-                    G, edges, metrics, corner, edge = _build_demo(ctx)
+                    G, edges, metrics, corner, edge, degrade_note = _build_demo(ctx)
                     try:
                         html = g.graph_html(G, metrics, corner)
                     except Exception:
                         html = ""
                     pack = _make_pack(G, edges, metrics, corner, edge, demo=True)
                     pack["html"] = html
+                    pack["degrade_note"] = degrade_note
                     st.session_state.graph_pack = pack
                     # 本按钮位于「图谱结果读取」之后，若不 rerun，本轮页面上方的
                     # 「尚未构建图谱」空状态会与新生成的图谱并存，自相矛盾。

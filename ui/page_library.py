@@ -212,6 +212,17 @@ def render(ctx):
                 "基于内容 embedding 的语义去重（识别 arXiv v1/v7）、版本管理、细粒度多模态解析。",
                 icon="📁")
 
+    # embedding 降级原因透出：services/library.py 的 _paper_embedding /
+    # _paper_fingerprints 失败时会把人话原因写到 ctx.embed_degraded_reason。
+    # 语义查重/版本匹配是增强能力，失败不拦入库，但必须让用户看见「哪一步降级了、
+    # 后果是什么」。用 st.caption 而非 st.error：论文已正常入库，这不是致命错误，
+    # 不能把页面刷红（渲染风格与 ui/common.py 的说明性 caption 一致）。
+    _embed_reason = getattr(ctx, "embed_degraded_reason", None)
+    if _embed_reason:
+        st.caption(f"⚠️ 语义检索模型未就绪：{str(_embed_reason)[:200]}。"
+                   "论文已正常入库，但「跨版本内容匹配 / 智能去重」暂不可用；"
+                   "可稍后重试或先用关键词检索。")
+
     tab_up, tab_lib, tab_ver = st.tabs(["上传与解析", "文献库", "版本差异"])
 
     with tab_up:
