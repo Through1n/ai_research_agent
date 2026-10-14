@@ -636,8 +636,8 @@ def measure_429_cap():
         dt = time.time() - t0
         print("  429 Retry-After=%-4s → 计划退避 %5.1fs %s  实测 %.1fs  kind=%r"
               % (ra, sum(planned), planned, dt, c.last_error_kind))
-    print("  → 服务端要求等 60s 时，core/llm.py:47 RATE_LIMIT_RETRY_AFTER_CAP=10 "
-          "把它压到 10s，最坏 3×10 = 30s 才降级")
+    print("  → 服务端要求等 60s 时，core/llm.py:47 RATE_LIMIT_RETRY_AFTER_CAP=5 "
+          "把它压到 5s，最坏 3×5 = 15s 才降级（Round 13 修复 B：原 10→5）")
 
 
 def measure_retry_budget():
@@ -690,7 +690,7 @@ def measure_retry_budget():
         print("  %-22s → 实测挂起 %5.1fs · SDK 调用 %d 次 · 退避 %s · kind=%r"
               % (tag, dt, len(calls), planned, c.last_error_kind))
 
-    # 线上默认档（T=90 / B=45）无法真跑 90s，按上面同一套循环模型外推
+    # 线上默认档（T=45 / B=20，Round 13 修复 A）按同一套循环模型外推
     def _sim(timeout, budget):
         el, n = 0.0, 0
         for a in range(_llm.MAX_RETRIES + 1):
@@ -705,11 +705,11 @@ def measure_retry_budget():
                 break
         return n, el
 
-    n0, e0 = _sim(90.0, 0.0)
-    n1, e1 = _sim(90.0, 45.0)
-    print("  [外推，非实测] 线上默认 LLM_TIMEOUT=90：")
-    print("     预算关闭 → %d 次尝试 × 90s + 退避 ≈ %.0fs 才降级" % (n0, e0))
-    print("     预算 45s → %d 次尝试 × 90s ≈ %.0fs 才降级（首尝窗口仍是完整的 90s）" % (n1, e1))
+    n0, e0 = _sim(45.0, 0.0)
+    n1, e1 = _sim(45.0, 20.0)
+    print("  [外推，非实测] 线上默认 LLM_TIMEOUT=45 / 预算=20（Round 13 修复 A）：")
+    print("     预算关闭 → %d 次尝试 × 45s + 退避 ≈ %.0fs 才降级" % (n0, e0))
+    print("     预算 20s → %d 次尝试 × 45s ≈ %.0fs 才降级（首尝窗口 45s ≥ 预算 20s → 立即截断）" % (n1, e1))
     print("  ⇒ 预算只决定「要不要发起下一次尝试」，不裁剪任何单次调用的超时窗口，"
           "故正常成功请求的时间窗一点没少。")
 
@@ -784,8 +784,8 @@ def measure_timeout_equivalence():
     dt = time.time() - t0
     print("  A2 LLM_TIMEOUT=%.1fs 实测挂起 %.1fs ≈ 4 次尝试×%.1fs + 退避 %.1fs"
           % (T, dt, T, sum(planned)))
-    print("     → 线上默认 LLM_TIMEOUT=90.0（config.py:123）时：4×90 + %.0f ≈ %.0fs"
-          " 才降级，即**约 6 分钟转圈**" % (sum(planned), 4 * 90 + sum(planned)))
+    print("     → 线上默认 LLM_TIMEOUT=45.0 / 预算=20.0（config.py:123/128）时：首尝 45s ≥ 预算 20s"
+          " → 立即截断，最坏 ≈45s 才降级（旧 90/45 为 ≈90s，Round 13 修复 A 已压半）")
 
     # A3：验证 core/llm.py 新增的 RETRY_BUDGET_SEC 是否真的能截断重试链。
     # 把预算临时压到 5s（< A2 的 17s），若生效则实测应显著小于 17s。
