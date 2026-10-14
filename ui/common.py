@@ -118,7 +118,7 @@ padding:{_C_PAD};margin:{_C_MARGIN};box-shadow:{_C_SHADOW};">
 _PRETTY_CSS = """<style>
 .ptab-wrap{overflow-x:auto;margin:8px 0 12px;border:1px solid %s;border-radius:%s;}
 table.ptab{border-collapse:collapse;width:100%%;font-size:13px;
-font-family:'Segoe UI','Microsoft YaHei',sans-serif;}
+font-family:'Segoe UI','Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;}
 .ptab th{background:linear-gradient(90deg,%s 0%%,%s 100%%);color:%s;
 font-weight:700;padding:9px 12px;text-align:left;border-bottom:1.5px solid %s;white-space:nowrap;}
 .ptab td{padding:8px 12px;border-bottom:1px solid %s;color:%s;

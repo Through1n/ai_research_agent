@@ -39,12 +39,30 @@ FROM python:3.11-slim
 #                             （此处**故意不写行号**：config.py 仍在被多人并行编辑，
 #                              我核到过 :103 → :126 → :131 三个值，写行号等于给后来人加"回头重核"义务）
 #
+# PYTHONUTF8 / LANG        : 显式锁定 UTF-8（Round 13 采纳 crossplat 的建议，见
+#                            docs/CROSS_PLATFORM.md §6）。两点说明：
+#                            · 本项目所有文件读写都**显式**带 encoding="utf-8"
+#                              （state.py:90/95、memory.py:35/40/43、citation_quality.py:153/175、
+#                               llm.py:414、app.py:24、common.py:224），所以即使不设也不会乱码；
+#                              设它是为了覆盖**没有显式声明编码**的那几处——中文文件名的上传
+#                              落盘（library.py:777 的 `(UPLOAD_DIR / filename).write_bytes`）
+#                              与 `docker compose logs` 里的中文输出。
+#                            · 只给 LANG，**不给 LC_ALL**：Debian slim 不设任何 LC_* 时 LANG 即
+#                              为生效 locale，LC_ALL 在这里不提供额外信息，反而会**覆盖**将来
+#                              有人在 compose 里单独设的 LC_TIME / LC_COLLATE 之类，故不设。
+#                            · PYTHONUTF8=1 是 PEP 540 的 UTF-8 模式，它**不依赖 locale 数据是否
+#                              存在**（locale 数据缺失时 PEP 538 的 coercion 会失效，它不会），
+#                              所以这两个变量是互补的，不是重复。
+#                            ⚠️ 本机无 docker，未实测「设与不设的差异」；代价为零，故采纳。
+#
 # ⚠️ 业务密钥（ZHIPU_API_KEY / LLM_API_KEY / ...）一律运行期注入，
 #    严禁写进本文件或打进镜像（.dockerignore 已排除 .env）
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUTF8=1 \
+    LANG=C.UTF-8 \
     HOME=/home/app \
     HF_ENDPOINT=https://hf-mirror.com
 
@@ -85,12 +103,47 @@ RUN apt-get update \
 # ---------- 第 3 层：业务代码 ----------
 COPY . .
 
-# ---------- 第 4 层：非 root 用户 + 可写目录 ----------
+# ---------- 第 4 层：非 root 用户 + 可写目录 + storage 零崩溃种子 ----------
 # config.py 启动时会 mkdir storage/uploads、storage/chroma、pdf（_mkdirs 那段）；
 # app.py:15 的 LOG_DIR="logs" 是相对 CWD（/app）的，属主必须是运行用户，否则异常日志会被静默吞掉。
 # 这一层先于第 5 层的模型预热执行 —— chown /home/app 之后，app 用户才有地方写模型缓存。
+#
+# 【为什么要在镜像里预置 storage/ 的内容（Round 13 重点，逐条核过代码才写的）】
+#   storage/ 同时被 .gitignore 与 .dockerignore 排除 → 全新克隆的宿主机上**不存在**这个目录。
+#
+#   ① 「目录/文件缺失」本身**不会**让代码崩（逐行核过，见 docs/review/round13_deploy_finish.md §2）：
+#        services/state.py:90   json.loads 包在 try/except 里 → 缺失/空文件/损坏 均回落默认字典
+#        core/memory.py:18      同上
+#        citation_quality.py:152 先 isfile 再 isinstance(data, dict) → 缺失/损坏都安全
+#      → 所以真正的崩溃源**不是空，而是不可写**：/app/storage 对 uid 10001 不可写时，
+#        config.py:42 的 `_d.mkdir(parents=True, exist_ok=True)` 抛 PermissionError，
+#        发生在 import 期 → 被 app.py:34 捕获后显示成「依赖未安装或版本不匹配」
+#        （**误导性文案**，真因是权限，app.py:44/45 那两行 caption 也是照着依赖问题写的）。
+#
+#   ② 真正会让应用在启动期崩溃的是「类型对不上的**合法** JSON」，种子必须规避：
+#        library.json 写成 `[]` → services/state.py:74 `lib.get("papers", {})` 抛
+#           AttributeError；这 4 行在 try 之外 → Container 构造失败 → 应用起不来
+#        memory.json 写成 `{}` → core/memory.py:30 `self.data["kv"][key]` KeyError
+#           （services/track.py:22 与 query_expansion.py:305 的 remember 均无兜底）
+#        user_profile.json 写成 `[]` → core/memory.py:54 `profiles.setdefault` AttributeError
+#      → 故下面的种子内容**按代码实际读取方式写死具体类型**，不能图省事写 `[]` 或 `{}`。
+#      ⚠️ 反过来也成立：library.json 必须是 dict 而不是 list，memory.json 必须是
+#         带 "notes"/"kv" 两个键的 dict —— 改这里之前先看上面三行引用的读取点。
+#
+#   ③ 预置成「非空目录」还有第二个用途：docker-compose 用**命名卷**挂 /app/storage 时，
+#      Docker 会把镜像内该目录的内容（含属主）复制进新建卷，容器首次启动即可写。
+#      目录为空时无内容可依，属主是否跟随镜像**未实测**（本机无 docker）。
+#      为此把 uploads/ chroma/ cache/ pdf/ 一并预建并 chown：即使最坏情况下卷根目录
+#      属主回落到 root，代码真正要写的子目录仍是 app 的，依然不会崩。
+#      首次 up 后的校验命令见 docs/部署后自检清单.md §1。
 RUN useradd --create-home --home-dir /home/app --uid 10001 app \
-    && mkdir -p /app/storage /app/logs /app/pdf /home/app/.cache \
+    && mkdir -p /app/storage /app/storage/uploads /app/storage/chroma /app/storage/cache \
+                /app/storage/pdf /app/logs /app/pdf /home/app/.cache \
+    && printf '%s' '{"papers": {}, "paper_order": [], "chunks": [], "likes": {}}' > /app/storage/library.json \
+    && printf '%s' '{"notes": [], "kv": {}}' > /app/storage/memory.json \
+    && printf '%s' '{}' > /app/storage/user_profile.json \
+    && printf '%s' '{}' > /app/storage/cache/citation_cache.json \
+    && : > /app/logs/.keep \
     && chown -R app:app /app/storage /app/logs /app/pdf /home/app
 
 USER app

@@ -11,6 +11,23 @@ class Memory:
         self.user = user
         self.data = self._load(self.memory_path, {"notes": [], "kv": {}})
         self.profiles = self._load(self.profile_path, {})
+        self._normalize()
+
+    def _normalize(self):
+        """把持久化 JSON 补齐成运行期期望的形状。
+
+        _load 只保证「读不出来时用默认值」，不保证「读出来的东西有 kv / notes 键」。
+        部署时若把 memory.json 预置成 `{}`、user_profile.json 预置成 `[]`，首次调用
+        remember / add_note / update_profile 会分别抛 KeyError('kv') 与 AttributeError。
+        """
+        if not isinstance(self.data, dict):
+            self.data = {}
+        if not isinstance(self.data.get("notes"), list):
+            self.data["notes"] = []
+        if not isinstance(self.data.get("kv"), dict):
+            self.data["kv"] = {}
+        if not isinstance(self.profiles, dict):
+            self.profiles = {}
 
     @staticmethod
     def _load(path, default):

@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import re
+import shutil
 import tempfile
 import subprocess
 from datetime import datetime, timezone
@@ -204,9 +205,17 @@ def t_track_topic(ctx, topic="", arxiv_id="", max_results=8, only_new=True):
 
 def _ingest_arxiv_paper(ctx, p):
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    extern.download(p["pdf_url"], tmp.name, timeout=120)
-    data = open(tmp.name, "rb").read()
-    os.remove(tmp.name)
+    tmp.close()                      # 交出句柄：Windows 上重复打开同名文件才不会被占用
+    try:
+        extern.download(p["pdf_url"], tmp.name, timeout=120)
+        with open(tmp.name, "rb") as fh:
+            data = fh.read()
+    finally:
+        # 下载失败/读失败也要删，否则每个失败任务都在临时目录留一份残骸
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
     fname = p["arxiv_id"].split("v")[0] + ".pdf"
     prepared = library.prepare_pdf(ctx, data=data, filename=fname)
     if prepared.get("error"):
@@ -339,6 +348,13 @@ def t_run_python(ctx, code):
     except Exception as e:
         return {"rc": -3, "error": f"{type(e).__name__}: {str(e)[:200]}",
                 "stdout": "", "stderr": ""}
+    finally:
+        # 每次代码执行都 mkdtemp，不清理会在长时间运行的服务里无限堆积
+        # （实测：连跑 3 次残留 3 个 ai4s_code_* 目录）。Linux 容器 /tmp 同样会涨。
+        try:
+            shutil.rmtree(work, ignore_errors=True)
+        except Exception:
+            pass
 
 
 # ---------------- 记忆 ----------------

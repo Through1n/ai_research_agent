@@ -306,7 +306,7 @@ SELECTION_JS = """
 <style>
 .ai4s-panel{position:fixed;right:14px;bottom:14px;max-width:330px;z-index:99;
 background:#ffffff;border:1px solid #d6e0ef;border-radius:10px;padding:10px 12px;
-box-shadow:0 4px 16px rgba(23,58,99,.16);font-family:'Microsoft YaHei',sans-serif;display:none;}
+box-shadow:0 4px 16px rgba(23,58,99,.16);font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;display:none;}
 .ai4s-panel .ai4s-t{font-size:12.5px;font-weight:700;color:#173a63;margin-bottom:6px;}
 .ai4s-panel .ai4s-x{font-size:12px;color:#333;line-height:1.65;max-height:96px;overflow:auto;
 background:#f7fafd;border:1px solid #e6edf7;border-radius:6px;padding:6px 8px;white-space:pre-wrap;}
@@ -495,7 +495,7 @@ def native_page_html(doc, page_num, highlight=None):
 *{{box-sizing:border-box;}}
 html,body{{margin:0;padding:0;background:#f5f7fa;}}
 #tip{{position:fixed;top:6px;left:8px;right:8px;z-index:8;background:rgba(43,87,154,.92);color:#fff;
-font:12px/1.5 'Microsoft YaHei',sans-serif;padding:4px 10px;border-radius:12px;}}
+font:12px/1.5 'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;padding:4px 10px;border-radius:12px;}}
 #page{{position:relative;width:{pw:.1f}px;height:{ph:.1f}px;background:#fff;margin:40px auto 18px;
 box-shadow:0 2px 10px rgba(0,0,0,.15);}}
 .col{{position:absolute;top:0;overflow:visible;}}
@@ -533,7 +533,7 @@ def bilingual_html(pairs):
         right.append('<p data-index="%d" data-i="%d">%s</p>' % (i, i, zh))
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 *{{box-sizing:border-box;}} html,body{{margin:0;height:100%;
-font-family:'Microsoft YaHei','Segoe UI',sans-serif;background:#f5f7fa;}}
+font-family:'Microsoft YaHei','Segoe UI','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;background:#f5f7fa;}}
 #wrap{{display:flex;height:100vh;}}
 .pane{{flex:1 1 50%;overflow-y:auto;padding:26px 22px 60px;}}
 #l{{background:#fbfcfe;border-right:2px solid #e3e8ef;}}
@@ -769,7 +769,7 @@ def citation_jump_html(forward_ctx, backward_ctx):
     fw = _esc(forward_ctx)
     bw = _esc(backward_ctx)
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-body{{font-family:"Microsoft YaHei",sans-serif;padding:16px;background:#f7fafd;}}
+body{{font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei",sans-serif;padding:16px;background:#f7fafd;}}
 .s{{margin-bottom:14px;padding:14px 16px;border-radius:8px;font-size:13.5px;line-height:1.8;color:#26313f;}}
 .f{{background:#eef5ff;border-left:4px solid #4A90E2;}}
 .b{{background:#eefbf1;border-left:4px solid #2e9d57;}}
@@ -800,9 +800,9 @@ def selectable_text_html(text, title="在该区域用鼠标划选要翻译的词
     if not body:
         body = '<p style="color:#888;">（该页无可提取文本，可能是扫描件）</p>'
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{{margin:0;background:#f7fafd;font-family:'Microsoft YaHei',sans-serif;}}
+html,body{{margin:0;background:#f7fafd;font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;}}
 #tip{{position:fixed;top:6px;left:8px;right:8px;background:rgba(43,87,154,.92);color:#fff;
-font:12px/1.5 'Microsoft YaHei',sans-serif;padding:4px 10px;border-radius:12px;z-index:8;}}
+font:12px/1.5 'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;padding:4px 10px;border-radius:12px;z-index:8;}}
 #box{{margin:38px 8px 12px;padding:12px 14px;background:#fff;border:1px solid #e3e8ef;
 border-radius:10px;}}
 #box p{{font-size:13.5px;line-height:1.85;color:#26313f;user-select:text;cursor:text;}}
@@ -1186,9 +1186,9 @@ _CITE_JUMP_JS = """
 
 _CITE_JUMP_CSS = """
 * {box-sizing:border-box;}
-html,body{margin:0;background:#f5f7fa;font-family:'Microsoft YaHei','Segoe UI',sans-serif;}
+html,body{margin:0;background:#f5f7fa;font-family:'Microsoft YaHei','Segoe UI','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;}
 #bar{position:fixed;top:6px;left:8px;right:8px;z-index:8;background:rgba(43,87,154,.92);color:#fff;
-font:12px/1.5 'Microsoft YaHei',sans-serif;padding:5px 12px;border-radius:12px;}
+font:12px/1.5 'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;padding:5px 12px;border-radius:12px;}
 #wrap{display:flex;gap:10px;padding:40px 8px 14px;height:720px;}
 .pane{flex:1 1 50%;overflow-y:auto;background:#fff;border:1px solid #e3e8ef;border-radius:10px;
 padding:10px 12px 24px;}

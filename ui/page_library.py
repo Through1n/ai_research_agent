@@ -587,7 +587,7 @@ def render(ctx):
                                 txt = str(diff_md)
                                 # 大模型不可用时 version_diff 会返回降级文案而非抛异常，
                                 # 这里显式降级提示 + 引导，避免评委看到一串技术错误摘要却无任何说明。
-                                if "暂不可用" in txt or txt.startswith("【"):
+                                if "暂不可用" in txt or "已降级为离线对比" in txt or txt.startswith("【"):
                                     st.warning("⚠️ 版本差异报告已降级：大模型暂不可用，未生成对比表格。")
                                     st.caption("🩺 可能原因：API Key 无效 / 额度不足 / 现场网络受限。")
                                     st.caption("🛠️ 怎么办：填入有效 Key 后重试；"

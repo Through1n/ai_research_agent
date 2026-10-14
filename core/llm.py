@@ -44,7 +44,7 @@ SDK_MAX_RETRIES = 0                 # 关掉 SDK 自带重试，避免与上面�
 FAIL_LOG_LIMIT = 2000               # 失败 prompt 落盘的最大字符数
 FAIL_LOG_PATH_HINT = "storage/llm_failures.log"
 CONFIG_LOG_PATH_HINT = "storage/llm_config_errors.log"   # 可预见配置错误单独分类，不污染失败统计
-RATE_LIMIT_RETRY_AFTER_CAP = 10.0   # 429 尊重 Retry-After，但封顶 10s，避免交互界面长睡
+RATE_LIMIT_RETRY_AFTER_CAP = 5.0    # 429 尊重 Retry-After，但封顶 5s，避免交互界面长睡（Round 13 演练：30s→15s）
 MAX_VISION_IMAGE_BYTES = 20 * 1024 * 1024   # 多模态图片大小上限（20MB），超过直接人话降级
 
 # 单次 LLM 调用的**总时长预算**（秒）：同一条链路（1 次立即尝试 + 最多 3 次退避重试）

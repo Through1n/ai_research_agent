@@ -40,9 +40,9 @@ try:
     from ui import desktop_chrome
 except Exception as e:                                   # pragma: no cover
     _log_error("加载依赖模块", e)
-    st.error("⚠️ 操作失败：加载依赖模块。依赖未安装或版本不匹配，应用无法启动。")
-    st.caption("🩺 可能原因：依赖未安装或版本不匹配（requirements.txt）。")
-    st.caption("🛠️ 怎么办：在项目环境执行 `pip install -r requirements.txt` 后重启。")
+    st.error("⚠️ 操作失败：加载依赖模块。" + ("storage/ 目录不可写（容器挂载属主不对）" if isinstance(e, OSError) else "依赖未安装或版本不匹配，应用无法启动。"))
+    st.caption("🩺 可能原因：① 依赖缺失或版本不匹配（requirements.txt）；② storage/ 不可写——常见于挂载卷属主为 root、而容器以 uid 10001 运行。")
+    st.caption("🛠️ 怎么办：① `pip install -r requirements.txt` 后重启；② 宿主机执行 `chown -R 10001:10001 ./storage ./logs` 后重启。")
     with st.expander("🔍 查看技术细节"):
         st.code(traceback.format_exc(limit=6))
     st.stop()

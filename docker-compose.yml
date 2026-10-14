@@ -84,16 +84,35 @@ services:
       #        否则 streamlit 会先把文件拦掉（详见 Dockerfile 该处注释）。
 
     # ---------- 数据持久化 ----------
-    # ⚠️ Linux 宿主：bind 挂载目录必须对容器内的 uid 10001 可写，否则应用会报
-    #    「存储目录不可写」（app.py:89）。首次启动前执行一次：
-    #      mkdir -p storage && sudo chown -R 10001:10001 storage
-    #    （Windows / macOS 的 Docker Desktop 无此问题）
+    # 【为什么默认用命名卷而不是 bind mount（Round 13 结论）
+    #  ⚠️ 其中「属主随 copy-up 复制」一条**未实测**（本机无 docker），见本段末尾】
+    #   storage/ 被 .gitignore（第 14 行）与 .dockerignore（第 25 行）双重排除
+    #   → 全新克隆的宿主机上**不存在**这个目录。
+    #   · 若写成 bind mount（`- ./storage:/app/storage`）：compose 会在宿主机新建一个
+    #     **root:root 755** 的空目录挂进容器，而容器内进程是 uid 10001（Dockerfile USER app）。
+    #     结果是 config.py:42 的 `_d.mkdir(parents=True, exist_ok=True)` 在建
+    #     storage/uploads 时抛 PermissionError → 发生在 import 期 → 被 app.py:34 的兜底捕获
+    #     后显示成「依赖未安装或版本不匹配」（真因是权限，文案会误导排查方向）。
+    #     这正是本轮要消灭的「评委打开时是空的会崩」——不是空的崩，是没权限崩。
+    #   · 命名卷：新建卷挂载时 Docker 会把镜像内该目录的内容**连同属主**复制进卷
+    #     （官方 volumes 文档的 copy-up 语义；postgres 官方镜像的 PGDATA 同样依赖它），
+    #     而 Dockerfile 第 4 层已把 /app/storage 及子目录预置并 chown 给 app:app。
+    #   ⚠️ 该 copy-up 是否保留属主**本机无 docker，未实测**。首次 up 后请按
+    #      docs/部署后自检清单.md §1.1 跑一次 `ls -ld` 校验，属主必须是 app。
+    #
+    # 【要改回 bind mount（想在宿主机直接看 library.json）时必做的三步】
+    #   1) 先把卷里的数据拷出来：docker compose cp ai4s-agent:/app/storage ./storage_backup
+    #   2) 把下面那行改成 `- ./storage:/app/storage`，并在宿主机执行：
+    #        mkdir -p storage && sudo chown -R 10001:10001 storage
+    #   3) docker compose up -d（旧命名卷随之闲置，确认无用后 `docker volume rm` 清理）
     volumes:
-      # 业务数据主目录：library.json / memory.json / user_profile.json
-      #   + storage/uploads（上传 PDF 落盘处，services/library.py:777）
-      #   + storage/chroma（向量库）
-      #   + 非桌面态下 config.py 的 LOGS_DIR 也指向 storage
-      - ./storage:/app/storage
+      # 业务数据主目录：library.json（services/state.py:90/95）
+      #   + memory.json / user_profile.json（core/memory.py:18/23/26）
+      #   + storage/uploads（上传 PDF 落盘，services/library.py:777；插图子目录 parsing.py:690）
+      #   + storage/chroma（向量库，services/state.py:68）
+      #   + storage/cache（引用数磁盘缓存，citation_quality.py:66/152）
+      #   + storage/llm_failures.log / llm_config_errors.log（core/llm.py:381-384）
+      - app_storage:/app/storage
       # ⚠️ 这里**故意不挂** $HOME/.cache/chroma：ONNX embedding 模型已在 Dockerfile 第 5 层
       #    构建期预热并烤进镜像（/home/app/.cache/chroma/onnx_models/all-MiniLM-L6-v2）。
       #    体积口径（实测，三个量别混着说）：
@@ -115,14 +134,16 @@ services:
       #    代价只是镜像大 166.42 MiB，可接受。
       #    将来若真要刷新卷里的模型，正确姿势是 docker compose down -v（连卷删）再 up，
       #    而不是"进容器删缓存让它重下"。
-      # 应用异常日志：app.py:15 LOG_DIR="logs"（相对 CWD /app）
-      # 用命名卷而非 bind：期望空命名卷复制时**连属主一起复制**（镜像里是 app:10001），
-      # 从而避免宿主目录权限不匹配时 app.py:22 的 makedirs/open 静默失败（异常日志全丢）。
-      # ⚠️ 但"复制是否保留属主"是按文档语义推断的，**未实测**！
-      #    首次 up 后请务必验证一次（属主必须是 app，不是 root）：
-      #      docker compose exec ai4s-agent ls -ld /app/logs
-      #    若发现是 root 属主（日志会静默丢失），改成下面这行 bind 并先 chown：
-      #      - ./logs:/app/logs        # 并先执行 sudo chown -R 10001:10001 storage logs
+      # 应用异常日志：app.py:15 LOG_DIR="logs"、ui/common.py:191-192（相对 CWD /app）
+      # ⚠️ 与 config.py:36 的 LOGS_DIR 不是一回事：非桌面态 LOGS_DIR = ROOT/"storage"，
+      #    但全仓 grep 下来**没有任何运行时代码读它**（只有 config.py 自己定义与 mkdir），
+      #    真正落盘的是上面这两个硬编码的 "logs"。所以这里挂 /app/logs 是对的。
+      # 用命名卷而非 bind，理由与 app_storage 相同（避免宿主机目录属主不匹配）。
+      # 镜像内 /app/logs 已由 Dockerfile 第 4 层预置一个 .keep 空文件并 chown app:app，
+      # 使命名卷 copy-up 时有内容可依；即便最坏情况回落到 root 属主，
+      # 后果也只是「异常日志丢失」（app.py:28 / ui/common.py:228 都静默吞掉写失败），
+      # 应用本身照常可用 —— 与 /app/storage 的致命性不同。
+      # 首次 up 后顺手校验：docker compose exec ai4s-agent ls -ld /app/logs（应为 app）
       - app_logs:/app/logs
 
     # ---------- 健康检查（与 Dockerfile HEALTHCHECK 一致的参数，便于 docker compose ps 观察）----------
@@ -152,4 +173,9 @@ services:
           memory: 4g
 
 volumes:
+  # 业务数据（文献库 / 向量库 / 记忆 / 上传件 / 失败日志）
+  # 镜像内 /app/storage 已预置种子文件与子目录并 chown app:app（Dockerfile 第 4 层），
+  # 新建卷挂载时由 Docker copy-up 复制进去，容器首次启动即可写。
+  app_storage:
+  # 应用异常日志（logs/errors.log）
   app_logs:

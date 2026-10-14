@@ -87,7 +87,7 @@ class Container:
     @staticmethod
     def _load_library():
         try:
-            return json.loads(LIBRARY_JSON.read_text(encoding="utf-8"))
+            return _ensure_lib_dict(json.loads(LIBRARY_JSON.read_text(encoding="utf-8")))
         except Exception:
             return {"papers": {}, "paper_order": [], "chunks": [], "likes": {}}
 
@@ -176,3 +176,15 @@ def get_container():
     if "container" not in st.session_state:
         st.session_state.container = Container()
     return st.session_state.container
+
+
+def _ensure_lib_dict(data):
+    """把 library.json 解析结果收成 dict。
+
+    容器的 try/except 只能兜住「读取失败 / JSON 非法」，兜不住「JSON 合法但类型不对」——
+    例如把 library.json 预置成 `[]`，read_text 与 json.loads 都会成功，接着 Container.__init__
+    的 lib.get("papers", {}) 抛 AttributeError，容器起不来。
+    """
+    if isinstance(data, dict):
+        return data
+    return {"papers": {}, "paper_order": [], "chunks": [], "likes": {}}

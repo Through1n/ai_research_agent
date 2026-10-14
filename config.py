@@ -120,12 +120,12 @@ LLM_BASE_URL = _env_str("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
 LLM_API_KEY = _env_str("ZHIPU_API_KEY", "") or _env_str("LLM_API_KEY", "")
 LLM_MODEL = _env_str("LLM_MODEL", "glm-4-flash")        # 文本/规划/函数调用
 VL_MODEL = _env_str("VL_MODEL", "glm-4v")               # 多模态/OCR
-LLM_TIMEOUT = _env_float("LLM_TIMEOUT", 90.0)
-# 单次 LLM 调用的**总时长预算**（秒）：同一条链路（1 次立即尝试 + 最多 3 次退避重试）
-# 累计耗时超过预算就放弃重试、直接走人话降级。只约束"要不要再试一次"，
-# **不裁剪任何单次调用的 LLM_TIMEOUT 窗口**，因此不影响正常成功请求。
-# 想让"最坏等待"也压到 45s，请把 LLM_TIMEOUT 一并设为 45（默认 90 是为慢生成留窗口）。
-LLM_RETRY_BUDGET_SEC = _env_float("LLM_RETRY_BUDGET_SEC", 45.0)
+LLM_TIMEOUT = _env_float("LLM_TIMEOUT", 45.0)
+# 单次 LLM 调用的**总时长预算**（秒）：1 次立即尝试 + 最多 3 次退避重试，累计超预算即降级。
+# **不裁剪单次 LLM_TIMEOUT 窗口**，不影响正常成功请求。演示保险（Round 13 网络降级演练）：
+# 默认 LLM_TIMEOUT=45 / 预算=20，失败最坏等待压到约 45s（原 90s），避免台上长时间转圈；
+# 现场想更严可设 LLM_TIMEOUT=25，慢生成仍可享 45s 窗口。
+LLM_RETRY_BUDGET_SEC = _env_float("LLM_RETRY_BUDGET_SEC", 20.0)
 
 # HuggingFace 国内镜像（供 chroma 默认 embedding 首次下载）
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")

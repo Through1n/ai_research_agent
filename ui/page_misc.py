@@ -18,7 +18,7 @@ _ARCH_DETAIL = """
 # 纯 HTML/CSS 分层架构图：不依赖任何外部 CDN，评审离线环境同样可渲染
 _ARCH_HTML = """
 <style>
-.arch{font-family:'Segoe UI','Microsoft YaHei',sans-serif;padding:14px;background:#f7f9fc;}
+.arch{font-family:'Segoe UI','Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;padding:14px;background:#f7f9fc;}
 .layer{border-radius:10px;padding:10px 14px;margin:0 auto 6px;max-width:880px;border:1.5px solid;}
 .lname{font-weight:700;font-size:14px;margin-bottom:6px;}
 .chips{display:flex;flex-wrap:wrap;gap:6px;}

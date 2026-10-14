@@ -76,7 +76,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 | 指标 | 实测值 | 来源 |
 |---|---|---|
 | 代码规模 | 39 个 Python 模块文件（core 10 / services 14 / tools 3 / ui 12）+ `app.py` + `config.py`，9 个交互页面 | 仓库现状（`ls core/*.py services/*.py tools/*.py ui/*.py` = 39） |
-| 注册工具数 | 21 个 Function Schema，全部接入 6 专家白名单（无孤岛） | `tools/definitions.py:355 build_registry` |
+| 注册工具数 | 21 个 Function Schema，全部接入 6 专家白名单（无孤岛） | `tools/definitions.py:371 build_registry` |
 | 541 页长文档入库 | 537 页提取 / **1305 chunks** / 25.32s（46.8ms/页）/ 峰值 RSS **893.1MB** / **0 失败页** / 进度回调 11 次 | Round 4 官方用例实测（`round4_worker9_official.md` §3） |
 | 内容级语义去重 | v1↔v7 相似度 **0.963228**（阈值 0.90）；完全改名后仍命中 **1.000000** | Round 4 官方用例 C 实测 |
 | 双栏判定准确率 | 单栏语料 1111 页误判 0%；真双栏 BERT 正文页 10/10 识别 | Round 3 修复实测 |
@@ -303,7 +303,7 @@ flowchart TD
 
 ### 4.2.2 工具注册与执行（`tools/registry.py` + `tools/definitions.py`）
 
-`Registry.register(name, description, JSON Schema, func)` → `openai_schema()`（`tools/registry.py:11-19`）生成 OpenAI 规范 `tools` 数组 → `execute(name, args, ctx)`（`:39-49`）统一把 `TypeError` 与其余 `Exception` 转成 `{"error": ...}` 字符串回灌，**不让工具异常打断 Agent 主循环**。当前由 `tools/definitions.py:355 build_registry` 注册 **21 个工具**（注册语句集中在 `:357-429`）。
+`Registry.register(name, description, JSON Schema, func)` → `openai_schema()`（`tools/registry.py:11-19`）生成 OpenAI 规范 `tools` 数组 → `execute(name, args, ctx)`（`:39-49`）统一把 `TypeError` 与其余 `Exception` 转成 `{"error": ...}` 字符串回灌，**不让工具异常打断 Agent 主循环**。当前由 `tools/definitions.py:371 build_registry` 注册 **21 个工具**（注册语句集中在 `:373-445`）。
 
 ### 4.2.3 Function Calling 闭环（Agent）
 
@@ -323,7 +323,7 @@ flowchart TD
 
 ### 4.2.5 Python 沙箱集成（`core/sandbox.py` + `tools/definitions.py`）
 
-`tools/definitions.py:309 t_run_python` → 先过 `core/sandbox.py:27 validate_code` 的 **AST 静态白名单**（14 个模块：numpy / pandas / scipy / sklearn / matplotlib / plotly / seaborn + 标准安全库；拦截 `eval/exec/open/compile/__import__` 与 `system/popen/socket` 等逃逸调用）→ 通过后写入临时文件 → `subprocess.run(timeout=25, encoding="utf-8", errors="replace")`（`tools/definitions.py:327`）→ stdout/stderr 安全截尾（`tools/definitions.py:296 _tail_text`）后返回。即"静态检查先于执行，违规不进子进程"。
+`tools/definitions.py:318 t_run_python` → 先过 `core/sandbox.py:27 validate_code` 的 **AST 静态白名单**（14 个模块：numpy / pandas / scipy / sklearn / matplotlib / plotly / seaborn + 标准安全库；拦截 `eval/exec/open/compile/__import__` 与 `system/popen/socket` 等逃逸调用）→ 通过后写入临时文件 → `subprocess.run(timeout=25, encoding="utf-8", errors="replace")`（`tools/definitions.py:336`）→ stdout/stderr 安全截尾（`tools/definitions.py:305 _tail_text`）后返回。即"静态检查先于执行，违规不进子进程"。
 
 ### 4.2.6 检索集成（`services/state.py` + `services/rag.py`）
 
@@ -539,7 +539,7 @@ Round 7 首次接真实 Key 时，这一"核心卖点"在实测中当场崩掉�
 
 ### 执行侧防护（Agent 工具）
 
-Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（numpy/pandas/sklearn/plotly 等可用，`eval/exec/open/subprocess/socket` 等拦截），独立子进程执行（超时 25s）、stdout/stderr 安全截尾（`tools/definitions.py:296 _tail_text`，修复了原 `[-3000]` 索引必崩缺陷）、UTF-8 编码兜底。输入侧 `check_injection`（`core/guardrails.py:121`）检测提示注入，输出侧 `redact_secrets`（`core/guardrails.py:130`）正则脱敏。
+Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（numpy/pandas/sklearn/plotly 等可用，`eval/exec/open/subprocess/socket` 等拦截），独立子进程执行（超时 25s）、stdout/stderr 安全截尾（`tools/definitions.py:305 _tail_text`，修复了原 `[-3000]` 索引必崩缺陷）、UTF-8 编码兜底。输入侧 `check_injection`（`core/guardrails.py:121`）检测提示注入，输出侧 `redact_secrets`（`core/guardrails.py:130`）正则脱敏。
 
 ### 4.7 依赖降级矩阵（稳定性设计）
 
@@ -560,7 +560,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 # 5. 核心功能实现（分模块 + 截图）
 
-> 本章 7 张截图摄于 2026-10-13 界面重构之后（采集时间可用 `ls -l --time-style=long-iso docs/shots/` 复核）。文件名与页面导航顺序不一一对应，各图下方已标注对应页面。
+> 本章 7 张截图摄于 2026-10-14 界面重构之后（采集时间可用 `ls -l --time-style=long-iso docs/shots/` 复核）。文件名与页面导航顺序不一一对应，各图下方已标注对应页面。
 
 **模块总览**（截图 ↔ 页面 ↔ 赛题大类）：
 
@@ -608,7 +608,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 **跨文献对比实测**（Transformer vs BERT 架构承袭与差异）：输出 **918 字 / 33.7s**，双向实体（Transformer 侧 + BERT 侧特征词）**均命中**，构成真正的对比而非只提到一方。
 
-## 5.3 版式阅读与智能翻译（模块③之一，Copilot 阅读侧）
+## 5.3 版式阅读与智能翻译（阅读侧，赛题大类 ①+⑤）
 
 ![版式阅读与翻译页](shots/p3.png)
 
@@ -704,7 +704,7 @@ docker compose down         # 停止
 |---|---|---|
 | `LLM_PROVIDER` | `zhipu` | zhipu/deepseek/qwen/openai/ollama |
 | `LLM_MODEL` / `VL_MODEL` | glm-4-flash / glm-4v | 文本 / 多模态模型 |
-| `LLM_TIMEOUT` | 90s | 单次调用超时 |
+| `LLM_TIMEOUT` | 45s（演示保险，可设 25） | 单次调用超时 |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1200 / 150 | 切块字符数与重叠（`config.py:134-135`） |
 | `DENSE_K` / `SPARSE_K` / `FINAL_K` | 12 / 12 / 6 | 两路召回与融合条数（`config.py:136-138`） |
 | `DEDUP_THRESHOLD` | 0.90 | 语义去重阈值（`config.py:139 DEDUP_THRESHOLD`） |
@@ -727,7 +727,7 @@ docker compose down         # 停止
 | 8 | `commit()` 未清洗文件名（含 `/` 时建路径失败） | `services/library.py:768 commit` | 正常文件名不受影响；建议 `os.path.basename()` + 非法字符替换 |
 | 9 | `st.components.v1.html` 已被 Streamlit 标记弃用 | `ui/common.py embed_html` | streamlit 1.63 正常工作；迁移 `st.iframe` 需回归高度自适应 JS |
 
-## 6.6 质量过程：八轮评审与修复闭环
+## 6.6 质量过程：Round 1–12 评审与修复闭环
 
 本项目在交付前经历了完整的"评审 → 修复 → 复审"过程，全部记录在 `docs/review/`（对评委开放）：
 
@@ -811,7 +811,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 - **代码**：39 个 Python 模块文件（core 10 / services 14 / tools 3 / ui 12）加 `app.py` 与 `config.py`；9 个交互页面；严格自上而下的四层依赖（`ui → services → core`、`tools → services`）。运行时数据集中在 `storage/`：其路径由 `config.py` 统一定义为 `STORAGE_DIR` 并在启动时自动建子目录，业务侧经该常量访问；此外有 **3 处直连落盘**：`core/llm.py`（失败日志与配置错误日志）、`services/citation_quality.py`（引用质量磁盘缓存）、`services/library.py`（上传目录与重建前备份）。
 - **能力面**：6 个专家、5 家可切换 Provider、7 张真实截图（`docs/shots/p0–p6`，一图一模块）。
 - **测试**：单元测试 18/18；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 59/59；另有官方数据集四用例脚本、图谱压测、截图重定向、桌面版校验等复跑脚本，全部留在 `scripts/` 供评委一键复核（附录 A）。
-- **过程留痕**：`docs/review/` 下累计 **45 份**历史过程报告（Round 1–11，含 `FINAL_SUMMARY.md`）；本轮 Round 12 的审计与部署报告 11 份另列于附录 B。每份报告都交代了"改了哪些文件、实测数字是什么、哪些没修"。
+- **过程留痕**：`docs/review/` 下累计 **45 份**历史过程报告（Round 1–11，含 `FINAL_SUMMARY.md`）；本轮 Round 12 的审计与部署报告 13 份另列于附录 B。每份报告都交代了"改了哪些文件、实测数字是什么、哪些没修"。
 - **交付物**：技术文档（本文档，8 章 + 3 附录）、README、演示视频脚本、在线演示部署指南、桌面版指南、团队信息与 Docker/桌面两条部署链路。
 
 ### 8.1.3 一句话总结

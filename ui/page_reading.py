@@ -1060,15 +1060,24 @@ def _resolve_doc(ctx, prefer=None):
     try:
         up = st.file_uploader("或临时上传 PDF", type=["pdf"], key="read_up")
         if up:
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-            try:
-                tmp.write(up.read())
-                path = tmp.name
-            finally:
+            # Streamlit 每次 rerun 都会重跑这里：无条件新建会产生一份永不删除的
+            # 临时 PDF（实测本机残留 143 个 / 1.1GB；Linux 容器里 /tmp 同理会涨满）。
+            # 按「文件名+字节数」复用本会话已落盘的同一个临时文件，把 N 次降到 1 次。
+            _sig = (getattr(up, "name", "") or "", int(getattr(up, "size", 0) or 0))
+            _cached = st.session_state.get("_read_up_tmp")
+            if _cached and _cached[0] == _sig and os.path.exists(_cached[1]):
+                path = _cached[1]
+            else:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
                 try:
-                    tmp.close()
-                except Exception:
-                    pass
+                    tmp.write(up.read())
+                    path = tmp.name
+                finally:
+                    try:
+                        tmp.close()
+                    except Exception:
+                        pass
+                st.session_state["_read_up_tmp"] = (_sig, path)
     except Exception as e:
         st.caption(f"（上传组件异常：{str(e)[:80]}）")
 

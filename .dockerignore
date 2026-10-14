@@ -8,6 +8,12 @@
 # 一旦被 COPY 进镜像，真实 Key 就随镜像分发出去了。注意只排除 secrets.toml，
 # 不要把整个 .streamlit/ 排除——config.toml 是运行时必需的（见下方说明）。
 .streamlit/secrets.toml
+# ↓ 反向放行：把「config.toml 必须进镜像」写成一条可执行规则，而不是只写在注释里。
+#   历史教训：.dockerignore 曾经排除过整个 .streamlit/，导致
+#   docs/在线演示部署指南.md §2.4 第 2 条据此断言「镜像里没有 config.toml」；
+#   该断言在当前的 .dockerignore 下**已经不成立**（本节只排除 secrets.toml）。
+#   加这条 negation 后，将来任何人误加 `.streamlit/` 也不会再把 config.toml 带走。
+!.streamlit/config.toml
 
 # ===== 版本控制 / CI =====
 .git/
@@ -55,15 +61,27 @@ node_modules/
 #       不要把这条重复写在这里 —— 曾出现过两处重复，易被误读成两条不同规则。
 
 # ===== 文档 / 截图 / 评审材料（不参与运行）=====
+# 运行期 grep 确认：ui/ services/ core/ tools/ app.py config.py 均无读取 docs/ 的代码
+# （只有注释里提到 docs/audit_report_*.md；README 是 services/extern.py 从
+#  raw.githubusercontent 现抓的，不读本地文件）→ 排除安全。
 docs/
-# ⚠️ 注意：pdf/ 与 demo_data/ 不能忽略
+
+# ⚠️ 下面五个目录**一个都不能加进来**，加了不会报错、只会静默丢功能，最难排查：
 #   · pdf/         —— config.py 的 PDF_DIR（非桌面态）= ROOT/pdf，
-#                     services/library.py:983 的「批量导入官方语料」从这里读盘
+#                     services/library.py:969 的 rebuild_from_pdf_dir（:983 取 PDF_DIR）
+#                     与 UI「🔧 一键重建文献库」都从这里读盘
 #   · demo_data/   —— config.py 的 DEMO_DIR + DEMO_PAPERS 演示语料
 #                     （ui/page_writing.py:105-106 读 demo_data/data.csv）
+#   · static/      —— mermaid.min.js（3.2MB），理由见上方 .streamlit 说明
+#   · lib/         —— services/graph.py:528-529 读 lib/vis-9.1.2/vis-network.min.js
+#                     与 vis-network.css 拼引用图谱的 HTML。丢了不会崩（page_graph.py:221
+#                     有兜底 → html="" 并提示"检查 lib/ 目录完整性"），但图谱可视化直接变空白，
+#                     只剩表格指标 —— 评审现场最难当场定位的一类故障。
+#   · scripts/     —— ui/page_reading.py:81 `from scripts._memory_probe import MemoryProbe`。
+#                     该文件被 try/except 包着（page_reading.py:77-84），丢了**不崩**，
+#                     但会静默退化成 _NullProbe（数值恒 0），版式阅读页的内存探针读数全废。
+#                     只有 964KB，别为这点体积冒险。
 #   （pdf/ 约 31MB 会打进镜像，属已知体积代价，见部署报告）
-#
-# ⚠️ static/ 不能忽略：mermaid.min.js（3.2MB），理由见上方 .streamlit 说明
 
 # ===== 系统 / 编辑器 =====
 .DS_Store
@@ -72,7 +90,12 @@ Thumbs.db
 .vscode/
 
 # ===== 其他非运行必需 =====
-tests/
+# ⚠️ tests/ **不再排除**（Round 13 改动，原为 `tests/`）。
+#   理由：容器内要能跑 `python -m unittest discover -s tests`
+#   （docs/部署后自检清单.md §1.4 的四条门禁之一），排掉就只能在宿主机跑。
+#   代价：44KB（只有 test_core.py 一个文件；tests/__pycache__ 由上方规则排除）。
+#   运行时代码不 import tests/，进镜像无任何副作用。
+#   不想付这 44KB 就把下面那行改回 `tests/`，代价是门禁第 2 条在容器内跑不了。
 version_history/
 LICENSE
 .workbuddy/

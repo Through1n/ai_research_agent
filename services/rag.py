@@ -880,14 +880,14 @@ def answer(ctx, question, use_rerank=False, history=None, source_filter=None,
         text, gnotes = sanitize_grouped_citations(text, index)
         issues.extend(gnotes)
         all_texts = [v.get("text", "") for v in index.values()]
-        unverified = find_unverified_numbers(text, all_texts) + find_unverified_codes(text, all_texts)
+        unverified = [] if _degraded else (find_unverified_numbers(text, all_texts) + find_unverified_codes(text, all_texts))
     else:
         texts = [c.get("text", "") for c in sources]
         text, cited, notes = sanitize_citations(text, len(sources), source_texts=texts)
         issues.extend(notes)
         if cited:
             sources = [sources[i] for i in cited]
-        unverified = find_unverified_numbers(text, texts) + find_unverified_codes(text, texts)
+        unverified = [] if _degraded else (find_unverified_numbers(text, texts) + find_unverified_codes(text, texts))
     # 越界角标已被 sanitize_citations 确定性修复（重定位/重编号/标注），
     # 对应的过期 range 报错从 issues 中移除，保留"引用整理"记录说明做过什么。
     issues = [i for i in issues if "超出有效来源范围" not in i]
