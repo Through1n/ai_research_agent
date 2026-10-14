@@ -559,7 +559,7 @@ var data={data};var nodes=new vis.DataSet(data.nodes),edges=new vis.DataSet(data
 new vis.Network(document.getElementById('net'),{{nodes:nodes,edges:edges}},{{
   nodes:{{shape:'dot',scaling:{{min:12,max:46}},font:{{size:13,face:'sans-serif'}}}},
   edges:{{smooth:{{type:'continuous'}},arrows:{{to:{{scaleFactor:.6}}}}}},
-  physics:{{barnesHut:{{gravitationalWeight:-3500,springLength:140}},stabilization:{{iterations:200}}}}
+  physics:{{barnesHut:{{gravitationalConstant:-3500,springLength:140}},stabilization:{{iterations:200}}}}
 }});
 </script></body></html>"""
 

@@ -226,7 +226,15 @@ async def main():
 
         R["js_errors_total"] = len(jserr)
         R["page_errors_total"] = len(pageerr)
+        # 全量留档：js_errors_after_nav 是"导航出现那一刻"的快照，会漏掉演示路径
+        # 阶段新增的错误（实测 2 条就是这么漏的，见 _probe_js_errors.py）。
+        R["js_errors_all"] = jserr[:20]
+        R["page_errors_all"] = pageerr[:20]
         log(f"[汇总] JS 错误 {len(jserr)} / 页面错误 {len(pageerr)}")
+        for e in jserr[:6]:
+            log(f"    [js] {e}")
+        for e in pageerr[:6]:
+            log(f"    [page] {e}")
 
         await b.close()
 
