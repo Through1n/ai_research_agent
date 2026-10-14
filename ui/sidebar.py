@@ -144,6 +144,48 @@ def _llm_ready(ctx) -> bool:
         return False
 
 
+def _pending_key_ready() -> bool:
+    """本回合前端刚提交、但 ``ctx.llm`` 尚未重建时的 Key 就绪信号。
+
+    背景（Round 16 实测缺陷）：``render()`` 在**开头**渲染「📌 尚未配置 API Key」
+    警告（按 ``ctx.llm.available`` 判断），而真正读 Key 输入框并调用
+    ``ctx.set_provider`` 的是后面的 ``_render_model_settings()``（折叠区内）——
+    同一回合内警告先渲染、Provider 后应用。于是用户刚把 Key 填进去的那一回合，
+    侧边栏会**同时**挂两条自相矛盾的提示：
+
+        📌 尚未配置 API Key：请在下方「接入方式」选择平台并填入 Key…
+        ✅ Key 已填入，模型通道就绪
+
+    实测（AppTest，无真实网络请求）：填入后当轮 sidebar warning=1 + success=1，
+    下一回合 warning 才消失。演示现场看到这两条并排，读起来就是"项目有 bug"。
+
+    修法：**不重排渲染顺序、不动 set_provider 的错误状态机**（那套 _prev 回补是
+    Round 12 F2/F7 的成果，碰它风险远大于收益），只在警告条件里纳入本回合的
+    待应用值。依据是 Streamlit 的既有语义：widget key 在脚本重跑**之前**就已
+    被前端更新，所以 ``st.session_state["key_input"]`` 在本回合开头就能读到
+    用户刚键入的内容。
+
+    覆盖两个分支：预设平台的 ``key_input`` 与自定义端点的
+    ``cu_base``/``cu_model``/``cu_key``/``cu_needs``。
+
+    已知边界（不构成矛盾、可接受）：用户**清空** Key 的那一回合，``ctx.llm``
+    还是上一回合的旧客户端（available=True），警告会晚一回合出现；但折叠区内
+    当回合就会显示「未填 Key：可使用内置演示数据」 caption，用户有即时反馈，
+    不会出现两条对立提示同时在场。
+    """
+    try:
+        ss = st.session_state
+        base = str(ss.get("cu_base", "") or "").strip()
+        model = str(ss.get("cu_model", "") or "").strip()
+        if base and model:                          # 自定义端点分支
+            if ss.get("cu_needs", True):            # 需要 Key 的端点：Key 也要有
+                return bool(str(ss.get("cu_key", "") or "").strip())
+            return True                             # 免密端点：端点+模型齐了即就绪
+        return bool(str(ss.get("key_input", "") or "").strip())   # 预设平台分支
+    except Exception:
+        return False
+
+
 def _render_model_settings(ctx):
     """模型接入 / 连通性测试 / 账号设置（供「⚙️ 模型接入与账号」折叠区调用）。
 
@@ -298,7 +340,9 @@ def render(ctx):
             st.caption(f"🕹️ {_ver}")
 
         # 未配置 Key 提示：桌面/浏览器一致（按 llm 实际可用性判断，而非仅桌面模式）
-        if not getattr(getattr(ctx, "llm", None), "available", False):
+        # 条件里的 _pending_key_ready() 见该函数文档：没有它，用户刚填入 Key 的
+        # 那一回合会同时看到「尚未配置」警告与「Key 已填入」成功提示（自相矛盾）。
+        if not (_llm_ready(ctx) or _pending_key_ready()):
             with st.container(border=True):
                 st.warning("📌 尚未配置 API Key：请在下方「接入方式」选择平台并填入 Key；"
                            "无 Key 也可使用底部按钮一键加载离线演示数据。")
