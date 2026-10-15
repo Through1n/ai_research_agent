@@ -23,7 +23,7 @@ from core.trace import Trace
 from core.router import (EXPERTS, route_detail, allowed_tools,
                          next_expert, describe_expert)
 from core.planner import (plan, replan, plan_strings, make_task,
-                          MAX_TASKS, MAX_REPLANS)
+                          MAX_TASKS, MAX_REPLANS, plan_health)
 from core.guardrails import check_injection, redact_secrets, ACADEMIC_SYSTEM
 from tools.definitions import build_registry
 
@@ -462,6 +462,16 @@ def run(ctx, goal, user="user_001", live=None, registry=None, on_token=None):
     trace.tasks = tasks
     _emit_plan(trace, tasks, "任务规划 Task Planning",
                f"共 {len(tasks)} 个子任务，按依赖顺序执行；失败将触发动态规划")
+    emit()
+
+    # 计划自评（确定性，无 LLM）：把"Agent 是否覆盖了自己的计划"写进 Trace，使规划质量可观测
+    try:
+        _health = plan_health(tasks, goal)
+        if _health:
+            trace.plan_health = _health
+            trace.thought("📐 计划自评：" + "；".join(_health.get("notes") or [])[:240])
+    except Exception:
+        pass
     emit()
 
     reg = registry or build_registry()

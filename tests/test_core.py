@@ -274,5 +274,64 @@ class TestRecommendationLogic(unittest.TestCase):
         self.assertEqual(ps._likes_of(ctx, "2510.1"), -2)  # u1、u2 各 -1
 
 
+class TestPlanValidation(unittest.TestCase):
+    """planner.validate_plan：把病态依赖图收敛为诚实 DAG（确定性、无 LLM）。"""
+
+    def test_dedup_ids_and_drop_dangling(self):
+        from core.planner import validate_plan, make_task
+        t1 = make_task("T1", "a")
+        t2 = make_task("T1", "b", depends=["T1"])   # 重复 id + 合法后向依赖
+        t3 = make_task("T2", "c", depends=["T9"])   # 悬挂依赖
+        out = validate_plan([t1, t2, t3])
+        ids = [t["id"] for t in out]
+        self.assertEqual(len(set(ids)), len(ids), "id 必须去重")
+        self.assertIn("T1", ids)
+        self.assertIn("T1#1", ids)
+        self.assertEqual(out[1]["id"], "T1#1")
+        self.assertEqual(out[1]["depends"], ["T1"])   # 合法后向依赖保留
+        self.assertEqual(out[2]["depends"], [])        # 悬挂依赖被删除
+
+    def test_forward_and_cycle_removed(self):
+        from core.planner import validate_plan, make_task
+        a = make_task("A", "a", depends=["B"])   # 前向依赖
+        b = make_task("B", "b", depends=["A"])   # 与 A 成环
+        out = validate_plan([a, b])
+        self.assertEqual(out[0]["depends"], [])   # A→B 前向边被删（破环）
+        self.assertEqual(out[1]["depends"], ["A"])  # B→A 合法后向边保留 → 干净 DAG
+
+    def test_wellformed_unchanged(self):
+        from core.planner import validate_plan, make_task
+        tasks = [make_task("T1", "a"),
+                 make_task("T2", "b", depends=["T1"]),
+                 make_task("T3", "c", depends=["T2"])]
+        out = validate_plan(tasks)
+        self.assertEqual([t["id"] for t in out], ["T1", "T2", "T3"])
+        self.assertEqual(out[2]["depends"], ["T2"])
+        self.assertEqual(out[0]["depends"], [])
+
+
+class TestPlanHealth(unittest.TestCase):
+    """planner.plan_health：确定性计划自评（阶段覆盖 / 依赖深度 / 判定）。"""
+
+    def test_health_reports_phases(self):
+        from core.planner import plan_health, make_task
+        tasks = [make_task("T1", "检索并抓取文献", "search_literature"),
+                 make_task("T2", "跨源比对与推理", "multi_paper", depends=["T1"]),
+                 make_task("T3", "生成带来源标注的答案", "", depends=["T2"])]
+        h = plan_health(tasks, "对比两篇论文的方法")
+        self.assertEqual(h["n_steps"], 3)
+        self.assertIn("检索", h["phases"])
+        self.assertIn("分析", h["phases"])
+        self.assertEqual(h["dep_depth"], 2)
+        self.assertEqual(h["verdict"], "ok")
+        self.assertTrue(h["notes"])
+
+    def test_thin_plan_flagged(self):
+        from core.planner import plan_health, make_task
+        h = plan_health([make_task("T1", "随便做点什么")], "目标")
+        self.assertEqual(h["verdict"], "thin")
+        self.assertEqual(h["n_steps"], 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
