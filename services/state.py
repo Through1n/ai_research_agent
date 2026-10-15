@@ -212,7 +212,7 @@ class Container:
         return get_embed_fn()
 
     def embed(self, texts):
-        vecs = get_embed_fn()(texts)
+        vecs = _embed_cached(tuple(texts))  # 重复 embed 命中记忆缓存（见文件末尾，语义不变）
         return [np.asarray(v).tolist() for v in vecs]
 
     def rebuild_bm25(self):
@@ -223,7 +223,7 @@ class Container:
         from rank_bm25 import BM25Plus
         if not self.chunks:
             return None
-        corpus = [tokenize(c["text"]) for c in self.chunks]
+        corpus = [_tokenize_cached_list(c["text"]) for c in self.chunks]  # LRU 分词缓存（见文件末尾）
         return BM25Plus(corpus)
 
     def _cur_provider(self):
@@ -301,3 +301,49 @@ def _ensure_lib_dict(data):
     if isinstance(data, dict):
         return data
     return {"papers": {}, "paper_order": [], "chunks": [], "likes": {}}
+
+
+# ---------- 热点函数缓存（分词 LRU / embed 记忆） ----------
+# 追加于文件末尾：上方各符号（含 docs/technical_doc.md 引用的 _build_bm25:221、
+# embed:214、get_container:287 等）行号全部不变，文档引用零漂移。
+# 两条缓存都遵守「入站存不可变快照、出站复制」纪律：调用方就地改写永不污染缓存。
+from functools import lru_cache  # noqa: E402  置于末尾避免打乱上方行号
+
+
+@lru_cache(maxsize=8192)
+def _tokenize_cached(text):
+    """分词 LRU（_build_bm25 热点：每个 chunk 调一次，重建即全量重算）。
+
+    存不可变 tuple；出站经 _tokenize_cached_list 复制成 list 后才交给调用方，
+    规避「lru_cache 返回共享可变对象」的污染坑。语义与 tokenize 逐行等价。
+    """
+    return tuple(tokenize(text))
+
+
+def _tokenize_cached_list(text):
+    """_build_bm25 调用点：命中 LRU 返回 list 副本；未命中原算法实算后回填。"""
+    return list(_tokenize_cached(text))
+
+
+_EMBED_MEMO = {}          # 文本 tuple -> 向量列表（embed 记忆缓存，深拷贝进出防污染）
+_EMBED_MEMO_LOCK = threading.Lock()
+_EMBED_MEMO_MAX = 512
+
+
+def _embed_cached(key):
+    """embed 记忆缓存：命中返回深拷贝；未命中才调 get_embed_fn()（阻塞/抛错语义不变）。
+
+    同一批文本被重复 embed（重复提问、Streamlit 重跑、多会话共享）时省掉整次
+    ONNX 推理；embedding 模型是进程内单例，同文本结果确定，缓存不影响正确性。
+    """
+    with _EMBED_MEMO_LOCK:
+        hit = _EMBED_MEMO.get(key)
+    if hit is not None:
+        return [list(v) for v in hit]
+    vecs = get_embed_fn()(list(key))
+    out = [list(np.asarray(v).tolist()) for v in vecs]
+    with _EMBED_MEMO_LOCK:
+        if len(_EMBED_MEMO) >= _EMBED_MEMO_MAX and key not in _EMBED_MEMO:
+            _EMBED_MEMO.pop(next(iter(_EMBED_MEMO)), None)   # FIFO 淘汰最旧，防无界增长
+        _EMBED_MEMO[key] = [list(v) for v in out]
+    return out

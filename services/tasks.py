@@ -22,7 +22,8 @@ import uuid
 _MAX_PARALLEL = 2
 _LOCK = threading.Lock()
 _TASKS = {}          # task_id -> dict（见 submit 注释）
-_WAKER = threading.Event()   # 排队任务被唤醒用（当前实现用轮询兜底，事件仅加速）
+_WAKER = threading.Condition()   # 排队任务唤醒：完成即 notify_all（0.5s 超时兜底防丢通知）
+_TASK_KEEP = 60      # 终态任务保留上限：超出淘汰最旧，防 _TASKS 随会话无限增长
 
 
 def submit(name, fn, kind="generic", goal=""):
@@ -45,6 +46,7 @@ def submit(name, fn, kind="generic", goal=""):
     with _LOCK:
         running = sum(1 for t in _TASKS.values() if t["state"] == "running")
         _TASKS[tid] = item
+        _prune_locked()
     if running < _MAX_PARALLEL:
         _spawn(tid, fn)
     else:
@@ -52,19 +54,37 @@ def submit(name, fn, kind="generic", goal=""):
     return tid
 
 
+def _prune_locked():
+    """淘汰最旧的终态（done/error）任务，保留最近 _TASK_KEEP 条；运行中/排队中不淘汰。
+
+    _TASKS 此前的增长只受会话时长约束（长会话 + 反复跑 Agent 会持续堆积已完成条目）。
+    UI 面板只渲染 snapshot(limit=20)，降级演练脚本也是「提交后立即按 id 查询」，
+    保留 60 条终态历史不影响任何现有调用方，只是给内存上一条界。
+    """
+    terminal = [t for t in _TASKS.values() if t["state"] in ("done", "error")]
+    for t in terminal[:max(0, len(terminal) - _TASK_KEEP)]:
+        _TASKS.pop(t["id"], None)
+
+
 def _spawn(tid, fn):
     threading.Thread(target=_worker, args=(tid, fn), daemon=True).start()
 
 
 def _queued_runner(tid, fn):
-    """排队等并发空位；每 0.5s 检查一次（任务量级为个位数，轮询足够）。"""
+    """排队等并发空位；完成事件即时唤醒（0.5s 超时兜底，防通知丢失）。
+
+    改前：_worker 完成时只 _WAKER.set()，没有任何人在等——排队者实际靠
+    每 0.5s 轮询兜底，任务完成后最多多等 0.5s 才启动。改后：_worker 的
+    finally 里 notify_all，排队者被即时唤醒；超时兜底保证不漏唤醒。
+    """
     while True:
         with _LOCK:
             running = sum(1 for t in _TASKS.values() if t["state"] == "running")
         if running < _MAX_PARALLEL:
             _spawn(tid, fn)
             return
-        time.sleep(0.5)
+        with _WAKER:
+            _WAKER.wait(timeout=0.5)
 
 
 def _worker(tid, fn):
@@ -108,7 +128,8 @@ def _worker(tid, fn):
                 t["stage"] = "执行失败"
                 t["ended"] = time.time()
     finally:
-        _WAKER.set()
+        with _WAKER:
+            _WAKER.notify_all()
 
 
 def get(tid):
