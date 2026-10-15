@@ -1912,9 +1912,18 @@ _EVIDENCE_POINTER_RE = re.compile(
     r"|\b(?:as\s+shown\s+in|as\s+reported\s+in|see|per)\s+"
     r"(?:table|figure|fig\.?|section|algorithm)\b"
     r"|[见表]\s*\d")
-# 引用格式甄别（方括号族）
-_CITE_GROUP_RE = re.compile(r"\[\s*\d{1,4}\s*,\s*\d{1,4}\s*\]")     # [1, 2]
-_CITE_ADJACENT_RE = re.compile(r"\[\s*\d{1,4}\s*\]\s*\[\s*\d{1,4}\s*\]")  # [1][2]
+# 引用角标（半角 [n] 与全角 【n】 都认）——本系统规范角标为**全角【n】**
+# （core/agent.py:677 输出侧校验用的是 r"【\d+】|\[\d+\]"，两种都认；
+# SAFETY_ADDENDUM / ACADEMIC_SYSTEM 也规定用【n】，Agent 链路真实产出即全角）。
+# 既有 _CITE_MARK_RE（writing.py:85）只认半角，且被 _sanitize_citations(963) 与
+# validate_reference_whitelist(1023) 复用——**不改它**（保持既有行为与计数），
+# 本节审计统一改用更宽的 _CITE_MARK_ANY_RE；findall 返回形状一致（list[str]），
+# 调用处 [int(x) for x in ...] 无需改动。
+_CITE_MARK_ANY_RE = re.compile(r"[【\[](\d+)[】\]]")
+# 引用格式甄别（半角方括号族 + 全角方头括号族）
+_CITE_GROUP_RE = re.compile(r"[【\[]\s*\d{1,4}\s*,\s*\d{1,4}\s*[】\]]")     # [1, 2] / 【1, 2】
+_CITE_ADJACENT_RE = re.compile(r"[【\[]\s*\d{1,4}\s*[】\]]\s*[【\[]\s*\d{1,4}\s*[】\]]")  # [1][2] / 【1】【2】
+# _sanitize_citations 只把半角越界角标打码成 [?]（它复用 _CITE_MARK_RE），故此处只认半角
 _CITE_REMOVED_RE = re.compile(r"\[\s*\?\s*\]")                       # _sanitize_citations 打码后的 [?]
 # 自一致性：缩略语定义 "RAG (Retrieval-Augmented Generation)"
 _ACRONYM_DEF_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})\s*[（(]\s*([^()（）]{2,90})\s*[)）]")
@@ -1989,8 +1998,8 @@ def claim_evidence_audit(text, refs_list=None, max_items=40, max_lines=4000):
     「引用是不是真的」，本审计回答的是「**论断有没有证据**」——两者互补。
 
     判定规则（确定性，保守优先，宁漏勿错杀）：
-    - ``supported``：单元内含白名单内引用角标 ``[n]``（无白名单时任一 ``[n]`` 即可），
-      或含 Table/Figure/Equation/Section 等**证据指针**；
+    - ``supported``：单元内含白名单内引用角标（半角 ``[n]`` 与全角 ``【n】`` 都认，
+      无白名单时任一角标即可），或含 Table/Figure/Equation/Section 等**证据指针**；
     - ``bad_citation``（error）：有角标但全部越界（白名单场景下的幻觉角标）；
     - ``needs_evidence``（warning）：命中论断线索（"results show"/"existing
       systems"/"实验表明"/"显著提升"…）但既无引用也无证据指针 → **待补依据**；
@@ -2028,7 +2037,7 @@ def claim_evidence_audit(text, refs_list=None, max_items=40, max_lines=4000):
             unit = _BULLET_PREFIX_RE.sub("", line).strip()
             if len(unit) < 4:
                 continue
-            cites = [int(x) for x in _CITE_MARK_RE.findall(unit)]
+            cites = [int(x) for x in _CITE_MARK_ANY_RE.findall(unit)]
             in_range = [n for n in cites if n_refs == 0 or 1 <= n <= n_refs]
             out_range = [n for n in cites if n not in in_range]
             result["n_out_of_range"] += len(out_range)
@@ -2094,12 +2103,14 @@ def citation_correspondence_audit(text, refs_list):
     """引用-参考文献双向核对：文中角标 ↔ 文献清单必须一一对应（Paperpal 式）。
 
     借鉴 Paperpal Manuscript Checker 的 "Citation-Reference Correspondence"
-    （消除 in-text citation 与 reference list 的漏引/多引/格式混用）。检查四项：
-    1. **越界角标**（error）：正文出现白名单范围之外的 ``[n]``；
+    （消除 in-text citation 与 reference list 的漏引/多引/格式混用）。检查四项
+    （角标半角 ``[n]`` 与全角 ``【n】`` 都识别——本系统规范角标为全角）：
+    1. **越界角标**（error）：正文出现白名单范围之外的角标；
     2. **漏引文献**（warning）：白名单里存在但正文从未引用的条目——读者会问
        「列了为什么不引」，要么补引用要么从清单移除；
-    3. **引用格式混用**（warning）：``[n]`` / ``[n, m]`` / ``[n][m]`` 多种风格
-       混用（期刊格式一致性问题，Paperpal Formatting inconsistencies 同款）；
+    3. **引用格式混用**（warning）：``[n]``/``【n】`` 逐条、``[n, m]``/``【n, m】``
+       成组、``[n][m]``/``【n】【n】`` 并排多种风格混用（期刊格式一致性问题，
+       Paperpal Formatting inconsistencies 同款）；
     4. **被清洗的幻觉角标**（info）：正文残留的 ``[?]`` 数量——
        :func:`_sanitize_citations` 曾把越界角标打码的地方，必须人工复核。
 
@@ -2114,7 +2125,7 @@ def citation_correspondence_audit(text, refs_list):
         n_refs = len(refs)
         result["n_refs"] = n_refs
         body = _body_without_references(text)
-        marks = [int(x) for x in _CITE_MARK_RE.findall(body or "")]
+        marks = [int(x) for x in _CITE_MARK_ANY_RE.findall(body or "")]
         cited = sorted(set(marks))
         result["cited_ids"] = cited
         result["n_cited"] = len(cited)
@@ -2127,11 +2138,11 @@ def citation_correspondence_audit(text, refs_list):
                     title = str(r.get("title") or r.get("raw") or "") if isinstance(r, dict) else str(r)
                     uncited.append({"id": i, "title": title[:120]})
             result["uncited_refs"] = uncited
-        styles = ["方括号 [n]"] if marks else []
+        styles = ["逐条引用 [n]／【n】"] if marks else []
         if _CITE_GROUP_RE.search(body or ""):
-            styles.append("成组 [n, m]")
+            styles.append("成组引用 [n, m]／【n, m】")
         if _CITE_ADJACENT_RE.search(body or ""):
-            styles.append("并排 [n][m]")
+            styles.append("并排引用 [n][m]／【n】【n】")
         result["styles"] = styles
         result["mixed_style"] = len(styles) > 1
         result["removed_marks"] = len(_CITE_REMOVED_RE.findall(body or ""))
@@ -2175,6 +2186,9 @@ def consistency_audit(text, required_sections=None):
     全部确定性检查，零 LLM。
 
     检查项与严重度：
+    - 标题识别支持四种写法：``## Markdown 标题`` / ``**加粗**`` 独行 /
+      编号行（``1. Introduction``）/ 裸行章节名（``Introduction``）；
+      后两种与必需章节名严格相等才认，正文句子不会误判；
     - ``section_missing``（error）：缺少必需章节（默认 :data:`DEFAULT_REQUIRED_SECTIONS`，
       与本模块大纲 prompt 的固定章节一致；传 ``required_sections=[]`` 可关闭）；
     - ``section_order``（warning）：必需章节出现顺序与预期不符；
@@ -2200,15 +2214,23 @@ def consistency_audit(text, required_sections=None):
         req_norm = [_norm_heading(s) for s in required]
 
         # ---- 1) 收集标题 ----
+        # 支持四种标题写法：``## Markdown 标题``、``**加粗**`` 独行、
+        # 编号行（``1. Introduction`` / ``2) Method``）、裸行章节名（``Introduction``）。
+        # 后两种与必需章节名**严格相等**才认——正文句子（"Introduction is the
+        # first section."）归一化后不等于任何章节名，不会误判成标题。
         headings = []
         for ln, raw in enumerate(src.splitlines(), 1):
             m = _HEADING_LINE_RE.match(raw.rstrip())
-            if not m:
-                continue
-            title = (m.group("md") or m.group("bold") or "").strip(" *:")
+            if m:
+                title = (m.group("md") or m.group("bold") or "").strip(" *:")
+            else:
+                bnorm = _norm_heading(raw)
+                title = ""
+                if bnorm and any(bnorm == rn for rn in req_norm if rn):
+                    title = _BULLET_PREFIX_RE.sub("", raw.rstrip()).strip(" *:：")[:80]
             if not title:
                 continue
-            mnum = re.match(r"^\s*(\d+)(?:\.\d+)*[.)]?\s", title)
+            mnum = re.match(r"^\s*(?:#{1,6}\s*|\*\*\s*)?(\d+)(?:\.\d+)*[.)]?\s", raw)
             headings.append({"line_no": ln, "title": title[:80],
                              "norm": _norm_heading(title),
                              "num": int(mnum.group(1)) if mnum else None})
@@ -2341,7 +2363,7 @@ def paragraph_skeleton(section_title, bullets, refs_list=None, max_units=10):
     claim-evidence 对齐在**写作前**就生效（没有证据的单元在骨架上就带着
     「待补依据」标记）。
 
-    槽位规则：
+    槽位规则（角标半角 ``[n]`` 与全角 ``【n】`` 都识别）：
     - **论点句**：要点原文（已去列表符号）；
     - **证据**：要点里的 ``[n]`` 角标映射为白名单文献条目（:func:`_ref_line`
       同源渲染）；越界角标显式标注「按幻觉处理」；无角标 → 「待补依据」；
@@ -2389,7 +2411,7 @@ def paragraph_skeleton(section_title, bullets, refs_list=None, max_units=10):
                  ""]
         n_with_evidence = 0
         for i, item in enumerate(items):
-            cites = [int(x) for x in _CITE_MARK_RE.findall(item)]
+            cites = [int(x) for x in _CITE_MARK_ANY_RE.findall(item)]
             ev_lines, has_ev, pending = [], False, False
             for n in cites:
                 if 1 <= n <= n_refs:

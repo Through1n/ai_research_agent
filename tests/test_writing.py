@@ -268,5 +268,98 @@ class TestWritingQualityAudit(unittest.TestCase):
         self.assertTrue(r["report"])
 
 
+class TestFullWidthCitations(unittest.TestCase):
+    """全角【n】角标兼容（系统规范角标为全角，core/agent.py:677 两种都认的先例）。
+
+    独立验证曾抓到：只用半角正则在真实 Agent 文本上整套审计假阳性。
+    """
+
+    def test_fullwidth_cited_claim_supported(self):
+        r = writing.claim_evidence_audit("该方法取得 28.4 BLEU【1】，显著优于基线【2】。\n", REFS)
+        self.assertEqual(r["n_supported"], 1)
+        self.assertEqual(r["n_needs_evidence"], 0)
+        self.assertTrue(r["ok"])
+
+    def test_fullwidth_out_of_range_is_error(self):
+        r = writing.claim_evidence_audit("结论见【9】，越界角标。\n", REFS)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["n_bad_citation"], 1)            # 原来误判 background、抓不到
+
+    def test_fullwidth_correspondence_counts(self):
+        t = "该方法取得 28.4 BLEU【1】，显著优于基线【2】。\n参考文献\n[1] Vaswani 2017.\n[2] Devlin 2019."
+        r = writing.citation_correspondence_audit(t, ["Vaswani 2017.", "Devlin 2019."])
+        self.assertEqual(r["cited_ids"], [1, 2])
+        self.assertEqual(r["n_cited"], 2)
+        self.assertEqual(r["uncited_refs"], [])              # 不再假阳性「漏引 2 条」
+        self.assertTrue(r["ok"])
+        self.assertIn("正文实际引用 2 条", r["report"])
+
+    def test_fullwidth_out_of_range_correspondence(self):
+        r = writing.citation_correspondence_audit("结论见【9】。\n", REFS)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["out_of_range"], [9])
+
+    def test_mixed_width_both_recognized(self):
+        t = "半角引用 [1] 与全角引用【2】并存，混排【3】。\n"
+        r = writing.citation_correspondence_audit(t, REFS)
+        self.assertEqual(r["cited_ids"], [1, 2, 3])
+        r2 = writing.claim_evidence_audit(t, REFS)
+        self.assertEqual(r2["n_supported"], 1)
+        self.assertTrue(r2["ok"])
+
+    def test_fullwidth_group_and_adjacent_styles(self):
+        r = writing.citation_correspondence_audit("前人工作【1, 2】与 [3][1]。\n", REFS)
+        self.assertTrue(r["mixed_style"])
+        self.assertTrue(any("成组" in s for s in r["styles"]))
+        self.assertTrue(any("并排" in s for s in r["styles"]))
+
+    def test_fullwidth_skeleton_evidence(self):
+        r = writing.paragraph_skeleton("引言", ["现有系统召回率下降【1】。"], REFS)
+        self.assertEqual(r["n_with_evidence"], 1)
+        self.assertEqual(r["n_pending"], 0)
+        self.assertIn("Dense Passage Retrieval", r["markdown"])
+
+    def test_fullwidth_out_of_range_skeleton(self):
+        r = writing.paragraph_skeleton("引言", ["某结论见【9】。"], REFS)
+        self.assertEqual(r["n_with_evidence"], 0)
+        self.assertIn("超出白名单范围", r["markdown"])
+
+    def test_legacy_halfwidth_behavior_unchanged(self):
+        # _sanitize_citations / validate_reference_whitelist 仍走半角 _CITE_MARK_RE
+        s, k = writing._sanitize_citations("见 [5] 与 [1]。", {1})
+        self.assertEqual(s, "见 [?] 与 [1]。")
+        self.assertEqual(k, 1)
+
+
+class TestBareLineHeadings(unittest.TestCase):
+    """consistency_audit 裸行/编号行章节名识别（严格相等，正文句子不误判）。"""
+
+    def test_bare_line_sections_recognized(self):
+        t = ("Title\nAbstract\nIntroduction\nRelated Work\nMethod\n"
+             "Experiments\nThreats to Validity\nConclusion\n")
+        r = writing.consistency_audit(t)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["missing_sections"], [])
+
+    def test_numbered_bare_sections_recognized(self):
+        t = "1. Introduction\n2. Method\n3. Experiments\n"
+        r = writing.consistency_audit(t)
+        for name in ("Introduction", "Method", "Experiments"):
+            self.assertNotIn(name, r["missing_sections"])
+
+    def test_sentence_line_not_treated_as_heading(self):
+        t = "Introduction is the first section of the paper.\nMethod is described below.\n"
+        r = writing.consistency_audit(t)
+        self.assertIn("Introduction", r["missing_sections"])
+        self.assertIn("Method", r["missing_sections"])
+
+    def test_mixed_heading_formats(self):
+        t = ("# Title\n## Abstract\n**Introduction**\n1. Related Work\n"
+             "Method\n## Experiments\n## Threats to Validity\n## Conclusion\n")
+        r = writing.consistency_audit(t)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["missing_sections"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
