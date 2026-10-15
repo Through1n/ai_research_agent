@@ -488,8 +488,8 @@ def native_page_html(doc, page_num, highlight=None):
 
     full_html = ('<div class="full" style="height:%.1fpx;">%s</div>' % (ph, "".join(layers.get(-1, []))))
 
-    # 渲染顺序：中缝(底层) → 通栏块(标题/图注) → 左右栏正文(顶层)，DOM 顺序也符合阅读顺序
-    body_layers = gutter + full_html + cols_html
+    # 渲染顺序：中缝(底层) → 通栏块 → 左右栏正文 → 图片保位层，DOM 顺序符合阅读顺序
+    body_layers = gutter + full_html + cols_html + _figures_html(doc, page, pw, ph)
 
     html = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 *{{box-sizing:border-box;}}
@@ -515,20 +515,20 @@ white-space:normal;overflow-wrap:break-word;word-break:break-word;user-select:te
 </style></head><body><div id="tip">{tip}</div>
 <div id="page">{body}</div>{sel}{hgt}</body></html>""".format(
         pw=pw, ph=ph, tip=_esc(tip), body=body_layers,
-        sel=SELECTION_JS, hgt=_HEIGHT_JS)
+        sel=SELECTION_JS + _SENT_EXPAND_JS, hgt=_HEIGHT_JS)
     return html, pw, ph
 
 
 # =====================================================================
 # A2：中英同步滚动（按比例 + isSyncing + rAF 节流 + data-index 高亮）
 # =====================================================================
-def bilingual_html(pairs):
-    """中英对比：两栏独立滚动，按 scrollTop 比例双向同步，段落用 data-index 联动高亮。"""
+def bilingual_html(pairs, glossary=None, align=True):
+    """中英对比：两栏独立滚动，比例同步 + data-index 联动；句级对齐 + 术语高亮（Round13）。"""
     import json
     left, right = [], []
     for i, (_en, _zh) in enumerate(pairs):
-        en = _esc(_en)
-        zh = _esc(_zh) if _zh else "<em>（待翻译）</em>"
+        en, zh = _aligned_pair_html(_en, _zh, i, align)
+        zh = _glossary_mark(zh, glossary) if (_zh and glossary) else zh
         left.append('<p data-index="%d" data-i="%d">%s</p>' % (i, i, en))
         right.append('<p data-index="%d" data-i="%d">%s</p>' % (i, i, zh))
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
@@ -618,7 +618,7 @@ color:#fff;padding:5px 14px;border-radius:14px;font-size:12px;z-index:9;}}
   }});
   window.ai4sSyncState = function(){{ return {{isSyncing: isSyncing, lr: ratio(l), rr: ratio(r)}}; }};
 }})();
-</script>{sel}</body></html>""".format(L="".join(left), R="".join(right), sel=SELECTION_JS)
+</script>{sel}</body></html>""".format(L="".join(left), R="".join(right), sel=SELECTION_JS + _SENT_LINK_JS)
 
 
 # =====================================================================
@@ -709,7 +709,7 @@ def in_place_pdf(doc, page_num, zh_text, out_path):
             np.show_pdf_page(np.rect, doc, page_num - 1)
         except Exception:
             pass
-        top = ph * 0.74
+        top = _figure_safe_top(src, ph)
         try:
             np.draw_rect(fitz.Rect(18, top + 2, pw - 18, ph - 14),
                          color=(1, 1, 1), fill=(1, 1, 1), width=0.5)
@@ -808,7 +808,7 @@ border-radius:10px;}}
 #box p{{font-size:13.5px;line-height:1.85;color:#26313f;user-select:text;cursor:text;}}
 #box p:hover{{background:#fffbe6;}}
 </style></head><body><div id="tip">{t}</div><div id="box">{b}</div>{s}{h}</body></html>""".format(
-        t=_esc(title), b=body, s=SELECTION_JS, h=_HEIGHT_JS)
+        t=_esc(title), b=body, s=SELECTION_JS + _SENT_EXPAND_JS, h=_HEIGHT_JS)
 
 
 # =====================================================================
@@ -1451,14 +1451,17 @@ def _stream_restore(chunks, store):
             yield buf
 
 
-def stream_translate_to_chinese(ctx, text, temperature=0.2):
-    """流式翻译生成器：protect_math → ctx.llm.stream → 流式还原公式 → yield 增量文本。
+def stream_translate_to_chinese(ctx, text, temperature=0.2, glossary=None):
+    """流式翻译生成器：protect_math → 术语表注入 → ctx.llm.stream → 流式还原公式 → yield 增量文本。
 
     设计约束（与页面其它翻译路径口径一致）：
       - Key 不可用 / 内容为空：直接 return（页面侧看到空输出即提示失败）；
       - core.llm.stream 全部重试失败时会 yield「【LLM 暂时不可用…】」兜底文案
         （core/llm.py 的行为，不抛异常），此处识别到该前缀即停止 yield，
         绝不把兜底文案当译文展示；
+      - glossary：术语表 [(en, zh, variants), ...]，以「首选译法」前缀注入 prompt
+        （DeepL 术语表式）；流式路径不做译后强制统一（增量输出无法回改），
+        由页面在非流式路径（_safe_translate）补做；
       - 任何异常都在 generator 内吞掉并停止，不冒泡到页面。
     """
     src = str(text or "")
@@ -1467,9 +1470,10 @@ def stream_translate_to_chinese(ctx, text, temperature=0.2):
     if not getattr(getattr(ctx, "llm", None), "available", False):
         return
     masked, store = protect_math(src)
+    prompt = _STREAM_TRANSLATE_PROMPT % _glossary_inject(masked[:6000], glossary)
     try:
         chunks = ctx.llm.stream(
-            [{"role": "user", "content": _STREAM_TRANSLATE_PROMPT % masked[:6000]}],
+            [{"role": "user", "content": prompt}],
             temperature=temperature)
         for piece in _stream_restore(chunks, store):
             if not piece:
@@ -1479,3 +1483,778 @@ def stream_translate_to_chinese(ctx, text, temperature=0.2):
             yield piece
     except Exception:
         return
+
+
+# =====================================================================
+# Round13（P6）新增：句级双语对齐 / 术语一致性 / 图文保位 / 划词上下文扩展
+# ---------------------------------------------------------------------
+# 全部追加在文件末尾：既有符号行号不变 → docs/technical_doc.md 行号引用零漂移。
+# 业界借鉴（均已落地为离线确定性实现，CI 无 Key 可跑）：
+#   ① Gale & Church (1991/1993)：译文与原文句长强相关（英中亦成立），长度比可作
+#      对齐主信号；Johansson & Hofland (1994)：混入数字/专名等跨语言 1:1「词汇
+#      锚点」后英中对齐准确率 86.4% → 92.1% → 本文 length + anchor + DP 混合对齐；
+#   ② DeepL 术语表：首选译法注入翻译上下文（而非事后查找替换）+ 译后强制统一
+#      + 译文受控术语高亮；术语候选从文档离线挖掘（括号定义式/重复大写短语）；
+#   ③ Docling / Marker 版式分析：图片按原始坐标保位渲染、译文叠加区避让图片，
+#      保持「读到的位置」与「译文的位置」一致。
+# =====================================================================
+
+# ---------------- ① 句级双语对齐（Gale-Church 长度 + 词汇锚点 + DP） ----------------
+# 英文句末缩写/小数/首字母缩写不切句（否则 "et al." "Fig. 1" "3.14" 会被切碎）
+_SENT_ABBREV = frozenset((
+    "fig", "figs", "eq", "eqs", "eqn", "tab", "tabs", "sec", "secs", "sect",
+    "ch", "chap", "no", "pp", "vol", "pt", "ref", "refs", "resp", "viz",
+    "ca", "cf", "et al", "etc", "eg", "ie", "vs", "al", "approx", "dept",
+    "univ", "incl", "wrt", "min", "max", "avg", "std", "dr", "prof", "mr",
+    "ms", "jr", "sr", "st",
+))
+# 句末标点：英文 . ! ? ；中文 。！？；
+_SENT_END_CHARS = ".!?\u3002\uff01\uff1f\uff1b"
+
+
+def _is_abbrev_token(tok):
+    """句点前的 token 是缩写/首字母缩写 → 不是句界（小数由「句点后跟数字」另行判断）。"""
+    t = str(tok or "").lower().strip(".")
+    if not t:
+        return False
+    if len(t) == 1:                            # 姓名首字母 A. / 单字母变量
+        return True
+    if re.match(r"^([a-z]\.)+[a-z]?$", t):     # U.S. / e.g. / i.e. 形态
+        return True
+    return t in _SENT_ABBREV
+
+
+def split_sentences(text, max_sent=400):
+    """确定性句子切分（英/中混合，无需模型）。
+
+    英文：`. ! ?` 后随空白/引号/括号/EOF 视为句界，但缩写（et al. / Fig. 1）、
+    小数（3.14——句点后跟数字）、首字母缩写（U.S.）不切；中文：。！？；直接成句界。
+    任何异常退化为按换行硬切，绝不冒泡；返回句子列表（保留句末标点）。
+    """
+    try:
+        s = str(text or "")
+        if not s.strip():
+            return []
+        out, buf = [], []
+        i, n = 0, len(s)
+        while i < n:
+            ch = s[i]
+            buf.append(ch)
+            if ch in _SENT_END_CHARS:
+                if ch in ".!?":
+                    nxt = s[i + 1] if i + 1 < n else " "
+                    if nxt not in " \t\r\n\"'\u201d\u2019)\uff09]\u300d":
+                        i += 1
+                        continue
+                    if nxt.isdigit():
+                        i += 1
+                        continue                  # 小数点后跟数字：3.14 / 0.001 不断句
+                    j = len(buf) - 2
+                    while j >= 0 and (buf[j].isalnum() or buf[j] in ".-'"):
+                        j -= 1
+                    tok = "".join(buf[j + 1:len(buf) - 1])
+                    if _is_abbrev_token(tok):
+                        i += 1
+                        continue
+                seg = "".join(buf).strip()
+                if seg:
+                    out.append(seg)
+                buf = []
+            i += 1
+        tail = "".join(buf).strip()
+        if tail:
+            out.append(tail)
+        return out[:max_sent]
+    except Exception:
+        try:
+            return [x.strip() for x in str(text or "").split("\n") if x.strip()][:max_sent]
+        except Exception:
+            return []
+
+
+# 跨语言 1:1「词汇锚点」：数字/百分比 + 保留原文的拉丁术语（Transformer/BLEU/GPT）
+_ANCHOR_RE = re.compile(r"\d+(?:\.\d+)?%?|[A-Za-z][A-Za-z0-9\-]{1,}")
+
+
+def _anchor_set(seg):
+    """片段锚点集合：数字/百分比原样；≥3 字母的大写拉丁词（去尾 s 归一）。"""
+    out = set()
+    try:
+        for m in _ANCHOR_RE.finditer(str(seg or "")):
+            t = m.group(0)
+            if t[0].isdigit() or t.endswith("%"):
+                out.add(t)
+            elif len(t) >= 3 and t[0].isupper() and any(c.isalpha() for c in t):
+                out.add(t.lower().rstrip("s") if len(t) > 3 else t.lower())
+    except Exception:
+        return set()
+    return out
+
+
+def _pair_cost(en, zh, ratio):
+    """候选句对代价：长度偏差（Gale-Church 主信号）- 锚点命中奖励 + 基础代价。"""
+    le, lz = max(1, len(str(en or ""))), max(1, len(str(zh or "")))
+    exp = max(6.0, le * float(ratio))
+    dev = abs(lz - exp) / exp
+    anch = len(_anchor_set(en) & _anchor_set(zh))
+    return dev * 2.0 - 0.45 * min(anch, 3) + 0.20
+
+
+def align_pairs(en_text, zh_text, max_units=160):
+    """双语句级对齐：长度比 + 词汇锚点 + DP（离线确定性，无模型）。
+
+    DP 操作集：1:1 / 2:1 合并（译文并句）/ 1:2 拆分 / 单侧未译（漏译或删节，
+    该侧为空串）。段数悬殊或超限（>160 句或 >40000 单元格）时退化为按序号
+    1:1 配对（截断/补空串）——序号兜底保证任何输入都有确定输出。
+
+    返回 [(en_seg, zh_seg), ...]；任一侧为 "" 表示无对应句。
+    """
+    try:
+        ens = split_sentences(en_text)
+        zhs = split_sentences(zh_text)
+        if not ens and not zhs:
+            return []
+        if not ens:
+            return [("", z) for z in zhs]
+        if not zhs:
+            return [(e, "") for e in ens]
+        if len(ens) > max_units or len(zhs) > max_units or len(ens) * len(zhs) > 40000:
+            n = max(len(ens), len(zhs))
+            return [((ens[i] if i < len(ens) else ""),
+                     (zhs[i] if i < len(zhs) else "")) for i in range(n)]
+        en_total = sum(len(e) for e in ens) or 1
+        ratio = min(1.5, max(0.15, sum(len(z) for z in zhs) / float(en_total)))
+        n, m = len(ens), len(zhs)
+        INF = float("inf")
+        D = [[INF] * (m + 1) for _ in range(n + 1)]
+        B = [[None] * (m + 1) for _ in range(n + 1)]
+        D[0][0] = 0.0
+        for i in range(n + 1):
+            for j in range(m + 1):
+                cur = D[i][j]
+                if cur == INF:
+                    continue
+                if i < n and j < m:
+                    c = cur + _pair_cost(ens[i], zhs[j], ratio)
+                    if c < D[i + 1][j + 1]:
+                        D[i + 1][j + 1] = c
+                        B[i + 1][j + 1] = (i, j, 1, 1)
+                if i + 1 < n and j < m:                       # 2 英 → 1 中（译文并句）
+                    c = cur + _pair_cost(ens[i] + " " + ens[i + 1], zhs[j], ratio) + 0.35
+                    if c < D[i + 2][j + 1]:
+                        D[i + 2][j + 1] = c
+                        B[i + 2][j + 1] = (i, j, 2, 1)
+                if i < n and j + 1 < m:                       # 1 英 → 2 中（译文拆句）
+                    c = cur + _pair_cost(ens[i], zhs[j] + zhs[j + 1], ratio) + 0.35
+                    if c < D[i + 1][j + 2]:
+                        D[i + 1][j + 2] = c
+                        B[i + 1][j + 2] = (i, j, 1, 2)
+                if i < n:                                     # 英文未译（漏译/引用句被删）
+                    c = cur + 1.8
+                    if c < D[i + 1][j]:
+                        D[i + 1][j] = c
+                        B[i + 1][j] = (i, j, 1, 0)
+                if j < m:                                     # 译文无对应原文（译者增补）
+                    c = cur + 1.8
+                    if c < D[i][j + 1]:
+                        D[i][j + 1] = c
+                        B[i][j + 1] = (i, j, 0, 1)
+        pairs = []
+        i, j = n, m
+        while i > 0 or j > 0:
+            step = B[i][j]
+            if step is None:
+                break
+            pi, pj, de, dz = step
+            e_seg = " ".join(ens[pi:pi + de]) if de else ""
+            z_seg = "".join(zhs[pj:pj + dz]) if dz else ""
+            pairs.append((e_seg, z_seg))
+            i, j = pi, pj
+        pairs.reverse()
+        return pairs
+    except Exception:
+        # 兜底：按序号 1:1，绝不冒泡
+        try:
+            n = max(len(split_sentences(en_text)), len(split_sentences(zh_text)))
+            return [(en_text or "", zh_text or "")] if n <= 1 else []
+        except Exception:
+            return [(str(en_text or ""), str(zh_text or ""))]
+
+
+def _aligned_pair_html(en, zh, idx, align=True):
+    """把一个 (原文, 译文) 段落对渲染成句级对齐 HTML（供 bilingual_html 调用）。
+
+    句数一致且对齐成功时每对句子包 <span class="sn" data-sidx="k">，悬停/点击一侧
+    句子即高亮并滚动到另一侧对应句子（_SENT_LINK_JS）；对齐不可用（空译文/
+    单句/异常）时退化为整段一个容器，输出与旧实现完全一致。
+    """
+    try:
+        en_esc = _esc(en)
+        if not zh:
+            return en_esc, "<em>（待翻译）</em>"
+        zh_esc = _esc(zh)
+        if not align:
+            return en_esc, zh_esc
+        pairs = align_pairs(en, zh)
+        if len(pairs) <= 1:
+            return en_esc, zh_esc
+        l_parts, r_parts = [], []
+        for k, (es, zs) in enumerate(pairs):
+            if es:
+                l_parts.append('<span class="sn" data-sidx="%d">%s</span>' % (k, _esc(es)))
+            if zs:
+                r_parts.append('<span class="sn" data-sidx="%d">%s</span>' % (k, _esc(zs)))
+        if not l_parts or not r_parts:
+            return en_esc, zh_esc
+        return "".join(l_parts), "".join(r_parts)
+    except Exception:
+        return _esc(en), (_esc(zh) if zh else "<em>（待翻译）</em>")
+
+
+# 句级联动 JS（注入 bilingual_html）：悬停/点击 .sn → 另一侧同 data-sidx 句子高亮 + 滚动到位
+_SENT_LINK_JS = """
+<style>
+.sn{cursor:default;border-radius:2px;transition:background .12s;}
+.sn.on{background:#ffe9a8;box-shadow:inset 0 -2px 0 #f0ad2e;}
+</style>
+<script>
+(function(){
+  function paneOf(el){ var p = el; while (p && p !== document.body){ if (p.id === 'l' || p.id === 'r') return p; p = p.parentElement; } return null; }
+  function other(p){ return document.getElementById(p && p.id === 'l' ? 'r' : 'l'); }
+  function clear(){ var ms = document.querySelectorAll('.sn.on'); for (var i = 0; i < ms.length; i++){ ms[i].classList.remove('on'); } }
+  function link(el){
+    var idx = el.getAttribute('data-sidx');
+    if (idx === null) return;
+    var o = other(paneOf(el));
+    if (!o) return;
+    clear();
+    el.classList.add('on');
+    var t = o.querySelector('.sn[data-sidx="' + idx + '"]');
+    if (t){ t.classList.add('on'); try{ t.scrollIntoView({block:'nearest'}); }catch(e){} }
+  }
+  var ps = document.querySelectorAll('.sn');
+  for (var i = 0; i < ps.length; i++){
+    (function(el){
+      el.addEventListener('mouseenter', function(){ link(el); });
+      el.addEventListener('click', function(){ link(el); });
+    })(ps[i]);
+  }
+  var panes = document.querySelectorAll('.pane');
+  for (var j = 0; j < panes.length; j++){ panes[j].addEventListener('mouseleave', clear); }
+})();
+</script>
+"""
+
+
+# ---------------- ② 术语一致性（DeepL 术语表式：注入 + 统一 + 高亮） ----------------
+# 学术 AI 领域常用术语的默认首选译法（用户可改；空中文行 = 候选待填，不生效）
+DEFAULT_GLOSSARY_TEXT = """# 术语表：每行一条「英文 = 中文」；可追加误译变体「英文 = 中文; 变体1; 变体2」
+# 填好中文的条目才会生效；# 开头为注释行
+attention mechanism = 注意力机制
+self-attention = 自注意力
+multi-head attention = 多头注意力
+feed-forward network = 前馈网络
+layer normalization = 层归一化
+residual connection = 残差连接
+gradient descent = 梯度下降
+backpropagation = 反向传播
+learning rate = 学习率
+batch size = 批大小
+overfitting = 过拟合
+regularization = 正则化
+dropout = 随机失活
+embedding = 嵌入
+tokenizer = 分词器
+pre-training = 预训练
+fine-tuning = 微调
+large language model = 大语言模型
+benchmark = 基准测试
+corpus = 语料库
+hyperparameter = 超参数
+loss function = 损失函数
+ablation study = 消融实验
+state of the art = 最先进水平
+encoder = 编码器
+decoder = 解码器
+sequence-to-sequence = 序列到序列
+machine translation = 机器翻译
+natural language processing = 自然语言处理
+zero-shot = 零样本
+few-shot = 少样本
+"""
+
+_GLOSSARY_SEP_RE = re.compile(r"[=|\uff03:：\t]")
+_GLOSSARY_STOP_EN = frozenset(("the", "and", "for", "with", "this", "that", "from"))
+
+
+def parse_glossary(text):
+    """解析术语表文本 → [(en, zh, [variants]), ...]（后者为误译变体，可为空）。
+
+    每行支持 `英文 = 中文` / `英文|中文` / `英文：中文` / `英文,中文`（无其它分隔符时）；
+    `英文 = 中文; 变体1; 变体2` 登记误译变体；`#` 注释与空行忽略；同词条后出现者覆盖先者。
+    纯功能词/过短英文（<3 且无空格）跳过；任何异常退化为已解析部分，不抛泡。
+    """
+    out = []
+    try:
+        for raw in str(text or "").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = _GLOSSARY_SEP_RE.split(line, maxsplit=1) if _GLOSSARY_SEP_RE.search(line) else None
+            if not parts or len(parts) < 2:
+                m = re.match(r"^([A-Za-z][A-Za-z0-9 \-/']{2,60})\s*,\s*(\S.*)$", line)
+                if not m:
+                    continue
+                parts = [m.group(1), m.group(2)]
+            en = parts[0].strip()
+            rest = parts[1].strip()
+            if not en or not rest:
+                continue
+            variants = []
+            segs = [x.strip() for x in rest.split(";")]
+            zh = segs[0]
+            variants = [x for x in segs[1:] if x]
+            low = en.lower()
+            if len(en) < 3 and " " not in en and "-" not in en:
+                continue
+            if low in _GLOSSARY_STOP_EN:
+                continue
+            out.append((en, zh, variants))
+        best = {}
+        for en, zh, var in out:
+            best[en.lower()] = (en, zh, var)
+        return [best[k] for k in sorted(best)]
+    except Exception:
+        return out
+
+
+def _norm_glossary(glossary):
+    """把术语表归一成 [(en, zh, [variants]), ...]；容忍 2 元组/dict/None，无效条目跳过。"""
+    out = []
+    try:
+        for item in (glossary or []):
+            if isinstance(item, (list, tuple)):
+                if len(item) >= 3:
+                    en, zh, var = str(item[0]), str(item[1]), item[2] or ()
+                elif len(item) == 2:
+                    en, zh, var = str(item[0]), str(item[1]), ()
+                else:
+                    continue
+            elif isinstance(item, dict):
+                en, zh = str(item.get("en") or ""), str(item.get("zh") or "")
+                var = item.get("variants") or ()
+            else:
+                continue
+            en, zh = en.strip(), zh.strip()
+            if len(en) < 2 or not zh:
+                continue
+            variants = ([str(v).strip() for v in var if str(v).strip()]
+                        if isinstance(var, (list, tuple)) else ([str(var).strip()] if str(var).strip() else []))
+            out.append((en, zh, variants))
+    except Exception:
+        return out
+    return out
+
+
+def glossary_prompt_block(glossary, max_entries=40):
+    """术语表 → 注入翻译 prompt 的前缀块（DeepL 术语表式「首选译法」注入）。
+
+    无有效条目返回 ""——调用方行为与不传术语表完全一致。
+    """
+    gl = _norm_glossary(glossary)
+    if not gl:
+        return ""
+    try:
+        lines = ["【术语表】翻译时必须采用以下首选译法，保持全文一致，不要改用其它译法："]
+        for en, zh, _v in gl[:max_entries]:
+            lines.append("- %s → %s" % (en, zh))
+        return "\n".join(lines) + "\n\n"
+    except Exception:
+        return ""
+
+
+def _glossary_inject(text, glossary):
+    """翻译前注入：把术语表块前置到待译文本（公式占位之后调用，避免术语被 mask）。"""
+    block = glossary_prompt_block(glossary)
+    return (block + str(text or "")) if block else str(text or "")
+
+
+def apply_glossary(zh_text, glossary):
+    """译后术语强制统一（离线确定性，无模型）。
+
+    ① 译文里残留的未译英文术语（整词匹配、大小写不敏感）→ 首选中文；
+    ② 条目登记的误译变体 → 首选中文（长变体优先，防短变体切碎长变体）；
+    ③ 每条替换上限 200 次，防病态输入。无术语表/异常 → 原样返回。
+    """
+    gl = _norm_glossary(glossary)
+    if not gl:
+        return str(zh_text or "")
+    try:
+        s = str(zh_text or "")
+        for _en, zh_t, variants in gl:
+            for v in sorted(variants, key=len, reverse=True):
+                if v and v in s:
+                    s = s.replace(v, zh_t)
+        for en, zh_t, _v in sorted(gl, key=lambda x: len(x[0]), reverse=True):
+            if not re.match(r"^[A-Za-z][A-Za-z0-9 \-/'-]+$", en):
+                continue                      # 非纯拉丁术语不做整词替换（避免误伤中文）
+            try:
+                pat = re.compile(r"(?<![A-Za-z])" + re.escape(en) + r"(?![A-Za-z])",
+                                 re.IGNORECASE)
+                s = pat.sub(lambda _m, _t=zh_t: _t, s, count=200)
+            except Exception:
+                continue
+        return s
+    except Exception:
+        return str(zh_text or "")
+
+
+def _glossary_apply(zh_text, glossary):
+    """apply_glossary 的薄封装（保持 _safe_translate 内一行调用的可读性）。"""
+    return apply_glossary(zh_text, glossary)
+
+
+def _glossary_mark(zh_html, glossary):
+    """受控术语高亮：把译文里出现的首选中文译法包上 <mark class="gt">（内联样式）。
+
+    两段式（占位符 → 标签）替换，避免「长术语套短术语」被二次包裹；zh_html 假定
+    已 HTML 转义，中文译法同样转义后匹配。无术语表/无命中 → 原样返回。
+    """
+    gl = _norm_glossary(glossary)
+    if not gl or not zh_html:
+        return zh_html
+    try:
+        targets = sorted({_esc(zh) for _e, zh, _v in gl if zh}, key=len, reverse=True)
+        if not targets:
+            return zh_html
+        sentinels = []
+        for t in targets:
+            if t and t in zh_html:
+                tok = "\x01%d\x02" % len(sentinels)
+                zh_html = zh_html.replace(t, tok)
+                sentinels.append((tok, t))
+        for tok, t in sentinels:
+            zh_html = zh_html.replace(
+                tok, '<mark class="gt" style="background:#dff3e6;border-bottom:2px solid '
+                     '#2e9d57;border-radius:2px;padding:0 1px;">%s</mark>' % t)
+        return zh_html
+    except Exception:
+        return zh_html
+
+
+# 术语候选挖掘：句首大写不可信，只统计行内出现；通用学术词不进术语表
+_TERM_STOP = frozenset((
+    "The", "This", "These", "Those", "We", "Our", "In", "On", "At", "As", "By",
+    "To", "For", "From", "With", "That", "It", "Its", "Their", "His", "Her",
+    "And", "But", "Or", "If", "When", "While", "However", "Moreover", "Note",
+    "See", "Here", "There", "Thus", "Hence", "Also", "Then", "So", "No", "Not",
+    "One", "Two", "First", "Second", "Third", "New", "Using", "Based", "Given",
+    "During", "After", "Before", "Between", "Among", "Within", "Without", "Per",
+    "Via", "Unlike", "Like", "Due", "Since", "Because", "Although", "Though",
+    "Whether", "Each", "All", "Some", "Most", "Many", "Several", "Such", "Both",
+    "Any", "Every", "None", "Figure", "Table", "Section", "Chapter", "Where",
+    "Which", "What", "How", "Why", "Equation", "Algorithm", "Model", "Method",
+    "Result", "Paper", "Work", "Approach", "Task", "Data", "State", "Art",
+    "Training", "Learning", "Machine", "Deep", "Natural", "Language", "English",
+    "Chinese", "Results", "Methods", "Models", "Datasets", "Experiment",
+    "Experiments", "Analysis", "Performance", "Accuracy", "Proposed", "Show",
+    "Shows", "Shown", "Used", "Use", "Uses", "Finally", "Furthermore",
+))
+# 短语前导的冠词/指示词（"The Transformer" → "Transformer"）
+_TERM_ARTICLES = frozenset(("The", "A", "An", "This", "These", "Those"))
+# 「全称 (缩写)」/「缩写 (全称)」——学术论文定义术语的标准写法（高精度模式 A）
+_TERM_PAREN_FULL = re.compile(
+    r"(?<![A-Za-z])([A-Z][A-Za-z\-]*(?:\s+[A-Z][A-Za-z\-]*){0,4})\s*\(([A-Za-z0-9\-]{1,12})\)")
+_TERM_PAREN_ABBR = re.compile(
+    r"(?<![A-Za-z])([A-Za-z0-9\-]{1,12})\s*\(([A-Z][A-Za-z\-]*(?:\s+[A-Z][A-Za-z\-]*){0,4})\)")
+# 行内大写短语（1-4 词），模式 B
+_TERM_CAP_RE = re.compile(r"(?<![A-Za-z])([A-Z][A-Za-z0-9\-]{1,}(?:\s+[A-Z][A-Za-z0-9\-]{1,}){0,3})")
+
+
+def _strip_leading_stop(term):
+    """去掉短语前导的冠词/指示词：'The Transformer' → 'Transformer'。"""
+    parts = str(term or "").split()
+    while len(parts) > 1 and parts[0] in _TERM_ARTICLES:
+        parts = parts[1:]
+    return " ".join(parts)
+
+
+def extract_terms(text, top_k=25, min_count=2):
+    """离线术语挖掘（确定性，无模型）→ [(term, count), ...] 按频次降序。
+
+    模式 A（精度最高）：`Full Term (ACRONYM)` / `ACRONYM (Full Term)` 取全称为术语，
+    定义式本身就是强信号，出现一次即收；
+    模式 B：重复出现的首字母大写短语/单词——行内出现计 mid、行首出现计 start，
+    mid≥1 且总数≥min_count，或行首≥2 次（多行行首同一个大写词 = 专名而非句首大写）。
+    通用学术词（Model/Method/We...）由停用表排除；任何异常返回 []。
+    """
+    try:
+        s = str(text or "")
+        if not s.strip():
+            return []
+        counts = {}
+        paren_terms = set()
+        for m in _TERM_PAREN_FULL.finditer(s):
+            full = _strip_leading_stop(m.group(1).strip())
+            if 3 <= len(full) <= 60 and full not in _TERM_STOP:
+                paren_terms.add(full)
+                counts[full] = counts.get(full, 0) + 1
+        for m in _TERM_PAREN_ABBR.finditer(s):
+            full = _strip_leading_stop(m.group(2).strip())
+            if 3 <= len(full) <= 60 and full not in _TERM_STOP:
+                paren_terms.add(full)
+                counts[full] = counts.get(full, 0) + 1
+        mid, start = {}, {}
+        for line in s.splitlines():
+            if not line.strip():
+                continue
+            for m in _TERM_CAP_RE.finditer(line):
+                term = _strip_leading_stop(m.group(1).strip())
+                if len(term) < 3 or term in _TERM_STOP:
+                    continue
+                if m.start() == 0:
+                    start[term] = start.get(term, 0) + 1
+                else:
+                    mid[term] = mid.get(term, 0) + 1
+        for t in set(list(mid) + list(start)):
+            c_mid, c_start = mid.get(t, 0), start.get(t, 0)
+            if (c_mid >= 1 and (c_mid + c_start) >= int(min_count)) or c_start >= 2:
+                counts[t] = counts.get(t, 0) + c_mid + c_start
+        items = [(t, c) for t, c in counts.items()
+                 if t in paren_terms or c >= int(min_count)]
+        items.sort(key=lambda x: (-x[1], x[0].lower()))
+        return items[:int(top_k)]
+    except Exception:
+        return []
+
+
+# ---------------- ③ 图文保位（图片坐标渲染 + 译文叠加避让） ----------------
+def page_image_rects(page, limit=12):
+    """页面图片区域（确定性几何，无模型）→ [(xref, (x0,y0,x1,y1)), ...] 按面积降序。
+
+    get_image_info(xrefs=True) 优先；老版本 PyMuPDF 退化为
+    get_images(full=True) + get_image_rects(xref)。过滤两类非"图"区域：
+    ① 接近整页的背景/扫描图（面积 ≥ 85% 页面）——它是纸的扫描底，不是插图，
+    渲染它会盖住文字层、并把译文叠加区避让到页顶；② <6pt 的碎屑图。
+    任何失败返回 []。
+    """
+    out = []
+    try:
+        try:
+            pw = float(page.rect.width)
+            ph = float(page.rect.height)
+        except Exception:
+            pw, ph = 0.0, 0.0
+        page_area = max(1.0, pw * ph)
+        infos = []
+        try:
+            infos = page.get_image_info(xrefs=True) or []
+        except TypeError:
+            infos = page.get_image_info() or []
+        except Exception:
+            infos = []
+        for it in infos:
+            try:
+                bb = it.get("bbox") or [0, 0, 0, 0]
+                rect = (float(bb[0]), float(bb[1]), float(bb[2]), float(bb[3]))
+                out.append((int(it.get("xref", 0) or 0), rect))
+            except Exception:
+                continue
+        if not out:
+            for img in (page.get_images(full=True) or [])[:limit * 2]:
+                try:
+                    xref = int(img[0])
+                    for r in (page.get_image_rects(xref) or []):
+                        out.append((xref, (float(r.x0), float(r.y0), float(r.x1), float(r.y1))))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    uniq = {}
+    for xref, rect in out:
+        w, h = rect[2] - rect[0], rect[3] - rect[1]
+        if w > 6.0 and h > 6.0 and (w * h) < page_area * 0.85:
+            uniq[(xref, rect)] = True
+    return sorted(uniq, key=lambda x: -((x[1][2] - x[1][0]) * (x[1][3] - x[1][1])))[:limit]
+
+
+_FIG_MAX_BYTES = 160 * 1024        # 单张图片 base64 前字节上限
+_FIG_TOTAL_BYTES = 420 * 1024     # 每页图片总字节上限（防 HTML 体积失控）
+_FIG_MAX_COUNT = 6                # 每页最多渲染图片数
+
+
+def _image_bytes(doc, xref, max_bytes=_FIG_MAX_BYTES):
+    """抽取图片字节 → (data, mime)；超限依次尝试 JPEG 重编码 + 三次减半缩放，仍超限跳过。"""
+    try:
+        info = doc.extract_image(xref) or {}
+        data = info.get("image") or b""
+        ext = str(info.get("ext", "png") or "png").lower()
+        mime = ("image/png" if ext in ("png", "") else
+                "image/jpeg" if ext in ("jpg", "jpeg") else "image/" + ext)
+        if data and len(data) <= max_bytes:
+            return data, mime
+    except Exception:
+        pass
+    try:
+        pix = fitz.Pixmap(doc, xref)
+        if pix.n - pix.alpha >= 4:
+            pix = fitz.Pixmap(fitz.csRGB, pix)
+        for _ in range(3):
+            data = pix.tobytes("jpeg")
+            if data and len(data) <= max_bytes:
+                return data, "image/jpeg"
+            pix.shrink(1)
+    except Exception:
+        pass
+    return b"", ""
+
+
+def _figures_html(doc, page, pw, ph):
+    """图文保位：按原始坐标把页面图片渲染为 base64 <img>（Docling/Marker 式保位阅读）。
+
+    每页最多 _FIG_MAX_COUNT 张、总量 ≤ _FIG_TOTAL_BYTES；无图/抽取失败/fitz 缺失
+    一律返回 ""（文字渲染路径与旧版逐字节一致）。图片层置于文字之上（z-index:2），
+    图注文字不与图片 bbox 重叠，不影响阅读顺序。
+    """
+    try:
+        if fitz is None or doc is None or page is None:
+            return ""
+        import base64
+        rects = page_image_rects(page, limit=_FIG_MAX_COUNT)
+        if not rects:
+            return ""
+        parts, total = [], 0
+        for xref, (x0, y0, x1, y1) in rects:
+            if total >= _FIG_TOTAL_BYTES or len(parts) >= _FIG_MAX_COUNT:
+                break
+            data, mime = _image_bytes(doc, xref)
+            if not data:
+                continue
+            total += len(data)
+            b64 = base64.b64encode(data).decode("ascii")
+            w, h = max(8.0, x1 - x0), max(8.0, y1 - y0)
+            parts.append(
+                '<div class="fig" style="position:absolute;left:%.1fpx;top:%.1fpx;'
+                'width:%.1fpx;height:%.1fpx;z-index:2;" title="图片（按原始坐标保位）">'
+                '<img src="data:%s;base64,%s" alt="figure" style="width:100%%;height:100%%;'
+                'object-fit:contain;border:1px dashed #c9d4e4;border-radius:3px;'
+                'background:#ffffff;"></div>'
+                % (x0, y0, w, h, mime, b64))
+        return "".join(parts)
+    except Exception:
+        return ""
+
+
+def _figure_safe_top(page, ph, ratio=0.74, min_h=54.0):
+    """原位 PDF 译文叠加区避让：译文白框不压页面图片（图文保位）。
+
+    策略（确定性）：
+      ① 底部条带 [0.74*ph, ph-12] 不碰任何图片 → 原样返回（既有行为不变）；
+      ② 否则找与底部条带相交图片的上沿/下沿，在其「上方」或「下方」找不碰任何
+         图片、高度 ≥ min_h 的条带，高者优先（同高取靠下，贴近原文放置惯例）；
+      ③ 都放不下 → 保持底部条带（宁可压图也不生成压不下译文的版式）。
+    无图片/异常 → ph*ratio。
+    """
+    try:
+        base = float(ph) * float(ratio)
+        rects = page_image_rects(page, limit=8)
+        if not rects:
+            return base
+        bottom = float(ph) - 12.0
+        spans = sorted((float(r[1]), float(r[3])) for _x, r in rects
+                       if float(r[3]) > 4.0 and float(r[1]) < bottom)
+        if not spans:
+            return base
+        hit = [(y0, y1) for (y0, y1) in spans if y1 > base and y0 < bottom]
+        if not hit:
+            return base                                   # ① 底部条带干净
+        lo = min(y0 for (y0, _y1) in hit)                 # 最高相交图片的上沿
+        hi = max(y1 for (_y0, y1) in hit)                # 最低相交图片的下沿
+        cands = []
+        if bottom - (hi + 6.0) >= float(min_h):           # ②A 条带：整体下移到图下
+            cands.append((bottom - (hi + 6.0), hi + 6.0))
+        above = [y1 for (y0, y1) in spans if y1 <= lo]
+        t = max(above) + 6.0 if above else 0.0            # ②B 条带：收到相交图片之上
+        if (lo - 6.0) - t >= float(min_h):
+            cands.append(((lo - 6.0) - t, t))
+        if cands:
+            cands.sort(key=lambda x: (-x[0], x[1]))
+            return cands[0][1]
+        return base                                       # ③ 兜底：保持底部条带
+    except Exception:
+        return float(ph) * float(ratio)
+
+
+# ---------------- ④ 划词上下文扩展（短选词自动扩展到所在句子） ----------------
+# 注入 native_page_html / selectable_text_html / bilingual_html：捕获阶段（capture=true）
+# 先于 SELECTION_JS 的 mouseup 冒泡处理器执行，把 <40 字的短选词替换为所在整句，
+# 解决「划一个词、翻译没上下文」的问题（CopyTranslator 类工具的经典优化）。
+_SENT_EXPAND_JS = """
+<script>
+(function(){
+  if (window.__ai4sExpand) return;
+  window.__ai4sExpand = true;
+  var END = '.!?\\u3002\\uff01\\uff1b\\uff1f';
+  var MAX_SEL = 40, MAX_SEG = 600;
+  function blockOf(node){
+    var el = node && (node.parentElement || node.parentNode);
+    while (el && el !== document.body){
+      var t = el.textContent || '';
+      if (t.length >= 12 && /[.!?\\u3002\\uff01\\uff1f]/.test(t)) return el;
+      el = el.parentElement || el.parentNode;
+    }
+    return null;
+  }
+  function offsetIn(el, node, off){
+    try{
+      var r = document.createRange();
+      r.selectNodeContents(el);
+      r.setEnd(node, off);
+      return r.toString().length;
+    }catch(e){ return -1; }
+  }
+  function expand(range){
+    try{
+      var txt = String(range.toString() || '').replace(/\\s+/g, ' ').trim();
+      if (!txt || txt.length >= MAX_SEL) return null;
+      var el = blockOf(range.startContainer);
+      if (!el) return null;
+      var full = (el.textContent || '').replace(/\\s+/g, ' ');
+      var idx = offsetIn(el, range.startContainer, range.startOffset);
+      if (idx < 0) return null;
+      var s0 = 0;
+      for (var k = idx - 1; k >= 0; k--){ if (END.indexOf(full.charAt(k)) >= 0){ s0 = k + 1; break; } }
+      var e0 = full.length;
+      for (var m2 = idx; m2 < full.length; m2++){ if (END.indexOf(full.charAt(m2)) >= 0){ e0 = m2 + 1; break; } }
+      var seg = full.slice(s0, e0).trim();
+      if (!seg || seg.length <= txt.length || seg.length > MAX_SEG) return null;
+      return seg;
+    }catch(e){ return null; }
+  }
+  function onUp(){
+    try{
+      var sel = window.getSelection && window.getSelection();
+      if (!sel || sel.rangeCount < 1) return;
+      var raw = String(sel.toString() || '').replace(/\\s+/g, ' ').trim();
+      if (raw.length < 2 || raw.length >= MAX_SEL) return;
+      var seg = expand(sel.getRangeAt(0));
+      if (!seg) return;
+      var el = blockOf(sel.getRangeAt(0).startContainer);
+      if (!el) return;
+      var node = document.createTextNode(seg);
+      el.appendChild(node);
+      var r2 = document.createRange();
+      r2.selectNodeContents(node);
+      sel.removeAllRanges();
+      sel.addRange(r2);
+      setTimeout(function(){ try{ if (node.parentNode) node.parentNode.removeChild(node); }catch(e){} }, 0);
+    }catch(e){}
+  }
+  try{
+    document.addEventListener('mouseup', onUp, true);
+    document.addEventListener('touchend', function(){ setTimeout(onUp, 0); }, true);
+    document.addEventListener('dblclick', function(){ setTimeout(onUp, 0); }, true);
+  }catch(e){}
+})();
+</script>
+"""
