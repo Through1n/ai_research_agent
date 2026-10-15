@@ -1846,3 +1846,629 @@ def code_fingerprint(code):
         return hashlib.md5(str(code or "").encode("utf-8", "ignore")).hexdigest()
     except Exception:
         return ""
+
+
+# ================================================================ R17：写作质量审计三件套 + 论证单元骨架
+# 本节全部**追加在文件末尾**：既有函数/常量行号零变动，
+# docs/technical_doc.md 的 `path:N sym` 引用不漂移，_check_doc_refs 自动保持绿。
+#
+# 借鉴的业界做法（均取「可离线确定性实现」的部分，CI 无 API Key 也能跑）：
+# 1. **论断-证据对齐**（claim-evidence coverage）——可靠写作系统架构
+#    （rasha.me《Reliable AI Writing Systems》Stage 3 "Deterministic Coverage
+#    Check"：每条论断先检查有没有引用，没有的一律标记，零模型调用、零成本）；
+#    Paperpal Reference Checker 的 Citation Relevance / Missing Reference
+#    Match 两项检查同属这一类。
+# 2. **引用-参考文献双向核对**——Paperpal Manuscript Checker 的
+#    "Citation-Reference Correspondence"（文中角标与文献清单一一对应，
+#    漏引 / 越界 / 格式混用全部显式列出，不等审稿人替我们发现）。
+# 3. **文档内自一致性**——同上架构 Stage 6 "Intra-Document Consistency
+#    Check"（术语漂移、跨节矛盾）+ 中文长文写作方法论的「跨章节检查」。
+# 4. **大纲→段落展开骨架**——SciSpace / Jenni AI 的 section-aware drafting
+#    与「论证单元」模板（论点句 / 证据 / 过渡），离线模板化，LLM 或用户只填内容。
+#
+# 设计纪律（与本模块既有校验完全一致）：
+# - 全部纯正则 / 字符串启发式：零网络、零 LLM 调用、零新增第三方依赖；
+# - 任何异常都走 try/except 返回结构化降级结果，绝不抛给调用方；
+# - 「没问题」与「没检查成」必须可区分：自身异常时 ok=False 且 report 明说。
+
+# ---------------------------------------------------------------- 本节公共正则（确定性、零依赖）
+# Markdown 标题行（`## Method`）或加粗独行标题（`**Method**`）
+_HEADING_LINE_RE = re.compile(
+    r"^\s*(?:#{1,6}\s+(?P<md>[^#]+?)\s*#*|\*\*(?P<bold>[^*]{2,80})\*\*:?)\s*$")
+# 列表项前缀（`- ` / `* ` / `• ` / `1. ` / `1) `）
+_BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+•]\s+|\d{1,2}[.)]\s+)")
+# 表格行（审计跳过，表格单元格不是完整论断）
+_TABLE_ROW_RE = re.compile(r"^\s*\|")
+# 论断性表述线索（中英双语，高精度优先：命中即视为「这是一个需要证据的论断」）
+_CLAIM_CUE_RE = re.compile(
+    r"(?i)"
+    # 经验性/对比性论断：需要实验或文献证据
+    r"\b(?:results?|experiments?|evaluations?|findings?|ablations?)\s+"
+    r"(?:show|shows|indicate|indicates|suggest|suggests|demonstrate|demonstrates|"
+    r"confirm|confirms|reveal|reveals)\b"
+    r"|\b(?:outperform\w*|surpass\w*|exceeds?|state[- ]of[- ]the[- ]art|sota)\b"
+    r"|\b(?:significantly|substantially|remarkably|consistently)\s+"
+    r"(?:outperform\w*|improv\w*|reduc\w*|increas\w*|decreas\w*|boost\w*|better|worse|higher|lower)\b"
+    r"|\b(?:achieves?|improves?|reduces?|boosts?|increases?|decreases?)\s+[^.\n]{0,50}?\sby\s"
+    # 文献立场句：不给出处就是无据引用
+    r"|\b(?:prior|previous|earlier|existing|recent)\s+"
+    r"(?:work|works|studies|study|research|methods?|systems?|approaches?)\b"
+    r"|\b(?:studies|researchers|authors|work)\s+(?:have|has)\s+"
+    r"(?:shown|demonstrated|found|reported|observed)\b"
+    r"|\bit\s+has\s+been\s+(?:shown|demonstrated|reported|observed)\b"
+    r"|\b(?:widely|commonly|extensively)\s+(?:used|adopted|studied|applied|believed|assumed)\b"
+    # 中文对应
+    r"|实验(?:表明|结果|显示|证明|验证)"
+    r"|显著(?:提升|降低|提高|优于|减少|增加)"
+    r"|(?:性能|精度|召回率|准确率|F1)[^。\n]{0,12}(?:达到|提升至|提高到)"
+    r"|(?:现有|先前|已有|以往)(?:方法|工作|研究|系统|模型)[^。\n]{0,20}"
+    r"(?:存在|难以|无法|受限于|面临)"
+    r"|研究(?:表明|显示|发现)"
+    r"|(?:被)?广泛(?:应用于|用于|采用)")
+# 证据指针（Table/Figure/Equation/Section 等显式证据锚点，无引用角标也可作为支撑）
+_EVIDENCE_POINTER_RE = re.compile(
+    r"(?i)"
+    r"\b(?:table|figure|fig\.?|equation|eq\.?|algorithm|section|appendix)\s*\.?\s*\d+"
+    r"|\b(?:as\s+shown\s+in|as\s+reported\s+in|see|per)\s+"
+    r"(?:table|figure|fig\.?|section|algorithm)\b"
+    r"|[见表]\s*\d")
+# 引用格式甄别（方括号族）
+_CITE_GROUP_RE = re.compile(r"\[\s*\d{1,4}\s*,\s*\d{1,4}\s*\]")     # [1, 2]
+_CITE_ADJACENT_RE = re.compile(r"\[\s*\d{1,4}\s*\]\s*\[\s*\d{1,4}\s*\]")  # [1][2]
+_CITE_REMOVED_RE = re.compile(r"\[\s*\?\s*\]")                       # _sanitize_citations 打码后的 [?]
+# 自一致性：缩略语定义 "RAG (Retrieval-Augmented Generation)"
+_ACRONYM_DEF_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})\s*[（(]\s*([^()（）]{2,90})\s*[)）]")
+_ACRONYM_TOKEN_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,9}\b")
+_ACRONYM_STOP = {"AI", "API", "PDF", "CSV", "URL", "UI", "UX", "GPU", "CPU", "DOI",
+                 "HTML", "SVG", "PNG", "JPG", "ID", "OK", "CI", "CD", "PR"}
+# 自一致性：连字符/空格写法变体组（ML 论文高频，混用即不专业）
+_TERM_VARIANT_GROUPS = (
+    ("fine-tuning", ("fine-tuning", "fine tuning", "finetuning")),
+    ("pre-training", ("pre-training", "pre training", "pretraining")),
+    ("state-of-the-art", ("state-of-the-art", "state of the art")),
+    ("real-time", ("real-time", "realtime")),
+    ("end-to-end", ("end-to-end", "end to end")),
+    ("out-of-vocabulary", ("out-of-vocabulary", "out of vocabulary")),
+    ("open-source", ("open-source", "open source")),
+    ("out-of-domain", ("out-of-domain", "out of domain")),
+)
+# 自一致性：本模块大纲生成的固定章节结构（与 _outline_prompt 的章节要求一致）
+DEFAULT_REQUIRED_SECTIONS = ("Title", "Abstract", "Introduction", "Related Work",
+                             "Method", "Experiments", "Threats to Validity", "Conclusion")
+# 论证单元骨架的过渡句模板（按单元位置选取；中文/英文两套）
+_TRANSITION_ZH = ("首先，<引出本节核心论点>。", "其次，<补充一层论证>。",
+                  "进一步地，<深化论证或给出细节>。", "与此相对，<对比、反例或边界>。",
+                  "综上，<小结并引出下一节>。")
+_TRANSITION_EN = ("To begin with, <state the core claim of this section>.",
+                  "Furthermore, <add one layer of support>.",
+                  "In addition, <deepen the argument with detail>.",
+                  "By contrast, <contrast, counter-example or boundary>.",
+                  "In summary, <wrap up and lead to the next section>.")
+
+
+def _body_without_references(text):
+    """切掉 References 章节（含标题行），返回正文前缀。
+
+    三个审计都只针对**正文**：References 段每行以 ``[n]`` 开头，若不切掉，
+    条目编号会被误当成「文中引用角标」、条目文本会被误当成「论断」，全部误报。
+    复用 :func:`_strip_generated_references`（同一套标题正则，行为一致）。
+    """
+    try:
+        return _strip_generated_references(text)[0]
+    except Exception:
+        return str(text or "")
+
+
+def _norm_heading(title):
+    """标题归一化：小写 → 去首级编号（``2.1`` / ``2)`` / ``2 ``）→ 去标点 → 合并空白。"""
+    t = str(title or "").strip().lower()
+    t = re.sub(r"^\s*\d+(?:\.\d+)*[.)]?\s+", "", t)
+    t = re.sub(r"[^\w\u4e00-\u9fff]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _add_issue(bucket, severity, kind, detail):
+    """向审计结果里追加一条问题（severity: error / warning / info）。"""
+    try:
+        bucket["issues"].append({"severity": severity, "kind": kind,
+                                 "detail": str(detail)[:300]})
+        bucket["n_" + severity] += 1
+        if severity == "error":
+            bucket["ok"] = False
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- 1) 论断-证据对齐（claim-evidence coverage）
+def claim_evidence_audit(text, refs_list=None, max_items=40, max_lines=4000):
+    """论断-证据对齐审计：每个论断性表述都必须有引用角标或证据指针，否则显式列出。
+
+    借鉴 rasha.me《Reliable AI Writing Systems》Stage 3 "Deterministic Coverage
+    Check"（零模型调用、零成本的确定性覆盖检查）与 Paperpal Reference Checker 的
+    Citation Relevance / Missing Reference Match。既有白名单校验回答的是
+    「引用是不是真的」，本审计回答的是「**论断有没有证据**」——两者互补。
+
+    判定规则（确定性，保守优先，宁漏勿错杀）：
+    - ``supported``：单元内含白名单内引用角标 ``[n]``（无白名单时任一 ``[n]`` 即可），
+      或含 Table/Figure/Equation/Section 等**证据指针**；
+    - ``bad_citation``（error）：有角标但全部越界（白名单场景下的幻觉角标）；
+    - ``needs_evidence``（warning）：命中论断线索（"results show"/"existing
+      systems"/"实验表明"/"显著提升"…）但既无引用也无证据指针 → **待补依据**；
+    - ``background``：动机/方法设计/过渡等无需外部证据的陈述（如 "We propose X"
+      是贡献声明不是经验论断，刻意不判为缺证据，避免审计噪音）。
+
+    References 章节整体剔除（条目编号/文本不算文中引用与论断）。
+
+    :param text: 待审计文本（大纲正文或最终全文均可）
+    :param refs_list: 白名单文献列表；``None``/空列表 = 不做范围校验
+    :return: ``{"ok","n_units","n_supported","n_needs_evidence","n_background",
+      "n_bad_citation","n_out_of_range","sections","needs_evidence","report"}``；
+      ``ok`` 仅对 error 级（坏角标）为 False，warning 级（待补依据）不影响 ok。
+    """
+    result = {"ok": True, "n_units": 0, "n_supported": 0, "n_needs_evidence": 0,
+              "n_background": 0, "n_bad_citation": 0, "n_out_of_range": 0,
+              "sections": [], "needs_evidence": [], "report": ""}
+    try:
+        n_refs = len(refs_list or [])
+        body = _body_without_references(text)
+        lines = str(body or "").splitlines()[:max_lines]
+        section = "（文首）"
+        sec_stat = OrderedDict()
+        flagged = []
+        for ln, raw in enumerate(lines, 1):
+            line = raw.rstrip()
+            if not line.strip() or _TABLE_ROW_RE.match(line):
+                continue
+            m_h = _HEADING_LINE_RE.match(line)
+            if m_h:
+                title = (m_h.group("md") or m_h.group("bold") or "").strip(" *:")
+                if title:
+                    section = title[:60]
+                continue
+            unit = _BULLET_PREFIX_RE.sub("", line).strip()
+            if len(unit) < 4:
+                continue
+            cites = [int(x) for x in _CITE_MARK_RE.findall(unit)]
+            in_range = [n for n in cites if n_refs == 0 or 1 <= n <= n_refs]
+            out_range = [n for n in cites if n not in in_range]
+            result["n_out_of_range"] += len(out_range)
+            has_pointer = bool(_EVIDENCE_POINTER_RE.search(unit))
+            has_claim = bool(_CLAIM_CUE_RE.search(unit))
+            if in_range or has_pointer:
+                status = "supported"
+            elif cites:
+                status = "bad_citation"
+            elif has_claim:
+                status = "needs_evidence"
+            else:
+                status = "background"
+            st = sec_stat.setdefault(section, {"section": section, "n_units": 0,
+                                               "n_supported": 0, "n_needs_evidence": 0})
+            st["n_units"] += 1
+            if status == "supported":
+                st["n_supported"] += 1
+                result["n_supported"] += 1
+            elif status == "needs_evidence":
+                st["n_needs_evidence"] += 1
+                result["n_needs_evidence"] += 1
+                flagged.append({"severity": "warning", "section": section,
+                                "line_no": ln, "text": unit[:180],
+                                "reason": "含论断性表述，但既无白名单内引用角标 [n]，"
+                                          "也无 Table/Figure/式 等证据指针（待补依据）"})
+            elif status == "bad_citation":
+                result["n_bad_citation"] += 1
+                flagged.append({"severity": "error", "section": section,
+                                "line_no": ln, "text": unit[:180],
+                                "reason": f"引用角标 {out_range} 超出真实文献范围 "
+                                          f"[1..{n_refs}]（幻觉角标）"})
+            else:
+                result["n_background"] += 1
+        result["n_units"] = sum(s["n_units"] for s in sec_stat.values())
+        result["sections"] = list(sec_stat.values())
+        result["needs_evidence"] = [f for f in flagged if f["severity"] == "warning"][:max_items]
+        result["ok"] = result["n_bad_citation"] == 0
+        report = ["### 论断-证据对齐审计（确定性 · 零 LLM · 零网络）", "",
+                  f"共扫描 {result['n_units']} 个论断单元：有证据支撑 {result['n_supported']} · "
+                  f"待补依据 {result['n_needs_evidence']} · 背景陈述 {result['n_background']} · "
+                  f"坏角标 {result['n_bad_citation']}", ""]
+        if flagged:
+            for it in flagged[:15]:
+                tag = "🚨" if it["severity"] == "error" else "⚠️"
+                report.append(f"- {tag} [{it['section']}] 第 {it['line_no']} 行："
+                              f"「{it['text']}」——{it['reason']}")
+            if len(flagged) > 15:
+                report.append(f"- …另有 {len(flagged) - 15} 条未展示")
+        else:
+            report.append("✅ 未发现「有论断无证据」或「越界角标」的单元。")
+        result["report"] = "\n".join(report)
+        return result
+    except Exception as e:
+        result["ok"] = False
+        result["report"] = (f"⚠️ 论断-证据对齐审计自身异常"
+                            f"（{type(e).__name__}: {str(e)[:120]}），本次结果未核实。")
+        return result
+
+
+# ---------------------------------------------------------------- 2) 引用-参考文献双向核对
+def citation_correspondence_audit(text, refs_list):
+    """引用-参考文献双向核对：文中角标 ↔ 文献清单必须一一对应（Paperpal 式）。
+
+    借鉴 Paperpal Manuscript Checker 的 "Citation-Reference Correspondence"
+    （消除 in-text citation 与 reference list 的漏引/多引/格式混用）。检查四项：
+    1. **越界角标**（error）：正文出现白名单范围之外的 ``[n]``；
+    2. **漏引文献**（warning）：白名单里存在但正文从未引用的条目——读者会问
+       「列了为什么不引」，要么补引用要么从清单移除；
+    3. **引用格式混用**（warning）：``[n]`` / ``[n, m]`` / ``[n][m]`` 多种风格
+       混用（期刊格式一致性问题，Paperpal Formatting inconsistencies 同款）；
+    4. **被清洗的幻觉角标**（info）：正文残留的 ``[?]`` 数量——
+       :func:`_sanitize_citations` 曾把越界角标打码的地方，必须人工复核。
+
+    :return: ``{"ok","n_cited","n_refs","cited_ids","out_of_range","uncited_refs",
+      "styles","mixed_style","removed_marks","report"}``
+    """
+    result = {"ok": True, "n_cited": 0, "n_refs": 0, "cited_ids": [], "out_of_range": [],
+              "uncited_refs": [], "styles": [], "mixed_style": False, "removed_marks": 0,
+              "report": ""}
+    try:
+        refs = list(refs_list or [])
+        n_refs = len(refs)
+        result["n_refs"] = n_refs
+        body = _body_without_references(text)
+        marks = [int(x) for x in _CITE_MARK_RE.findall(body or "")]
+        cited = sorted(set(marks))
+        result["cited_ids"] = cited
+        result["n_cited"] = len(cited)
+        if n_refs:
+            result["out_of_range"] = [n for n in cited if n < 1 or n > n_refs]
+            cited_set = set(cited)
+            uncited = []
+            for i, r in enumerate(refs, 1):
+                if i not in cited_set:
+                    title = str(r.get("title") or r.get("raw") or "") if isinstance(r, dict) else str(r)
+                    uncited.append({"id": i, "title": title[:120]})
+            result["uncited_refs"] = uncited
+        styles = ["方括号 [n]"] if marks else []
+        if _CITE_GROUP_RE.search(body or ""):
+            styles.append("成组 [n, m]")
+        if _CITE_ADJACENT_RE.search(body or ""):
+            styles.append("并排 [n][m]")
+        result["styles"] = styles
+        result["mixed_style"] = len(styles) > 1
+        result["removed_marks"] = len(_CITE_REMOVED_RE.findall(body or ""))
+        result["ok"] = not result["out_of_range"]
+        report = ["### 引用-参考文献双向核对（确定性 · 零 LLM · 零网络）", "",
+                  f"白名单文献 {n_refs} 条；正文实际引用 {len(cited)} 条"
+                  + (f"（编号：{', '.join('[%d]' % n for n in cited[:20])}"
+                     f"{' …' if len(cited) > 20 else ''}）" if cited else "（正文没有任何引用角标）"),
+                  ""]
+        if result["out_of_range"]:
+            report.append(f"- 🚨 越界角标：{result['out_of_range']}"
+                          f"（真实文献范围 [1..{n_refs}]）")
+        else:
+            report.append("- ✅ 无越界角标。")
+        if result["uncited_refs"]:
+            names = "；".join(f"[{u['id']}] {u['title']}" for u in result["uncited_refs"][:8])
+            more = f" …等共 {len(result['uncited_refs'])} 条" if len(result["uncited_refs"]) > 8 else ""
+            report.append(f"- ⚠️ 漏引文献 {len(result['uncited_refs'])} 条：{names}{more}"
+                          "（列在 References 却从未被正文引用）")
+        if result["mixed_style"]:
+            report.append(f"- ⚠️ 引用格式混用：{' + '.join(styles)}（建议统一为一种）")
+        if result["removed_marks"]:
+            report.append(f"- ℹ️ 正文残留 {result['removed_marks']} 处 [?] 打码角标"
+                          "（曾被判定越界并替换，需人工复核）")
+        result["report"] = "\n".join(report)
+        return result
+    except Exception as e:
+        result["ok"] = False
+        result["report"] = (f"⚠️ 引用-参考文献双向核对自身异常"
+                            f"（{type(e).__name__}: {str(e)[:120]}），本次结果未核实。")
+        return result
+
+
+# ---------------------------------------------------------------- 3) 文档内自一致性（章节漂移 + 术语一致）
+def consistency_audit(text, required_sections=None):
+    """文档内自一致性审计：章节漂移、顺序、术语变体、缩略语冲突、编号、引号风格。
+
+    借鉴 rasha.me Stage 6 "Intra-Document Consistency Check"（术语漂移与跨节
+    矛盾的整文档记忆外置）与中文长文写作方法论的「跨章节检查」：同一概念前后
+    定义不同、同一数据两个版本、章节顺序漂移，都是大模型逐段生成的典型病症。
+    全部确定性检查，零 LLM。
+
+    检查项与严重度：
+    - ``section_missing``（error）：缺少必需章节（默认 :data:`DEFAULT_REQUIRED_SECTIONS`，
+      与本模块大纲 prompt 的固定章节一致；传 ``required_sections=[]`` 可关闭）；
+    - ``section_order``（warning）：必需章节出现顺序与预期不符；
+    - ``extra_section``（info）：出现固定结构之外的章节（References 段不算）；
+    - ``term_variant``（warning）：连字符/空格写法混用（fine-tuning/finetuning）；
+    - ``acronym_conflict``（warning）：同一缩略语出现两个不同释义；
+    - ``acronym_undefined``（info）：缩略语使用了却从未给出释义（截断展示）；
+    - ``heading_numbering``（warning）：标题编号倒流或跳号；
+    - ``quote_style``（info）：直引号与弯引号混用。
+
+    :return: ``{"ok","issues","n_error","n_warning","n_info","sections_found",
+      "missing_sections","report"}``；``ok`` 仅对 error 级为 False。
+    """
+    result = {"ok": True, "issues": [], "n_error": 0, "n_warning": 0, "n_info": 0,
+              "sections_found": [], "missing_sections": [], "report": ""}
+    try:
+        body = _body_without_references(text)
+        src = str(body or "")
+        if required_sections is None:
+            required = list(DEFAULT_REQUIRED_SECTIONS)
+        else:
+            required = [str(s) for s in required_sections]
+        req_norm = [_norm_heading(s) for s in required]
+
+        # ---- 1) 收集标题 ----
+        headings = []
+        for ln, raw in enumerate(src.splitlines(), 1):
+            m = _HEADING_LINE_RE.match(raw.rstrip())
+            if not m:
+                continue
+            title = (m.group("md") or m.group("bold") or "").strip(" *:")
+            if not title:
+                continue
+            mnum = re.match(r"^\s*(\d+)(?:\.\d+)*[.)]?\s", title)
+            headings.append({"line_no": ln, "title": title[:80],
+                             "norm": _norm_heading(title),
+                             "num": int(mnum.group(1)) if mnum else None})
+
+        # ---- 2) 必需章节：缺失（error）/ 乱序（warning）/ 额外章节（info）----
+        found = {}
+        for hi, h in enumerate(headings):
+            if not h["norm"]:
+                continue
+            for ri, rn in enumerate(req_norm):
+                if ri in found or not rn:
+                    continue
+                shorter, longer = ((h["norm"], rn) if len(h["norm"]) <= len(rn)
+                                   else (rn, h["norm"]))
+                if len(shorter) >= 4 and shorter in longer:
+                    found[ri] = hi
+                    break
+        result["sections_found"] = [required[ri] for ri in sorted(found, key=lambda r: found[r])]
+        missing = [required[ri] for ri in range(len(required)) if ri not in found]
+        result["missing_sections"] = missing
+        for name in missing:
+            _add_issue(result, "error", "section_missing", f"缺少必需章节「{name}」")
+        appear = sorted(found, key=lambda ri: found[ri])
+        if appear != sorted(appear):
+            for a, b in zip(appear, appear[1:]):
+                if a > b:
+                    _add_issue(result, "warning", "section_order",
+                               f"章节顺序与固定结构不符：「{required[b]}」出现在"
+                               f"「{required[a]}」之前")
+                    break
+        ref_norms = {"references", "bibliography", "works cited", "参考文献"}
+        extras = [h["title"] for h in headings
+                  if h["norm"] not in ref_norms
+                  and not any(len(s) >= 4 and (s in h["norm"] or h["norm"] in s)
+                              for s in req_norm if s)]
+        if extras:
+            _add_issue(result, "info", "extra_section",
+                       "出现固定结构之外的章节：" + "、".join(extras[:8])
+                       + (" …" if len(extras) > 8 else ""))
+
+        # ---- 3) 术语写法变体混用 ----
+        for canon, variants in _TERM_VARIANT_GROUPS:
+            counts = []
+            for v in variants:
+                c = len(re.findall(r"(?<!\w)%s(?!\w)" % re.escape(v), src, re.IGNORECASE))
+                if c:
+                    counts.append((v, c))
+            if len(counts) >= 2:
+                _add_issue(result, "warning", "term_variant",
+                           "术语写法混用：" + "、".join(f"「{v}」×{c}" for v, c in counts)
+                           + f"（建议统一为「{canon}」）")
+
+        # ---- 4) 缩略语：定义冲突（warning）+ 使用了却没给释义（info）----
+        defs = {}
+        for m in _ACRONYM_DEF_RE.finditer(src):
+            acro, exp = m.group(1), m.group(2)
+            if not re.search(r"[A-Za-z]{3}", exp):
+                continue                      # "(2023)" 这类不是释义
+            norm_exp = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", " ", exp.lower()).strip()
+            if norm_exp:
+                defs.setdefault(acro.upper(), [])
+                if norm_exp not in defs[acro.upper()]:
+                    defs[acro.upper()].append(norm_exp)
+        for acro, exps in defs.items():
+            if len(exps) >= 2:
+                _add_issue(result, "warning", "acronym_conflict",
+                           f"缩略语 {acro} 有多个不同释义："
+                           + " / ".join(f"「{e}」" for e in exps[:3]))
+        used = {}
+        for m in _ACRONYM_TOKEN_RE.finditer(src):
+            t = m.group(0)
+            if t in _ACRONYM_STOP or t in defs:
+                continue
+            used[t] = used.get(t, 0) + 1
+        if used:
+            top = sorted(used.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+            _add_issue(result, "info", "acronym_undefined",
+                       "以下缩略语未在文中给出释义："
+                       + "、".join(f"{t}×{c}" for t, c in top))
+
+        # ---- 5) 标题编号连续性（只看首级编号，兼容 1 / 1.1 / 2 的层级）----
+        nums = [h["num"] for h in headings if h["num"] is not None]
+        if nums:
+            back = next(((a, b) for a, b in zip(nums, nums[1:]) if b < a), None)
+            if back:
+                _add_issue(result, "warning", "heading_numbering",
+                           f"标题编号倒流：{back[0]} → {back[1]}")
+            else:
+                distinct = sorted(set(nums))
+                gap = next(((a, b) for a, b in zip(distinct, distinct[1:]) if b > a + 1), None)
+                if gap:
+                    _add_issue(result, "warning", "heading_numbering",
+                               f"标题编号跳号：{gap[0]} → {gap[1]}")
+
+        # ---- 6) 引号风格混用 ----
+        straight = src.count('"')
+        curly = src.count("“") + src.count("”")
+        if straight and curly:
+            _add_issue(result, "info", "quote_style",
+                       f"直引号 \" ×{straight} 与弯引号 ×{curly} 混用")
+
+        report = ["### 文档内自一致性审计（确定性 · 零 LLM · 零网络）", "",
+                  f"标题 {len(headings)} 个；必需章节命中 {len(found)}/{len(required)}；"
+                  f"问题：error {result['n_error']} · warning {result['n_warning']} · "
+                  f"info {result['n_info']}", ""]
+        if result["issues"]:
+            icon = {"error": "🚨", "warning": "⚠️", "info": "ℹ️"}
+            for it in result["issues"][:15]:
+                report.append(f"- {icon[it['severity']]} [{it['kind']}] {it['detail']}")
+            if len(result["issues"]) > 15:
+                report.append(f"- …另有 {len(result['issues']) - 15} 条未展示")
+        else:
+            report.append("✅ 未发现一致性问题。")
+        result["report"] = "\n".join(report)
+        return result
+    except Exception as e:
+        result["ok"] = False
+        result["report"] = (f"⚠️ 自一致性审计自身异常"
+                            f"（{type(e).__name__}: {str(e)[:120]}），本次结果未核实。")
+        return result
+
+
+# ---------------------------------------------------------------- 4) 大纲→段落展开骨架（论证单元）
+def paragraph_skeleton(section_title, bullets, refs_list=None, max_units=10):
+    """把大纲小节展开为「论点句 → 证据 → 过渡」论证单元骨架（确定性模板，零 LLM）。
+
+    借鉴 SciSpace / Jenni AI 的 section-aware drafting 与「论证单元」写作模板
+    （每个单元 = 直接结论 + 解释 + 证据 + 边界/过渡）：先把结构钉死，再让 LLM
+    或作者只往槽位里填内容——比「把大纲整段丢给模型自由发挥」更可控，也让
+    claim-evidence 对齐在**写作前**就生效（没有证据的单元在骨架上就带着
+    「待补依据」标记）。
+
+    槽位规则：
+    - **论点句**：要点原文（已去列表符号）；
+    - **证据**：要点里的 ``[n]`` 角标映射为白名单文献条目（:func:`_ref_line`
+      同源渲染）；越界角标显式标注「按幻觉处理」；无角标 → 「待补依据」；
+    - **过渡**：按单元位置（首/中/末）从确定性模板选取，中段循环不重复；
+    - 语言自适应：要点含中文 → 中文脚手架，否则英文脚手架。
+
+    :param bullets: 要点列表，或一段 Markdown 文本（按行拆分、自动去列表符号）
+    :return: ``{"section","n_units","n_with_evidence","n_pending","units","markdown"}``
+    """
+    out = {"section": str(section_title or "").strip()[:80], "n_units": 0,
+           "n_with_evidence": 0, "n_pending": 0, "units": [], "markdown": ""}
+    try:
+        if isinstance(bullets, str):
+            raw_lines = bullets.splitlines()
+        else:
+            raw_lines = [str(b) for b in (bullets or [])]
+        items = []
+        for raw in raw_lines:
+            line = str(raw or "").strip()
+            if not line or _HEADING_LINE_RE.match(line) or _TABLE_ROW_RE.match(line):
+                continue
+            item = _BULLET_PREFIX_RE.sub("", line).strip()
+            if len(item) >= 4:
+                items.append(item)
+        items = items[:max_units]
+        if not items:
+            out["markdown"] = f"### {out['section']}\n\n（无可展开的要点：输入为空或全是标题行）"
+            return out
+        zh = any(re.search(r"[\u4e00-\u9fff]", it) for it in items)
+        lab = ({"unit": "单元", "claim": "论点句", "evidence": "证据", "transition": "过渡"}
+               if zh else
+               {"unit": "Unit", "claim": "Topic sentence", "evidence": "Evidence",
+                "transition": "Transition"})
+        trans = _TRANSITION_ZH if zh else _TRANSITION_EN
+        refs = list(refs_list or [])
+        n_refs = len(refs)
+        lines = [f"### {out['section']}｜{lab['unit']}骨架（{len(items)} 个{lab['unit']}）", "",
+                 ("> 用法：每个单元按「论点句 → 证据 → 过渡」展开为一个段落；"
+                  "标注「待补依据」的单元必须补一条白名单内文献，"
+                  "或明确改写为作者判断/方法设计说明（无需引用）后才能定稿。"
+                  if zh else
+                  "> Usage: expand each unit into one paragraph (claim -> evidence -> "
+                  "transition); units marked 'pending evidence' must gain a whitelist "
+                  "reference or be rewritten as author judgment before finalizing."),
+                 ""]
+        n_with_evidence = 0
+        for i, item in enumerate(items):
+            cites = [int(x) for x in _CITE_MARK_RE.findall(item)]
+            ev_lines, has_ev, pending = [], False, False
+            for n in cites:
+                if 1 <= n <= n_refs:
+                    ev_lines.append(_ref_line(n, refs[n - 1]))
+                    has_ev = True
+                else:
+                    ev_lines.append(f"（角标 [{n}] 超出白名单范围 [1..{n_refs}]，"
+                                    f"按幻觉处理，需删除或更正）")
+                    pending = True
+            if not cites:
+                pending = True
+            if pending and not ev_lines:
+                ev_lines.append("待补依据：尚未标注引用——补一条白名单内文献，"
+                                "或改写为作者判断（无需引用）" if zh else
+                                "Pending evidence: no citation yet — add a whitelist "
+                                "reference, or rewrite as author judgment (no citation needed)")
+            if i == 0:
+                t = trans[0]
+            elif i == len(items) - 1:
+                t = trans[-1]
+            else:
+                t = trans[1 + (i - 1) % max(1, len(trans) - 2)]
+            lines.append(f"**{lab['unit']} {i + 1}｜{lab['claim']}**：{item}")
+            lines.append(f"**{lab['evidence']}**：")
+            for e in ev_lines:
+                lines.append(f"- {e}")
+            lines.append(f"**{lab['transition']}**：{t}")
+            lines.append("")
+            out["units"].append({"claim": item, "evidence": ev_lines,
+                                 "transition": t, "pending": pending})
+            if has_ev:
+                n_with_evidence += 1
+        out["n_units"] = len(items)
+        out["n_with_evidence"] = n_with_evidence
+        out["n_pending"] = len(items) - n_with_evidence
+        out["markdown"] = "\n".join(lines).rstrip() + "\n"
+        return out
+    except Exception as e:
+        out["markdown"] = f"⚠️ 骨架生成异常（{type(e).__name__}: {str(e)[:120]}）"
+        return out
+
+
+# ---------------------------------------------------------------- 5) 组合入口（UI/工具层单点调用）
+def writing_quality_audit(text, refs_list=None, required_sections=None):
+    """组合入口：一次跑齐「论断-证据对齐 + 引用双向核对 + 自一致性」三个确定性审计。
+
+    建议调用点（本函数不调 LLM，可放在任何生成后处理之后）：
+    ``ui/page_writing.py`` 在 ``writing.finalize_outline(...)`` 之后、展示
+    ``res['text']`` 的同一区块内追加本报告——三个审计共享同一份最终全文，
+    与既有白名单校验互为补充：白名单管「引用是不是真的」，本组合管
+    「论断有没有证据 / 引用与清单是否一一对应 / 章节术语是否自洽」。
+
+    :return: ``{"ok","n_error","n_warning","claim_evidence","citation_correspondence",
+      "consistency","report"}``；三个子审计任一自身异常都会反映在 report 里。
+    """
+    out = {"ok": False, "n_error": 0, "n_warning": 0, "claim_evidence": None,
+           "citation_correspondence": None, "consistency": None, "report": ""}
+    try:
+        ce = claim_evidence_audit(text, refs_list)
+        cc = citation_correspondence_audit(text, refs_list) if (refs_list or []) else None
+        co = consistency_audit(text, required_sections)
+        n_error = ce["n_bad_citation"] + co["n_error"]
+        n_warning = ce["n_needs_evidence"] + co["n_warning"]
+        if cc is not None:
+            n_error += len(cc["out_of_range"])
+            n_warning += len(cc["uncited_refs"]) + (1 if cc["mixed_style"] else 0)
+        ok = n_error == 0
+        parts = ["## 写作质量审计（确定性 · 零 LLM · 零网络）", "", ce["report"]]
+        if cc is not None:
+            parts += ["", cc["report"]]
+        parts += ["", co["report"], "",
+                  f"**汇总**：错误 {n_error} 项 · 警告 {n_warning} 项"
+                  + ("——全部通过，可进入人工终审。" if ok
+                     else "——存在错误级问题，需处理后才能定稿。")]
+        out.update({"ok": ok, "n_error": n_error, "n_warning": n_warning,
+                    "claim_evidence": ce, "citation_correspondence": cc,
+                    "consistency": co, "report": "\n".join(parts)})
+        return out
+    except Exception as e:
+        out["report"] = (f"⚠️ 写作质量审计自身异常"
+                         f"（{type(e).__name__}: {str(e)[:160]}），本次结果未核实。")
+        return out
