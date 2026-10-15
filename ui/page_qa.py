@@ -18,8 +18,8 @@ import time
 
 import streamlit as st
 from services import rag
-from ui.common import (require_library, page_header, show_error,
-                       is_llm_degraded, llm_degraded_banner)
+from ui.common import (require_library, page_header, show_error, at,
+                       is_llm_degraded, llm_degraded_banner, empty_state_card)
 
 
 # 本页局部样式：仅作用于问答页，不改动 ui/common.py；让答案/来源分层更清爽。
@@ -220,11 +220,9 @@ def render(ctx):
         st.info(guidance)
 
     # 跨页联动提示：本页写入，📖版式阅读页消费（见报告"跨文件约定"）
-    pending = st.session_state.get(JUMP_KEY)
-    if pending:
-        st.info(f"🎯 当前待跳转定位：《{pending.get('source')}》第 {pending.get('page')} 页"
-                + (f"（第 {pending.get('para_idx')} 段）" if pending.get("para_idx") else "")
-                + f"。请到左侧导航切换到「📖 版式阅读与翻译」查看（session_state['{JUMP_KEY}']）。")
+    # 从「只说不做」的文字提示升级为一键操作条（Round 17 UI/UX）：用户点过
+    # 「📖 定位第 N 页」后意图已经明确，不该再让他去侧边栏 9 个菜单里找阅读页。
+    _jump_action_bar()
 
     # 示例问题：一行紧凑 chips（st.pills 原生胶囊样式）
     # —— 借鉴 Consensus「Suggested Follow-Up Questions」/ Elicit 极简界面，降低首屏决策成本。
@@ -272,8 +270,20 @@ def render(ctx):
     use_rerank = st.checkbox("启用 LLM 重排（更精准，耗额度）", key="qa_use_rerank")
 
     with st.form("qa_form", clear_on_submit=True):
-        q = st.text_input("请输入问题", value=st.session_state.get("qa_q", ""))
+        q = st.text_input("请输入问题", value=st.session_state.get("qa_q", ""),
+                          placeholder="例如：这篇论文提出了什么模型？（支持中文提问，自动做中英检索扩展）")
         go = st.form_submit_button("🔎 提问")
+
+    # 无问答历史时的教学式空状态（Round 17 UI/UX）：提问前先讲清「答案会长什么样」，
+    # 避免首屏只有输入框、用户不确定提交后会发生什么（Notion/Linear 式空状态教学）。
+    if not st.session_state.get("qa_runs"):
+        empty_state_card(
+            "还没有问答记录",
+            desc="提问后，答案会出现在这里：内联【n】引用标注来源，下方附可点击定位原文的溯源卡片。",
+            actions=["点上方「💡 试试这些问题」胶囊自动填入输入框，再点「🔎 提问」",
+                     "检索范围支持「全部文献 / 单篇锁定 / 多篇对比」，可开启 LLM 重排提升精度"],
+            icon="💬",
+        )
 
     if go and q.strip():
         if not getattr(ctx.llm, "available", False):
@@ -384,3 +394,67 @@ def render(ctx):
         with st.expander("🛠️ 检索调试（高级）", expanded=False):
             _render_debug(run)
         st.markdown("---")
+
+
+# ---------- 跨页跳转操作条（Round 17 UI/UX） ----------
+def _jump_payload(payload):
+    """把 session_state["qa_jump_page"] 归一化为 {source, page, para}；无效返回 None。
+
+    纯函数（不碰 st.*），便于单测；渲染逻辑见 _jump_action_bar。
+    """
+    if not isinstance(payload, dict) or not payload.get("source"):
+        return None
+    try:
+        page = int(payload.get("page", 1) or 1)
+    except (TypeError, ValueError):
+        page = 1
+    para = payload.get("para_idx")
+    try:
+        para = int(para) if para else None
+    except (TypeError, ValueError):
+        para = None
+    return {"source": str(payload.get("source")), "page": page, "para": para}
+
+
+def _jump_action_bar():
+    """待跳转定位操作条：从「文字提示用户自己切导航」升级为「一键直达」。
+
+    借鉴 duply / Vercel 的 deep-linking 实践：用户意图已经明确（点过「📖 定位」），
+    就该一键落到目标状态，而不是让他在侧边栏 9 个菜单里重新找一遍阅读页。
+
+    跳转机制与 ui/common.py jump_banner 完全同构（不另起一套）：
+    session_state["menu"] + query_params（p/jump_page/paper）双通道 + rerun。
+    ⚠️ Streamlit 状态机：写 "menu" 是安全的——导航 radio 的 widget key 是
+    "_nav_main"，"menu" 只是普通 session 变量（见 ui/sidebar.py:415）。
+    """
+    info = _jump_payload(st.session_state.get(JUMP_KEY))
+    if not info:
+        return
+    tail = f"（第 {info['para']} 段）" if info["para"] else ""
+    with st.container(border=True):
+        st.markdown(f"🎯 **问答溯源待跳转**：《{_esc(info['source'])}》"
+                    f"第 {info['page']} 页{tail}")
+        st.caption("点击下方按钮直达「📖 版式阅读与翻译」并定位到该页；查看后点「已查看」清除本提示。")
+        c1, c2 = st.columns([1, 1])
+        if c1.button("📖 立即打开阅读页", key="qa_jump_open", use_container_width=True):
+            try:
+                from ui.sidebar import MENU
+                st.session_state["menu"] = at(MENU, READING_PAGE_IDX,
+                                              MENU[0] if MENU else "")
+                # URL 参数失败不能顺带吞掉跳转本身：逐项 try，保证 rerun 一定执行
+                for _k, _v in (("p", str(READING_PAGE_IDX)),
+                               ("jump_page", str(info["page"])),
+                               ("paper", str(info["source"]))):
+                    try:
+                        st.query_params[_k] = _v
+                    except Exception:
+                        pass
+                st.rerun()
+            except Exception as e:
+                st.caption(f"跳转失败，请手动切换左侧导航：{str(e)[:100]}")
+        if c2.button("✅ 已查看，清除", key="qa_jump_clear", use_container_width=True):
+            st.session_state[JUMP_KEY] = None
+            try:
+                st.rerun()
+            except Exception:
+                pass

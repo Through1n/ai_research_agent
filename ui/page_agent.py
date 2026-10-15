@@ -18,8 +18,8 @@ import streamlit as st
 from core import agent
 from services import tasks as task_center
 from ui.common import (render_trace, page_header, ensure_state, friendly_error, empty_state,
-                       llm_guard, long_block, step_text, source_card, render_task_panel,
-                       is_llm_degraded, llm_degraded_banner)
+                       empty_state_card, llm_guard, long_block, step_text, source_card,
+                       render_task_panel, is_llm_degraded, llm_degraded_banner)
 
 # 截断预览里「完整的来源条目」匹配：扁平 JSON 对象且含 ref/file/source 字段
 _SRC_ITEM_RE = re.compile(r"\{[^{}]*\"(?:ref|file|source)\"\s*:\s*\"[^\"]+\"[^{}]*\}")
@@ -352,8 +352,16 @@ def render(ctx):
     # 历史记录（卡片化：标题 + 答案摘要 + 来源数；思考/轨迹默认折叠，首屏更清爽）
     runs = st.session_state.get("agent_runs") or []
     if not runs:
-        empty_state("还没有执行记录。",
-                    hints=["点上方任意示例任务", "或在下方输入框描述你的科研任务"])
+        # 教学式空状态（Round 17 UI/UX）：讲清答案会长什么样、点哪里开始，
+        # 而不是一句「还没有执行记录」把用户晾在原地。
+        empty_state_card(
+            "还没有执行记录",
+            desc="提交任务后，带【n】引用的答案、思考过程与执行轨迹会出现在这里，可随时回看。",
+            actions=["点上方任意示例任务卡片，一键后台运行（约 10–30 秒返回）",
+                     "或在下方输入框描述你的科研任务，点「🚀 执行」提交到后台",
+                     "实时进度见左侧「任务中心」，运行中可随时切换其他页面"],
+            icon="🧭",
+        )
     for entry in runs[-MAX_HISTORY:]:
         if not isinstance(entry, dict):
             continue

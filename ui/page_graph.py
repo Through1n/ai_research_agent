@@ -7,8 +7,8 @@ from html import escape as _esc
 from services import graph as g
 from services import library as _lib
 from ui.common import (embed_html, require_library, page_header, pretty_table, ensure_state,
-                       friendly_error, empty_state, llm_guard, long_block, step_text, at,
-                       is_llm_degraded, llm_degraded_banner,
+                       friendly_error, empty_state, empty_state_card, llm_guard, metric_strip,
+                       long_block, step_text, at, is_llm_degraded, llm_degraded_banner,
                        is_llm_offline_generated, llm_offline_generated_banner)
 from ui.sidebar import set_flash
 
@@ -184,6 +184,17 @@ def _render_pack(ctx, pack):
         empty_state("图谱为空节点。", hints=["点击左侧「🚀 一键加载演示数据」", "或在📁文献库上传 PDF"])
         return
 
+    # KPI 指标条先行（Round 17 UI/UX，借鉴 Stripe/Vercel 仪表盘：hero 指标先行、
+    # 明细表格后置）——用户第一眼就该看到「几张网、几条边、谁才是基石」，
+    # 而不是先面对一张 7 列的图论指标大表。
+    metric_strip([
+        ("逻辑节点", len(nodes), "同一 arXiv 多版本已合并"),
+        ("引用边", len(pack.get("edges") or []),
+         "演示模式为示意关系" if pack.get("demo") else "真实引用关系"),
+        ("🏆 基石论文", len(pack.get("corner") or []), "PageRank 领先"),
+        ("🌿 边缘衍生", len(pack.get("edge") or []), "暂未被他文引用"),
+    ])
+
     # 语料规模坦诚说明：逻辑节点远低于赛题「20 篇批量文献」时明确标注，
     # 不把 2-3 节点小图上的社区/PageRank 结果冒充成大规模能力
     if len(nodes) < g.SMALL_CORPUS_NODES:
@@ -293,11 +304,15 @@ def render(ctx):
                 friendly_error("图谱结果渲染", e, reasons=["图谱数据结构不完整"],
                                actions=["点上方按钮重新构建图谱"])
         else:
-            empty_state("尚未构建图谱。",
-                        hints=["点上方「🕸️ 构建引用图谱」",
-                               "演示数据加载后可一键生成 BERT→Transformer 关系",
-                               "⚠️ 本地演示语料经版本合并后仅 2-3 个逻辑节点，未达赛题『20 篇』规模；"
-                               "图谱指标在小语料下仅供参考，上传更多含 References 的 PDF 效果更佳"])
+            empty_state_card(
+                "尚未构建图谱",
+                desc="构建后，这里会展示引用关系网络图、KPI 指标与图论指标表、基石/边缘论文结论。",
+                actions=["点上方「🕸️ 构建引用图谱」，解析文献间的真实引用关系",
+                         "演示数据加载后可一键生成 BERT→Transformer 关系",
+                         "无真实引用边时可用「🎭 演示模式示意图谱」兜底"],
+                footer="⚠️ 本地演示语料经版本合并后仅 2-3 个逻辑节点，未达赛题『20 篇』规模；"
+                       "图谱指标在小语料下仅供参考，上传更多含 References 的 PDF 效果更佳。",
+            )
 
         st.markdown("---")
         if st.button("🎭 演示模式示意图谱"):
