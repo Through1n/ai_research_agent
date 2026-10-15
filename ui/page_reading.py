@@ -55,7 +55,7 @@ from services.translate import (native_page_html, bilingual_html, in_place_pdf,
                                 citation_jump_html, selectable_text_html, detect_columns,
                                 build_reference_index, find_reference_start_page,
                                 citation_links_html, protect_math, restore_math,
-                                stream_translate_to_chinese)
+                                stream_translate_to_chinese, parse_glossary, extract_terms, DEFAULT_GLOSSARY_TEXT, _glossary_inject, _glossary_apply)
 
 # ---------------- 常量（集中配置，便于调参） ----------------
 JUMP_KEY = "qa_jump_page"          # 与 ui/page_qa.py 约定（只读 + 消费后清理）
@@ -384,8 +384,8 @@ def _long_doc_scan(doc, start_page, end_page, with_figures=False):
 
 
 # ============================ B3：LLM 调用统一超时/并发/兜底 ============================
-def _safe_translate(ctx, text, timeout=LLM_CALL_TIMEOUT):
-    """单次翻译：带超时、带异常兜底。返回 (译文, 错误信息)；失败时译文为 ''。"""
+def _safe_translate(ctx, text, timeout=LLM_CALL_TIMEOUT, glossary=None):
+    """单次翻译：带超时、带异常兜底；glossary 非空时译前注入首选译法、译后强制统一（为空则行为不变）。"""
     txt = str(text or "")
     if not txt.strip():
         return "", "内容为空"
@@ -393,18 +393,18 @@ def _safe_translate(ctx, text, timeout=LLM_CALL_TIMEOUT):
         return "", "未配置 API Key"
     # T3：翻译前把公式/LaTeX/数值表达式占位，翻译后原样还原（模块三要求公式保留英文）
     masked, store = protect_math(txt)
-    ok, val, err = _run_with_timeout(writing.translate_to_chinese, timeout, ctx, masked)
+    ok, val, err = _run_with_timeout(writing.translate_to_chinese, timeout, ctx, _glossary_inject(masked, glossary))
     if ok:
         out = str(val or "").strip()
         if not out:
             return "", "模型返回空内容"
-        return restore_math(out, store), ""
+        return _glossary_apply(restore_math(out, store), glossary), ""
     if err and err.startswith("timeout"):
         return "", f"调用超时（> {timeout:.0f}s）"
     return "", (err or "调用失败")
 
 
-def _translate_pairs(ctx, paras, label="段落翻译"):
+def _translate_pairs(ctx, paras, label="段落翻译", glossary=None):
     """并发翻译（≤ MAX_TRANSLATE_WORKERS）+ 顺序还原 + 缓存命中跳过。
 
     返回 (pairs, errors)；pairs = [(原文, 译文), ...]，errors = [(段号, 原因), ...]
@@ -439,7 +439,7 @@ def _translate_pairs(ctx, paras, label="段落翻译"):
     probe.start()
     try:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = {ex.submit(_safe_translate, ctx, str(paras[i])[:_TR_PARA_CAP], LLM_CALL_TIMEOUT): i
+            futs = {ex.submit(_safe_translate, ctx, str(paras[i])[:_TR_PARA_CAP], LLM_CALL_TIMEOUT, glossary): i
                     for i in todo}
             for fut in futs:
                 i = futs[fut]
@@ -1199,7 +1199,7 @@ def render(ctx):
     # 注意：只初始化「非 widget」key；widget key（np/sp/pp/hp/cit/hl_frag/ld_*）
     # 若在这里预设会触发 Streamlit 的 "default value + session_state" 警告。
     _ensure_state({"read_tr_cache": {}, "read_jump_page": 1, "read_jump_para": None, "hl": "",
-                   "read_doc_id": "", "read_bilingual": None})
+                   "read_doc_id": "", "read_bilingual": None, GLOSSARY_KEY: DEFAULT_GLOSSARY_TEXT})
 
     doc = None
     try:
@@ -1331,10 +1331,12 @@ def render(ctx):
                 except Exception as e:
                     st.warning(f"⚠️ 长文档扫描区异常：{str(e)[:160]}")
 
-        # ---------- 2 中英同步滚动（A2 + B3） ----------
+        # ---------- 2 中英同步滚动（A2 + B3 + 句级对齐 + 术语表） ----------
         with tabs[1]:
             try:
                 p2 = st.number_input("页码", 1, tps, value=default_page, key="sp")
+                _gl = _glossary_editor(doc, int(p2))
+                _gl_mark = _gl if st.session_state.get(GLOSSARY_HL_KEY) else None
                 translated_now = False
                 if st.button("📥 加载并逐段翻译（段落对齐）", key="sp_go"):
                     translated_now = True
@@ -1346,7 +1348,7 @@ def render(ctx):
                         if not paras:
                             st.error("该页文本过少，可能是扫描件（无文本层）。")
                         else:
-                            pairs, _errs = _translate_pairs(ctx, paras, label="逐段翻译")
+                            pairs, _errs = _translate_pairs(ctx, paras, label="逐段翻译", glossary=_gl)
                             # 离线占位不能当译文展示（Round 12 ②残留）：模型不可用时
                             # translate_to_chinese 返回的是带降级标记的占位串，
                             # 直接塞进「中英对照」= 给评委看一段假译文。
@@ -1362,8 +1364,9 @@ def render(ctx):
                             except Exception:
                                 pass
                             try:
-                                st.markdown("**🌐 中英对照（逐段对齐 · 左右同步滚动）**")
-                                embed_html(bilingual_html(pairs), height=760, scrolling=False)
+                                st.markdown("**🌐 中英对照（逐段对齐 · 句级联动 · 左右同步滚动）**")
+                                embed_html(bilingual_html(pairs, glossary=_gl_mark),
+                                           height=760, scrolling=False)
                             except Exception as e:
                                 st.warning(f"⚠️ 双语视图渲染失败：{str(e)[:160]}")
                 # rerun 恢复：本次没有点翻译、且快照的文档/页码都与当前一致时重渲染
@@ -1376,8 +1379,8 @@ def render(ctx):
                             and _prev_bi.get("pairs")):
                         st.caption("♻️ 已恢复上次的翻译结果（换页后需重新加载）。")
                         try:
-                            st.markdown("**🌐 中英对照（逐段对齐 · 左右同步滚动）**")
-                            embed_html(bilingual_html(_prev_bi["pairs"]),
+                            st.markdown("**🌐 中英对照（逐段对齐 · 句级联动 · 左右同步滚动）**")
+                            embed_html(bilingual_html(_prev_bi["pairs"], glossary=_gl_mark),
                                        height=760, scrolling=False)
                         except Exception:
                             pass
@@ -1409,7 +1412,7 @@ def render(ctx):
                                                    state="error")
                                     st.error("该页无可提取文本，可能是扫描件。")
                                 else:
-                                    zh, err = _safe_translate(ctx, raw)
+                                    zh, err = _safe_translate(ctx, raw, glossary=_current_glossary())
                                     if not zh:
                                         _st_pdf.update(label="⚠️ 翻译失败，已中止", state="error")
                                         st.warning(f"⚠️ 翻译失败（{err}），已中止原位 PDF 生成。")
@@ -1651,7 +1654,8 @@ def render(ctx):
                         st.warning(f"⚠️ 第 {p5} 页读取失败：{str(e)[:120]}")
                 hl = str(st.session_state.get("hl") or "")
                 if hl:
-                    st.caption("划选下方词句后自动复制到剪贴板，再到输入框 Ctrl+V 粘贴。")
+                    st.caption("划选下方词句后自动复制到剪贴板，再到输入框 Ctrl+V 粘贴"
+                           "（选词不足 40 字时自动扩展到所在句子，带上下文翻译更准）。")
                     try:
                         embed_html(selectable_text_html(
                             hl, "划选词句 → 自动清空选区 + 复制，再到下方输入框 Ctrl+V"),
@@ -1678,10 +1682,12 @@ def render(ctx):
                             try:
                                 if hasattr(st, "write_stream"):
                                     _full = st.write_stream(
-                                        stream_translate_to_chinese(ctx, _frag_txt))
+                                        stream_translate_to_chinese(ctx, _frag_txt,
+                                                                    glossary=_current_glossary()))
                                 else:   # 旧版 Streamlit 兜底：收完一次性展示
                                     _full = "".join(list(
-                                        stream_translate_to_chinese(ctx, _frag_txt)))
+                                        stream_translate_to_chinese(ctx, _frag_txt,
+                                                                    glossary=_current_glossary())))
                             except Exception as e:
                                 _full = ""
                                 st.warning(f"⚠️ 翻译失败：{type(e).__name__}: {str(e)[:100]}")
@@ -1738,3 +1744,112 @@ def render(ctx):
                 doc.close()
             except Exception:
                 pass
+
+
+# ============================ Round13（P6）：术语表 UI（模块三：翻译一致性） ============================
+# 业界借鉴 DeepL 术语表：首选译法注入翻译上下文 + 译后强制统一 + 译文受控术语高亮。
+# 术语候选从当前页离线挖掘（括号定义式 / 重复大写短语），无模型、确定性；
+# UI 全部 try/except 兜底——术语表异常不影响页面其它功能。
+#
+# 存储设计（Streamlit 硬约束）：widget 实例化后禁止再写 session_state[widget_key]
+# （抛 StreamlitAPIException）。故编辑框文本存「数据 key」（GLOSSARY_KEY，程序可写），
+# 编辑框 widget 另用 GLOSSARY_TEXT_KEY；程序写入后置一次性同步标记，下次 rerun 在
+# widget 渲染前「先删 key 再赋值」完成同步（与页码跳转的 _drop_state 同一模式）。
+GLOSSARY_KEY = "read_glossary"            # 术语表文本（数据 key，程序可写）
+GLOSSARY_TEXT_KEY = "read_gl_text"        # 术语表编辑框 widget key
+GLOSSARY_PENDING_KEY = "read_gl_pending"  # 程序写入后的一次性同步标记
+GLOSSARY_HL_KEY = "read_gl_hl"            # 译文受控术语高亮开关
+
+
+def _glossary_sync_widget():
+    """把程序写入的术语表文本同步进编辑框 widget；无待同步内容时不动。永不抛异常。"""
+    try:
+        if not st.session_state.get(GLOSSARY_PENDING_KEY):
+            return
+        _drop_state((GLOSSARY_TEXT_KEY,))
+        st.session_state[GLOSSARY_TEXT_KEY] = str(
+            st.session_state.get(GLOSSARY_KEY) or DEFAULT_GLOSSARY_TEXT)
+        st.session_state[GLOSSARY_PENDING_KEY] = False
+    except Exception:
+        pass
+
+
+def _current_glossary():
+    """当前生效术语表：优先取编辑框最新值，其次取数据 key；解析失败/为空 → []。"""
+    try:
+        txt = st.session_state.get(GLOSSARY_TEXT_KEY)
+        if not isinstance(txt, str) or not txt.strip():
+            txt = st.session_state.get(GLOSSARY_KEY)
+        return parse_glossary(txt)
+    except Exception:
+        return []
+
+
+def _glossary_editor(doc, page):
+    """术语表面板（DeepL 术语表式）：编辑 / 从本页抽取候选 / 受控高亮开关。
+
+    返回生效术语表 [(en, zh, variants), ...]（未填中文的候选行不生效）。
+    """
+    _ensure_state({GLOSSARY_KEY: DEFAULT_GLOSSARY_TEXT, GLOSSARY_TEXT_KEY: DEFAULT_GLOSSARY_TEXT,
+                   GLOSSARY_PENDING_KEY: False, GLOSSARY_HL_KEY: True})
+    _glossary_sync_widget()
+    with st.expander("📚 术语表（首选译法注入 · 译后统一 · 受控高亮）", expanded=False):
+        st.text_area("每行一条：英文 = 中文（可追加误译变体：英文 = 中文; 变体1; 变体2）",
+                     height=150, key=GLOSSARY_TEXT_KEY)
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("🔍 从本页抽取术语", key="gl_extract"):
+                try:
+                    page_txt = doc[int(page) - 1].get_text() or ""
+                except Exception:
+                    page_txt = ""
+                terms = extract_terms(page_txt) if page_txt else []
+                if not terms:
+                    st.caption("ℹ️ 本页未抽取到候选术语（文本层缺失或术语重复度不足）。")
+                else:
+                    n_new = _merge_terms_into_glossary(terms)
+                    st.success(f"✅ 已并入 {n_new} 个新候选术语"
+                               f"（中文列留空待填，填好后才生效）。")
+                    if n_new:
+                        try:
+                            st.rerun()      # 立即同步进编辑框，不用等下一次交互
+                        except Exception:
+                            pass
+        with c2:
+            st.checkbox("译文受控术语高亮", key=GLOSSARY_HL_KEY)
+        gl = _current_glossary()
+        st.caption(f"当前生效 {len(gl)} 条术语；高亮"
+                   f"{'开' if st.session_state.get(GLOSSARY_HL_KEY) else '关'}。")
+    return gl
+
+
+def _merge_terms_into_glossary(terms):
+    """把抽取到的候选术语并入术语表：已有英文条目保留用户译法，新术语追加空译法行。
+
+    只写数据 key（非 widget key）+ 置同步标记；返回实际新增条数；异常静默返回 0。
+    """
+    try:
+        cur = str(st.session_state.get(GLOSSARY_TEXT_KEY)
+                  or st.session_state.get(GLOSSARY_KEY) or "")
+        have = set()
+        for line in cur.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.match(r"^([^=|｜:：\t,;]+)", line)
+            if m and m.group(1).strip():
+                have.add(m.group(1).strip().lower())
+        add = []
+        for term, _cnt in (terms or []):
+            key = str(term).strip().lower()
+            if key and key not in have:
+                have.add(key)
+                add.append("%s = " % str(term).strip())
+        if add:
+            merged = ((cur.rstrip() + "\n" + "\n".join(add) + "\n") if cur.strip()
+                      else ("\n".join(add) + "\n"))
+            st.session_state[GLOSSARY_KEY] = merged
+            st.session_state[GLOSSARY_PENDING_KEY] = True
+        return len(add)
+    except Exception:
+        return 0
