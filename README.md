@@ -289,7 +289,7 @@ Provider 名与环境变量名的对应（`core/providers.py` 的 `key_env` 字�
 | 版本去重 / 版本演进 | `demo_data/1706.03762v7.pdf` + `pdf/1706.03762v1.pdf` | 语义（非文件名）命中，建议保留最新版 |
 | 真双栏 PDF | `demo_data/1810.04805v2.pdf`（BERT） | 正文页正确判双栏；BERT→Transformer 引用边 |
 | 图像扫描版 | `pdf/1706.03762v1_img.pdf` | 判定扫描件，走多模态 OCR |
-| 超长文档 | `pdf/UnderstandingDeepLearning_02_09_26_C.pdf`（541 页） | 25.32s / 1305 分块 / 峰值 RSS 893.1MB |
+| 超长文档 | `pdf/UnderstandingDeepLearning_02_09_26_C.pdf`（541 页，本地测试文件·版权原因不随仓库分发） | 25.32s / 1305 分块 / 峰值 RSS 893.1MB |
 | 无 References 书籍 | `pdf/LongBook_540p_fixture.pdf` | 质量自检返回空列表，不拿索引页凑数 |
 
 ---
@@ -312,6 +312,8 @@ ai_research_agent/
 ├── version_history/           # v1 单体原型历史存档
 └── storage/                   # 运行时数据（git 忽略）
 ```
+
+> ⚠️ **版权说明（赛题测试 PDF）**：`pdf/` 下的测试 PDF **不随本公开仓库分发**（已在 `.gitignore` 中以 `pdf/*.pdf` 排除）。其中 `UnderstandingDeepLearning_02_09_26_C.pdf`（541 页长文档压测用例）是《Understanding Deep Learning》官方免费教材（作者 Simon J.D. Prince 授权官网免费阅读，**但不允许第三方仓库再分发**）。评委如需复现该用例，请自行从官网 **https://udlbook.github.io/** 下载后放入 `pdf/`。其余 5 件测试 PDF（3 件 arXiv 公开预印本 + 2 件本地生成夹具）可通过 `sh scripts/fetch_pdfs.sh` 一键现拉现用；`demo_data/` 下随仓库提交的 2 件（`1706.03762v7.pdf`、`1810.04805v2.pdf`）均为 arXiv 公开预印本（允许再分发），无版权风险。
 
 ---
 
