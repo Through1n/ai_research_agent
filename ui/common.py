@@ -563,10 +563,14 @@ def require_library(ctx):
     except Exception:
         ok = False
     if not ok:
-        empty_state(
-            "文献库为空，暂无内容可展示。",
-            hints=["点击左侧「🚀 一键加载演示数据（v1/v7/BERT）」",
-                   "或到「📁 文献库管理」上传 PDF"],
+        # 空库是全站最高频的空状态（问答/图谱/写作页都会走到这里）：
+        # 从「一行提示」升级为教学式卡片——讲清这里会出现什么、下一步点哪里。
+        empty_state_card(
+            "文献库为空，暂无内容可展示",
+            desc="装入文献后，这里会展示基于本地文献库的问答、图谱与写作结果。",
+            actions=["点击左侧「🚀 一键加载演示数据（v1/v7/BERT）」，秒级装入 3 篇经典论文",
+                     "或到「📁 文献库管理」上传 PDF（自动解析 + 语义查重 + 入库）"],
+            icon="📭",
         )
         return False
     return True
@@ -757,6 +761,104 @@ def resolve_pdf(filename):
     except Exception:
         return None
     return None
+
+
+# ============================ 教学式空状态 / KPI 指标条（UI/UX 优化） ============================
+# 空白页是用户流失的第一现场：整块内容区为空时如果只渲染空白，用户的第一反应是
+# 「页面坏了？」而不是「我该点哪」。以下两个组件分别解决「空状态」与「信息层级」：
+#   · empty_state_card()  教学式空状态卡片（说明会出现什么 + 下一步动作 + 口径边界）
+#   · metric_strip()      KPI 指标条（3-5 个 hero 指标先行，明细表格后置）
+# 视觉令牌全部复用本模块顶部的设计系统常量（色板/圆角/间距/阴影），不引入第二套语言。
+def _empty_state_card_html(title: str, desc: str = "", actions=(), icon: str = "🧭",
+                           footer: str = "") -> str:
+    """教学式空状态卡片的 HTML（纯函数，便于单测；st.* 包装见 empty_state_card）。
+
+    借鉴 Notion / Linear「空状态即教学」：不道歉、不卖萌，讲清三件事——
+    ① 这里会出现什么（desc）；② 下一步点哪里（带序号的动作）；
+    ③ 必须如实说明的口径边界（footer，如演示语料规模、非真实引用）。
+    与 empty_state() 的分工：后者是行内轻提示（一行信息 + 一句引导），
+    本卡片用于「整块内容区为空」的首屏，视觉与 page_header 同源。
+    """
+    acts = [str(a) for a in (actions or ()) if str(a).strip()]
+    rows = "".join(
+        '<div style="margin-top:6px;font-size:13px;color:%s;line-height:1.7;">'
+        '<span style="color:%s;font-weight:700;">%d.</span> %s</div>'
+        % (_C_CELL, _C_PRIMARY, _i, _esc(_a)) for _i, _a in enumerate(acts, 1))
+    _desc_html = ("" if not str(desc or "").strip() else
+                  '<div style="margin-top:6px;font-size:13px;color:%s;line-height:1.75;">%s</div>'
+                  % (_C_SUB, _esc(desc)))
+    _foot_html = ("" if not str(footer or "").strip() else
+                  '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed %s;'
+                  'font-size:12px;color:%s;line-height:1.7;">%s</div>'
+                  % (_C_BORDER, _C_SUB, _esc(footer)))
+    return (
+        '<div style="background:%s;border:1px solid %s;border-left:4px solid %s;'
+        'border-radius:%s;padding:%s;margin:%s;box-shadow:%s;">'
+        '<div style="font-size:15px;font-weight:700;color:%s;line-height:1.5;">%s %s</div>'
+        '%s%s%s</div>'
+        % (_C_BG_SOFT, _C_BORDER, _C_PRIMARY, _C_RADIUS, _C_PAD, _C_MARGIN, _C_SHADOW,
+           _C_INK, _esc(icon), _esc(title), _desc_html, rows, _foot_html))
+
+
+def empty_state_card(title: str, desc: str = "", actions=(), icon: str = "🧭",
+                     footer: str = ""):
+    """整块内容区为空时的首屏教学卡片（empty_state 行内轻提示版保留不变）。
+
+    典型场景：没有执行记录 / 尚未构建图谱 / 文献库为空 / 没有问答历史。
+    """
+    st.markdown(_empty_state_card_html(title, desc=desc, actions=actions,
+                                       icon=icon, footer=footer),
+                unsafe_allow_html=True)
+
+
+def _metric_card_html(label: str, value: str, note: str = "") -> str:
+    """单个 KPI 卡片的 HTML（纯函数，便于单测）。"""
+    _note_html = ("" if not str(note or "").strip() else
+                  '<div style="margin-top:2px;font-size:11.5px;color:%s;line-height:1.5;">%s</div>'
+                  % (_C_SUB, _esc(note)))
+    return (
+        '<div style="background:%s;border:1px solid %s;border-radius:%s;'
+        'padding:10px 14px;margin:2px 0 10px;box-shadow:%s;">'
+        '<div style="font-size:12px;color:%s;line-height:1.4;">%s</div>'
+        '<div style="margin-top:4px;font-size:22px;font-weight:700;color:%s;'
+        'line-height:1.2;font-variant-numeric:tabular-nums;">%s</div>%s</div>'
+        % (_C_BG_SOFT, _C_BORDER, _C_RADIUS, _C_SHADOW,
+           _C_SUB, _esc(label), _C_PRIMARY, _esc(value), _note_html))
+
+
+def _normalize_metrics(items):
+    """把 (label, value[, note]) 序列归一化为三元组列表（纯函数，便于单测）。
+
+    非法条目（长度不足 / 不可下标）直接跳过，绝不抛异常——演示现场
+    指标条坏掉不能带崩整页。
+    """
+    out = []
+    for it in items or ():
+        try:
+            label, value = it[0], it[1]
+            note = it[2] if len(it) > 2 else ""
+        except (TypeError, IndexError):
+            continue
+        out.append((str(label), str(value), str(note or "")))
+    return out
+
+
+def metric_strip(items, max_cols: int = 4):
+    """KPI 指标条：hero 指标先行、明细表格后置（借鉴 Stripe / Vercel 仪表盘）。
+
+    items: [(指标名, 数值[, 口径小字]), ...]；超过 max_cols 个时自动分行，
+    避免窄屏下卡片被压成竖条。空列表时什么都不渲染。
+    """
+    norm = _normalize_metrics(items)
+    if not norm:
+        return
+    for _start in range(0, len(norm), max_cols):
+        chunk = norm[_start:_start + max_cols]
+        cols = st.columns(len(chunk))
+        for col, (label, value, note) in zip(cols, chunk):
+            with col:
+                st.markdown(_metric_card_html(label, value, note),
+                            unsafe_allow_html=True)
 
 
 # ============================ 任务中心（问题五/六） ============================

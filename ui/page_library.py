@@ -9,7 +9,8 @@ import streamlit as st
 from config import UPLOAD_DIR, MAX_UPLOAD_MB
 from services import library, parsing
 from ui.common import (ensure_state, page_header, pretty_table, resolve_pdf, friendly_error,
-                       empty_state, llm_guard, long_block, step_text, LONG_TEXT_LIMIT)
+                       empty_state, llm_guard, long_block, step_text, metric_strip,
+                       LONG_TEXT_LIMIT)
 from ui.sidebar import set_flash
 
 # 文件级拒收（prepare_pdf 返回带 error 的 dict）的分档话术，键 = prepared["reason"]。
@@ -532,6 +533,20 @@ def render(ctx):
             empty_state("文献库为空。", hints=["点击左侧「🚀 一键加载演示数据（v1/v7/BERT）」",
                                            "或在「上传与解析」页签上传 PDF"])
         else:
+            # 库概览指标条（Round 17 UI/UX，借鉴 Stripe KPI 卡：hero 指标先行、
+            # 明细表格后置）——先回答「库有多大、覆盖如何」，再给逐篇明细表。
+            _n_pdf = sum(1 for fn in ctx.files if resolve_pdf(fn))
+            try:
+                _n_multi = sum(1 for _fs in (library.group_versions(ctx) or {}).values()
+                               if len(_fs) > 1)
+            except Exception:
+                _n_multi = 0
+            metric_strip([
+                ("文献篇数", len(ctx.files), "含同文多版本"),
+                ("片段总数", len(ctx.chunks or []), "问答 / 图谱的检索单位"),
+                ("多版本组", _n_multi, "同文多版本已自动识别"),
+                ("可定位原文", _n_pdf, "有原始 PDF，可做版式阅读"),
+            ])
             rows = []
             for fn in ctx.files:
                 p = ctx.papers.get(fn, {})
