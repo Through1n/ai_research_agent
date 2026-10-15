@@ -91,6 +91,11 @@ else:
   `--server.port=<port> --server.address=127.0.0.1 --server.headless=true
    --server.runOnSave=false --global.developmentMode=false --browser.gatherUsageStats=false
    --browser.openInExternalBrowser=false --client.toolbarMode=minimal`
+  - Round 16 追加（launcher.py 的 `STREAMLIT_CLI_ARGS`，与 Dockerfile CMD / start_app.sh 口径对齐）：
+    `--server.enableStaticServing=true`（写作页 mermaid 本地加载，不依赖热更新包内 config.toml；
+    该项默认 false，缺失会静默退化到 CDN）、`--server.maxUploadSize=100`（与应用层
+    `MAX_UPLOAD_MB=100` 对齐，上传层即拦，避免超限文件整份读入内存后才被拒）。
+  - 注：streamlit 1.63 已移除 `--browser.openInExternalBrowser`，命令行不再传它。
 - 子进程 cwd：冻结态 = RESOURCE_ROOT（让 .streamlit/config.toml 被 streamlit 自动发现）；开发态 = 项目根
 - 子进程环境：继承父进程并加 `AI4S_DESKTOP=1`；冻结态加 `STREAMLIT_GLOBAL_DEVELOPMENT_MODE=false`
 - Windows 标志：`creationflags=subprocess.CREATE_NO_WINDOW`（0x08000000），`startupinfo` 隐藏窗口；stdin=DEVNULL，stdout/stderr 重定向到 LOGS_DIR/streamlit.log（utf-8，追加）

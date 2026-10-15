@@ -28,6 +28,14 @@ _CREATE_NO_WINDOW = 0x08000000
 
 # Streamlit 命令行参数（显式传递，不依赖 config.toml 兜底）
 # 注意：streamlit 1.63 已移除 --browser.openInExternalBrowser；headless=true 已阻止开浏览器。
+#
+# Round 16 追加两项（与 Dockerfile CMD / start_app.sh 的口径对齐）：
+#   enableStaticServing=true —— 写作页的 mermaid.min.js 从 /static 本地加载，
+#     该项默认 false。热更新业务包理论上可能不含 .streamlit/config.toml
+#     （该文件里有这条设置），命令行显式传 = 不依赖包内配置，离线不退化到 CDN。
+#   maxUploadSize=100 —— 与 config.py 的应用层上限 MAX_UPLOAD_MB=100 对齐：
+#     应用层在解析前才拦超限文件，而文件此时已整份读进内存；在 streamlit
+#     上传层就拦掉更省内存（桌面态同理，理由同 Dockerfile 第 207-221 行注释）。
 STREAMLIT_CLI_ARGS = [
     "--server.address=127.0.0.1",
     "--server.headless=true",
@@ -35,6 +43,8 @@ STREAMLIT_CLI_ARGS = [
     "--global.developmentMode=false",
     "--browser.gatherUsageStats=false",
     "--client.toolbarMode=minimal",
+    "--server.enableStaticServing=true",
+    "--server.maxUploadSize=100",
 ]
 
 _STREAMLIT_LOG = None  # 子进程 stdout 句柄，保活至清理阶段

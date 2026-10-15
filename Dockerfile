@@ -29,15 +29,17 @@ FROM python:3.11-slim
 #                             $HOME/.cache/chroma/onnx_models/all-MiniLM-L6-v2
 #                             （chromadb 源码 onnx_mini_lm_l6_v2.py: DOWNLOAD_PATH = Path.home()/...）
 #                             构建期就是在这个位置预热的（见第 5 层）
-# HF_ENDPOINT               : 国内 HuggingFace 镜像；config.py 里用
-#                             os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com") 设置，
-#                             外部注入优先，运行期可在 compose 里覆盖。
-#                             ⚠️ 注意它对 chroma 的 ONNX 模型下载**无效**——那个走 AWS S3，
-#                                真正的解法是第 5 层的构建期预热。保留此变量是因为
-#                                config.py 会 setdefault 它，且 .env.example 有文档，
-#                                对其它走 HuggingFace 的库仍可能有用。
-#                             （此处**故意不写行号**：config.py 仍在被多人并行编辑，
-#                              我核到过 :103 → :126 → :131 三个值，写行号等于给后来人加"回头重核"义务）
+# HF_ENDPOINT               : **故意不在本文件设置**（Round 16 修正，曾误设过）。
+#                             config.py 的设计是「仅桌面态（国内）启用 HF 镜像」：
+#                               if DESKTOP_MODE: os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+#                             setdefault 的语义是「外部注入优先」——在 ENV 里设它等于用
+#                             镜像层**绕过代码里的环境判断**，把云平台容器也拖去走
+#                             hf-mirror.com；而 config.py 注释写明「境外连镜像更慢/易超时」，
+#                             云平台留空走 huggingface.co 才是有意为之。
+#                             Dockerfile.quick 同样不设（见其第 35-39 行注释），两个
+#                             Dockerfile 从此口径一致。
+#                             chroma 的 ONNX 模型不受该变量影响（走 AWS S3），
+#                             真正的解法是第 5 层的构建期预热。
 #
 # PYTHONUTF8 / LANG        : 显式锁定 UTF-8（Round 13 采纳 crossplat 的建议，见
 #                            docs/CROSS_PLATFORM.md §6）。两点说明：
@@ -63,8 +65,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUTF8=1 \
     LANG=C.UTF-8 \
-    HOME=/home/app \
-    HF_ENDPOINT=https://hf-mirror.com
+    HOME=/home/app
 
 WORKDIR /app
 
