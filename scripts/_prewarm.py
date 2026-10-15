@@ -29,15 +29,26 @@ chromadb/pandas/plotly/fitz 首次 import 约 2-4s，但它在**单独进程**�
 
 环境变量
 --------
-    PREWARM_MODEL_TIMEOUT  模型预热子进程超时秒数（默认 180）。超时即杀子进程，
-                          绝不把启动壳拖死（应用层有有界等待 + 降级兜底）。
-    AI4S_ROOT              项目根目录（默认取本脚本的上级目录）。
+    PREWARM_MODEL_TIMEOUT   模型预热子进程超时秒数（默认 120）。
+    PREWARM_PROBE_TIMEOUT   S3 连通性预检超时秒数（默认 8）。
+    AI4S_ROOT               项目根目录（默认取本脚本的上级目录）。
+
+为什么要有「S3 连通性预检」（Round 16 追加，风险驱动）
+----------------------------------------------------
+chroma 的下载重试没有总时长上限，预检的存在是为了把「预热失败」的最坏代价
+从「拖慢启动」压到「几乎为零」：
+  · 直连下载：无网/挂死时子进程要等满 MODEL_TIMEOUT 才被杀——启动壳被
+    拖住 120s，云平台的启动探针可能直接判超时把容器杀掉。**绝不允许**。
+  · 先预检：N 秒（默认 8s）内拿不到 S3 的响应头 + body 首字节，就判定
+    「现在下不动」，跳过下载只告警。应用启动后由后台预热线程继续尝试
+    （有界等待 + 人话降级），首帧与启动都不被阻塞。
+  预检流量代价：一个 GET + 1 字节 body（不消耗 83MB）。
 
 退出码
 ------
     0  模型已就绪（原本就绪或本次预热成功）；--demo 失败不影响退出码（与应用层
        「预加载失败不阻断启动」的口径一致，详见 Dockerfile.quick 第 99-100 行）。
-    1  模型未能就绪（chromadb 缺失 / 下载超时 / 校验文件不全）。
+    1  模型未能就绪（chromadb 缺失 / S3 不可达 / 下载超时 / 校验文件不全）。
        调用方（start_app.sh）以 `|| echo 警告` 包住，不阻断应用启动。
 
 安全边界：不读取、不回显任何 API Key；唯一外网访问是 chroma 官方的
@@ -50,6 +61,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 # chromadb 的 _download_model_if_not_exists 只认这 6 个文件（与 Dockerfile 第 5 层一致）
@@ -85,6 +97,29 @@ def _onnx_dir():
     except Exception as e:                                   # chromadb 未装/版本变
         _say(f"[prewarm] ⚠️ 无法定位 ONNX 模型缓存目录：{e}")
         return None
+
+
+def _s3_reachable(timeout: float) -> bool:
+    """N 秒内拿到 S3 的响应头 **且 body 首字节能到**，才认为「网络通」。
+
+    为什么要读 1 字节：境内访问该 S3 的经典故障形态是「连接建立、响应头
+    可能正常、但 body 传输挂死（实测 5s 0 字节）」——只判响应头会把这种
+    半死状态放行，让下载子进程去等满 MODEL_TIMEOUT。读 1 字节把这类挂死
+    也挡在预检阶段，最坏代价从 MODEL_TIMEOUT（默认 120s）压到 N 秒。
+    返回 False 的所有情形（DNS 失败 / 连接被拒 / 头或 body 超时 / 代理 502）
+    都按「下不动」处理。
+    """
+    url = ("https://chroma-onnx-models.s3.amazonaws.com/"
+           "all-MiniLM-L6-v2/onnx.tar.gz")
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return False
+            resp.read(1)          # body 首字节：挂死形态在这里现形（仅 1 字节流量）
+            return True
+    except Exception:
+        return False
 
 
 def _model_ready(d: Path) -> bool:
@@ -189,8 +224,12 @@ def main() -> int:
     ap.add_argument("--imports", action="store_true",
                     help="追加预热 app 导入链（默认关闭，见模块 docstring）")
     ap.add_argument("--model-timeout", type=float,
-                    default=float(os.environ.get("PREWARM_MODEL_TIMEOUT", "180")),
-                    help="模型预热超时秒数（默认 180，可用环境变量覆盖）")
+                    default=float(os.environ.get("PREWARM_MODEL_TIMEOUT", "120")),
+                    help="模型预热超时秒数（默认 120，可用环境变量覆盖）")
+    ap.add_argument("--probe-timeout", type=float,
+                    default=float(os.environ.get("PREWARM_PROBE_TIMEOUT", "8")),
+                    help="S3 连通性预检超时秒数（默认 8；预检不过则跳过下载，"
+                         "把最坏启动代价压到秒级）")
     args = ap.parse_args()
 
     d = _onnx_dir()
@@ -200,10 +239,15 @@ def main() -> int:
 
     if _model_ready(d):
         _say(f"[prewarm] ✓ ONNX 模型已就绪（跳过下载）：{d}")
-    elif not _warm_model(args.model_timeout):
-        pass  # 已打印警告；退出码由下面的就绪复核决定
     else:
-        _say(f"[prewarm] ✓ ONNX 模型已写入缓存：{d}")
+        # 先预检再下载：无网/挂死时只花 ~8s 就放弃，绝不拖住启动壳
+        if not _s3_reachable(args.probe_timeout):
+            _say(f"[prewarm] ⚠️ S3 预检未通过（{int(args.probe_timeout)}s 内无响应），"
+                 f"跳过下载——应用启动后由后台预热继续尝试，首帧不受影响")
+        elif not _warm_model(args.model_timeout):
+            pass  # 已打印警告；退出码由下面的就绪复核决定
+        else:
+            _say(f"[prewarm] ✓ ONNX 模型已写入缓存：{d}")
 
     model_ok = _model_ready(d)
     if not model_ok:

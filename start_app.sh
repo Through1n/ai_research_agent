@@ -99,7 +99,9 @@ fi
 
 # ---------- ⑤ 预热钩子（Round 16 加固，见头部注释）----------
 # 解释器探测：沙箱里 python3/python 名字不保证，谁在算谁。
-# 预热脚本本身幂等：模型已就绪时秒退（Docker 镜像构建期已烤过的场景零成本）。
+# 预热脚本本身幂等：模型已就绪时秒退（Docker 镜像构建期已烤过的场景零成本）；
+# 未就绪时先做 ~8s 的 S3 连通性预检，预检不过直接跳过下载（最坏只损失 ~8s），
+# 绝不会把启动壳拖死在下载上。
 PYW="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
 if [ -n "$PYW" ] && [ -f "scripts/_prewarm.py" ]; then
     "$PYW" scripts/_prewarm.py \
