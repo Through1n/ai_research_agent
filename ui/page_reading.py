@@ -216,11 +216,57 @@ def _run_with_timeout(fn, timeout, *args, **kwargs):
                 pass
 
 
+def _figure_scratch_root():
+    """fig_* 临时目录的项目私有根（storage/ 已被 .gitignore 忽略，不污染仓库）。
+
+    历史上这些目录建在共享 tempfile.gettempdir()，与其它程序共命名空间；
+    现改为项目私有位置，旧位置的残留仍由 cleanup_stale_figure_dirs 兼容清理。
+    """
+    try:
+        root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "storage", "scratch")
+        os.makedirs(root, exist_ok=True)
+        return root
+    except Exception:
+        return tempfile.gettempdir()
+
+
+def _new_figure_dir():
+    """新建 fig_* 临时目录（项目私有位置优先），失败时退回共享 temp。"""
+    try:
+        return tempfile.mkdtemp(prefix="fig_", dir=_figure_scratch_root())
+    except Exception:
+        return tempfile.mkdtemp(prefix="fig_")
+
+
+def _remove_dir_verified(path, retries=1):
+    """删除目录并验证真的消失；Windows 文件锁导致静默失败时重试一次。
+
+    仍失败则留给 24h 陈旧清理兜底——不崩、也不假装成功。永不抛异常。
+    """
+    for attempt in range(retries + 1):
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+        except Exception:
+            pass
+        if not os.path.exists(path):
+            return True
+        if attempt < retries:
+            time.sleep(0.2)
+    return False
+
+
 def cleanup_stale_figure_dirs(max_age_hours=FIG_TTL_HOURS, roots=None):
-    """清理超过 max_age_hours 小时的 fig_* 临时目录，返回清理个数。永不抛异常。"""
+    """清理超过 max_age_hours 小时的 fig_* 临时目录，返回清理个数。永不抛异常。
+
+    默认同时覆盖新位置（storage/scratch，主）与旧共享 temp（兼容历史残留）；
+    `roots` 可显式指定（冒烟脚本用它做单位置断言）。
+    """
     removed = 0
     now = time.time()
-    for root in (roots or [tempfile.gettempdir()]):
+    if roots is None:
+        roots = [_figure_scratch_root(), tempfile.gettempdir()]
+    for root in roots:
         try:
             names = os.listdir(root)
         except Exception:
@@ -238,11 +284,8 @@ def cleanup_stale_figure_dirs(max_age_hours=FIG_TTL_HOURS, roots=None):
             except Exception:
                 continue
             if age > float(max_age_hours) * 3600.0:
-                try:
-                    shutil.rmtree(p, ignore_errors=True)
+                if _remove_dir_verified(p):
                     removed += 1
-                except Exception:
-                    pass
     return removed
 
 
@@ -309,7 +352,7 @@ def _long_doc_scan(doc, start_page, end_page, with_figures=False):
     try:
         if with_figures:
             try:
-                fig_dir = tempfile.mkdtemp(prefix="fig_")
+                fig_dir = _new_figure_dir()
             except Exception:
                 fig_dir = None
         t0 = time.time()
@@ -345,12 +388,10 @@ def _long_doc_scan(doc, start_page, end_page, with_figures=False):
     except Exception as e:
         st.warning(f"⚠️ 批量扫描中断（已完成部分页）：{str(e)[:160]}")
     finally:
-        # 图片临时目录：try/finally 保证一定清理
+        # 图片临时目录：try/finally 保证一定清理；rmtree 后验证真的消失
+        # （Windows 上文件句柄未关时 ignore_errors 会静默失败，留下残挂目录）
         if fig_dir:
-            try:
-                shutil.rmtree(fig_dir, ignore_errors=True)
-            except Exception:
-                pass
+            _remove_dir_verified(fig_dir)
         try:
             gc.collect()
         except Exception:
@@ -1424,7 +1465,7 @@ def render(ctx):
                                         probe.start()
                                         tmp_dir, out = None, None
                                         try:
-                                            tmp_dir = tempfile.mkdtemp(prefix="fig_inplace_")
+                                            tmp_dir = _new_figure_dir()
                                             out = os.path.join(tmp_dir, f"translated_p{p3}.pdf")
                                             in_place_pdf(doc, p3, zh, out)
                                             probe.sample()
@@ -1455,10 +1496,7 @@ def render(ctx):
                                             st.warning(f"⚠️ 原位 PDF 生成失败：{str(e)[:160]}")
                                         finally:
                                             if tmp_dir:
-                                                try:
-                                                    shutil.rmtree(tmp_dir, ignore_errors=True)
-                                                except Exception:
-                                                    pass
+                                                _remove_dir_verified(tmp_dir)
                         except Exception as e:
                             try:
                                 _st_pdf.update(label="⚠️ 原位 PDF 区异常", state="error")

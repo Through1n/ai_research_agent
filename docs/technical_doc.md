@@ -389,7 +389,7 @@ flowchart TD
 ### 4.3.6 内存与临时文件控制
 
 - **内存探针**：`scripts/_memory_probe.py` 优先 psutil 采 RSS，缺失降级 tracemalloc 再降级纯计时，任何情况下 `peak_mb()` 返回 0.0 而**绝不抛异常**。541 页实测 50ms 采样 **388 次**，峰值 893.1MB（低于 1.5GB 目标）。
-- **陈旧临时目录清理**：`cleanup_stale_figure_dirs@ui/page_reading.py:219` 清理超过 FIG_TTL（24h）的图片临时目录。
+- **陈旧临时目录清理**：`cleanup_stale_figure_dirs@ui/page_reading.py:259` 清理超过 FIG_TTL（24h）的图片临时目录。
 - **沙箱超时**：子进程 `timeout=25`，避免死循环脚本拖垮服务。
 
 ## 4.4 RAG 检索设计（`services/rag.py` + `services/query_expansion.py`）
@@ -601,7 +601,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![问答与溯源页](shots/p2.png)
 
-问答页把第 4.6 节的四道防线完整暴露给用户：每条答案带【n】角标；溯源卡片（`anchor_card@ui/page_qa.py:101`）含可点击页码徽章（页内锚点）、相关度分数、页内段号、可折叠原文片段（前 200 字），以及"📖 打开阅读页"跨页跳转（session_state `qa_jump_page` + query_params 双通道，消费端 `_consume_qa_jump@ui/page_reading.py:515`）；调试区展示查询变体、dense/sparse 分量、修复次数。多篇对比勾选 2–5 篇后按【Pn-m】分组角标输出分论文陈述 + 对比表。
+问答页把第 4.6 节的四道防线完整暴露给用户：每条答案带【n】角标；溯源卡片（`anchor_card@ui/page_qa.py:101`）含可点击页码徽章（页内锚点）、相关度分数、页内段号、可折叠原文片段（前 200 字），以及"📖 打开阅读页"跨页跳转（session_state `qa_jump_page` + query_params 双通道，消费端 `_consume_qa_jump@ui/page_reading.py:556`）；调试区展示查询变体、dense/sparse 分量、修复次数。多篇对比勾选 2–5 篇后按【Pn-m】分组角标输出分论文陈述 + 对比表。
 
 **Round 7/8 真实 API 实测：赛题原文点名的三类细粒度问题**（素材 `pdf/1706.03762v7.pdf`，期望值全部取自论文正文真值）：
 
@@ -621,7 +621,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![版式阅读与翻译页](shots/p3.png)
 
-原生版式渲染（`native_page_html@services/translate.py:430`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:525`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:768`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:694`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:219`）。
+原生版式渲染（`native_page_html@services/translate.py:430`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:525`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:768`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:694`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:259`）。
 
 ## 5.4 论文检索、追踪与推荐（模块③主体）
 

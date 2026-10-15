@@ -278,6 +278,18 @@ def part1():
     shutil.rmtree(fresh_dir, ignore_errors=True)
     check("B2 新目录不被误删（< 24h）", still, f"removed2={removed2}")
 
+    # 新位置（storage/scratch）同样被陈旧清理覆盖——防止搬迁后清理只走旧路径
+    scratch = os.path.join(ROOT, "storage", "scratch")
+    try:
+        os.makedirs(scratch, exist_ok=True)
+        stale2 = tempfile.mkdtemp(prefix="fig_", dir=scratch)
+        os.utime(stale2, (old, old))
+        removed3 = cleanup_stale_figure_dirs(24)
+        check("B2 陈旧目录清理覆盖新位置 storage/scratch",
+              removed3 >= 1 and not os.path.exists(stale2), f"removed={removed3}")
+    except Exception as e:
+        check("B2 陈旧目录清理覆盖新位置 storage/scratch", False, str(e)[:200])
+
     check("B3 并发上限 ≤ 3 且单次 LLM 超时 60s",
           MAX_TRANSLATE_WORKERS <= 3 and LLM_CALL_TIMEOUT <= 60.0,
           f"workers={MAX_TRANSLATE_WORKERS} timeout={LLM_CALL_TIMEOUT}")
@@ -442,9 +454,21 @@ def part2():
         check("长文档批量扫描（120 页）无异常", False, str(e)[:200])
 
     # 图片抽取 + 临时目录清理（B2）
+    # fig_* 现建在项目私有 storage/scratch（Round 16 起），旧共享 temp 仍兼容清理；
+    # 两个位置都要数，否则搬迁后本检查会恒真（空转门禁）。
     try:
         def _fig_dirs():
-            return [d for d in os.listdir(tempfile.gettempdir()) if d.startswith("fig_")]
+            roots = [tempfile.gettempdir()]
+            scratch = os.path.join(ROOT, "storage", "scratch")
+            if os.path.isdir(scratch):
+                roots.append(scratch)
+            out = []
+            for r in roots:
+                try:
+                    out += [d for d in os.listdir(r) if d.startswith("fig_")]
+                except OSError:
+                    pass
+            return out
 
         before = len(_fig_dirs())
         at.checkbox(key="ld_fig").check().run()

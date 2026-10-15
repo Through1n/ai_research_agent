@@ -1560,6 +1560,12 @@ def split_sentences(text, max_sent=400):
                 if seg:
                     out.append(seg)
                 buf = []
+                # 紧随句末的闭合引号/括号归入本句：否则会孤零零挂到下一句开头
+                # （双语句级对齐时表现为一侧句子 span 以引号起始）。
+                while i + 1 < n and s[i + 1] in "\"'\u201d\u2019)\uff09]\u300d\u300f":
+                    if out:
+                        out[-1] += s[i + 1]
+                    i += 1
             i += 1
         tail = "".join(buf).strip()
         if tail:

@@ -5,7 +5,9 @@
 运行：python -m unittest tests.test_reading -v
 """
 import os
+import shutil
 import sys
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -79,6 +81,18 @@ class SplitSentencesTest(unittest.TestCase):
         self.assertEqual(split_sentences(""), [])
         self.assertEqual(split_sentences(None), [])
         self.assertEqual(split_sentences("   \n  "), [])
+
+    def test_closing_quote_stays_with_sentence(self):
+        # 句末闭合引号/括号归入本句，不孤零零挂到下一句开头（Round 16 父代修复）
+        self.assertEqual(split_sentences('He said "it works." Then he left.'),
+                         ['He said "it works."', "Then he left."])
+        self.assertEqual(split_sentences('"Hello." "Goodbye."'),
+                         ['"Hello."', '"Goodbye."'])
+        self.assertEqual(split_sentences("End here.) Next starts."),
+                         ["End here.)", "Next starts."])
+        # 缩写路径不受影响：引号在句中不断句
+        self.assertEqual(split_sentences('See "Fig. 1" for details. Thanks.'),
+                         ['See "Fig. 1" for details.', "Thanks."])
 
 
 class AlignPairsTest(unittest.TestCase):
@@ -219,6 +233,68 @@ class GlossaryTest(unittest.TestCase):
     def test_extract_terms_empty(self):
         self.assertEqual(extract_terms(""), [])
         self.assertEqual(extract_terms("   "), [])
+
+
+class FigureDirTest(unittest.TestCase):
+    """fig_* 临时目录：项目私有位置 + 可验证清理 + 双位置陈旧清理（Round 16 父代修复）。"""
+
+    def test_new_dir_in_project_scratch(self):
+        import ui.page_reading as pr
+        d = pr._new_figure_dir()
+        try:
+            self.assertTrue(os.path.isdir(d))
+            self.assertIn(os.path.join("storage", "scratch"), os.path.abspath(d))
+            self.assertTrue(os.path.basename(d).startswith("fig_"))
+        finally:
+            pr._remove_dir_verified(d)
+
+    def test_remove_dir_verified_reports_failure(self):
+        import ui.page_reading as pr
+        # 已不存在的路径 → True（幂等：调用方只关心目录最终消失）
+        missing = os.path.join(ROOT, "storage", "scratch",
+                               "fig_definitely_absent_%d" % os.getpid())
+        self.assertTrue(pr._remove_dir_verified(missing))
+        # rmtree 删不掉的路径（文件而非目录）→ False：验证机制必须抓住静默失败
+        probe = os.path.join(ROOT, "storage", "scratch",
+                             "fig_notadir_%d" % os.getpid())
+        os.makedirs(os.path.dirname(probe), exist_ok=True)
+        with open(probe, "w") as fh:
+            fh.write("x")
+        try:
+            self.assertFalse(pr._remove_dir_verified(probe))
+        finally:
+            os.remove(probe)
+
+    def test_cleanup_covers_both_locations(self):
+        import tempfile as _tf
+        import ui.page_reading as pr
+        old = time.time() - 48 * 3600
+        made = []
+        try:
+            legacy = _tf.mkdtemp(prefix="fig_legacy_")
+            os.utime(legacy, (old, old))
+            made.append(legacy)
+            scratch = pr._figure_scratch_root()
+            fresh_root = _tf.mkdtemp(prefix="fig_newroot_", dir=scratch)
+            os.utime(fresh_root, (old, old))
+            made.append(fresh_root)
+            removed = pr.cleanup_stale_figure_dirs(24)
+            self.assertGreaterEqual(removed, 2, removed)
+            self.assertFalse(os.path.exists(legacy))
+            self.assertFalse(os.path.exists(fresh_root))
+        finally:
+            for p in made:
+                shutil.rmtree(p, ignore_errors=True)
+
+    def test_fresh_dir_survives(self):
+        import tempfile as _tf
+        import ui.page_reading as pr
+        d = _tf.mkdtemp(prefix="fig_freshkeep_", dir=pr._figure_scratch_root())
+        try:
+            pr.cleanup_stale_figure_dirs(24)
+            self.assertTrue(os.path.exists(d))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class BilingualHtmlTest(unittest.TestCase):
