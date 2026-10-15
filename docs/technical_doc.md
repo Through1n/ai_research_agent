@@ -105,7 +105,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 | # | 赛题痛点 | 由此产生的需求 | 本系统的对应答案 |
 |---|---|---|---|
-| P1 | 双栏 PDF 串读，上下文断裂 | 解析层需感知版面而非盲取文本流 | `_detect_two_columns@services/parsing.py:171`：横跨否决 + 空白带采样 + 栏宽平衡 + 两侧块数 4 条必要条件，不满足即回退单栏 |
+| P1 | 双栏 PDF 串读，上下文断裂 | 解析层需感知版面而非盲取文本流 | `_detect_two_columns@services/parsing.py:172`：横跨否决 + 空白带采样 + 栏宽平衡 + 两侧块数 4 条必要条件，不满足即回退单栏 |
 | P2 | 答案不给出处 / 给假出处 | 每条结论必须可定位到原文页码 | 上下文编号 `[n] 来源：《X》 第N页` → LLM 强制带【n】角标 → UI 渲染可点击页码徽章 |
 | P3 | 模型编造参考文献 | 生成内容必须对照真实文献白名单 | PDF References 段真实抽取 → 白名单校验 → 越界剔除 |
 | P4 | 检索工具与问答割裂 | Agent 能自主调用检索/追踪/解析工具 | 21 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 |
@@ -116,7 +116,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.2 功能需求（按五大类逐条）
 
-**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:322 check_duplicate`）；版本识别与差异总结（`services/library.py:1131 group_versions`、`services/library.py:1215 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:55 detect_scanned`、`services/parsing.py:350 ocr_page_text`）；标题树（书签优先 `services/parsing.py:588 extract_toc`，无书签走 `services/parsing.py:526 infer_headings_from_text`）；表格抽取（`services/parsing.py:606 extract_tables`）；插图↔图注关联（`services/parsing.py:685 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:663 _nearest_caption`）；公式识别与 LaTeX 转换；损坏/截断/加密 PDF 拦截（`services/library.py:516 _validate_prepared`，缺页 >30% 拒收）。
+**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1222 group_versions`、`services/library.py:1222 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:56 detect_scanned`、`services/parsing.py:56 ocr_page_text`）；标题树（书签优先 `services/parsing.py:627 extract_toc`，无书签走 `services/parsing.py:627 infer_headings_from_text`）；表格抽取（`services/parsing.py:645 extract_tables`）；插图↔图注关联（`services/parsing.py:733 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:702 _nearest_caption`）；公式识别与 LaTeX 转换；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
 
 **② 抗幻觉 RAG**：单篇问答（超参数/硬件/BLEU 类细粒度问题）；多篇跨文献对比（2–5 篇，`MAX_COMPARE_PAPERS=5`）；单篇范围锁定；查询扩展（中文问英文文献）；内联【n】溯源与可点击页码锚点；引用一致性逐句校验；拒答与自动修复。
 
@@ -128,7 +128,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.3 用户故事（端到端走查）
 
-**故事 A：版本去重（演示路径 2，离线可复现）。** `1706.03762v7.pdf` 与改名的 `1706.03762v1.pdf` 先后入库。系统对每篇算"前 4000 字向量 + 5 段指纹"（`services/library.py:98 _paper_fingerprints`），上传 v1 时查重命中 **0.963228**（阈值 0.90，取"分段指纹 top3 均值"；整篇相似度仅 0.891292 单独看会漏判），界面给出"⚠️ 语义查重命中"与三个决策按钮，选"保留两版"后可对比差异（`services/library.py:1215 version_diff`）。全程不依赖文件名。
+**故事 A：版本去重（演示路径 2，离线可复现）。** `1706.03762v7.pdf` 与改名的 `1706.03762v1.pdf` 先后入库。系统对每篇算"前 4000 字向量 + 5 段指纹"（`services/library.py:100 _paper_fingerprints`），上传 v1 时查重命中 **0.963228**（阈值 0.90，取"分段指纹 top3 均值"；整篇相似度仅 0.891292 单独看会漏判），界面给出"⚠️ 语义查重命中"与三个决策按钮，选"保留两版"后可对比差异（`services/library.py:1306 version_diff`）。全程不依赖文件名。
 
 **故事 B：抗幻觉问答（演示路径 3）。** 问"训练用了什么 GPU？数量和型号？"→ 查询扩展出英文变体 → Dense+Sparse 双路召回 → RRF 融合 6 条 → 上下文以 `[1] 来源：《1706.03762v7.pdf》 第8页第3段` 注入 → LLM 生成带【1】角标的答案 → 逐句校验通过 → 点溯源卡片"第 8 页"徽章页内跳转，或"📖 打开阅读页"直达原版式页面。若改问"量子纠缠"（库内无关），拒答闸门在**调用 LLM 之前**直接回复"未在文献库中找到可靠依据，为避免幻觉我不作答"。
 
@@ -138,7 +138,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 - **可复现**：Streamlit 锁定 1.63.x；检索/切块/去重参数全部环境变量可覆盖（`config.py:134-140`，均走 `_env_int`）。
 - **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:545`）。
-- **长文档工程化**：20 页一批解析建块（`services/library.py:17 PDF_BATCH_SIZE = 20`）、单页 30s 守护线程超时跳过（`services/library.py:463 _extract_page_with_timeout`）、每 50 页进度回调、psutil 内存探针（`scripts/_memory_probe.py :: peak_mb`）。
+- **长文档工程化**：20 页一批解析建块（`services/library.py:19 PDF_BATCH_SIZE = 20`）、单页 30s 守护线程超时跳过（`services/library.py:544 _extract_page_with_timeout`）、每 50 页进度回调、psutil 内存探针（`scripts/_memory_probe.py :: peak_mb`）。
 - **安全**：API Key 只经环境变量/会话注入；输出侧密钥正则脱敏（`core/guardrails.py:130 redact_secrets`）；Python 工具经 AST 白名单沙箱（`core/sandbox.py:27 validate_code`）；`.env` 同时被 `.gitignore` 与 `.dockerignore` 排除，不入仓库、不入镜像。
 - **诚实降级**：每个外部依赖（LLM、embedding、外部 API、LaTeX 编译器、Graphviz）都有明确降级路径并向用户说明原因与建议动作，绝不静默失败、绝不编造数据。
 
@@ -247,10 +247,10 @@ flowchart TD
 
 | 项 | 结论 |
 |---|---|
-| 选了什么 | 扫描页渲染为 PNG（zoom=2.0）→ base64 → 视觉模型，prompt 要求"按阅读顺序输出、公式转 LaTeX、表格转 Markdown"（`services/parsing.py:350 ocr_page_text`） |
+| 选了什么 | 扫描页渲染为 PNG（zoom=2.0）→ base64 → 视觉模型，prompt 要求"按阅读顺序输出、公式转 LaTeX、表格转 Markdown"（`services/parsing.py:351 ocr_page_text`） |
 | 为什么选 | ①**零额外依赖**：避开 PaddleOCR / Tesseract 的本机安装、语言包与 Windows 环境变量配置；②**理解优于识别**：同一条链路同时还原版面、表格结构与数学公式，产出可直接入 RAG 的结构化文本；③成本：按页计费，长篇扫描件可只跑需要的页 |
 | 放弃了什么 / 代价 |  离线 / 无 Key 环境下没有本地兜底 OCR；单页受 90s 调用超时与 token 成本约束 ；代价： 无可用 Key 时扫描件不能被识别  |
-| 如何对冲 | `services/parsing.py:335 ocr_supported` 在调用前判定"是否有视觉模型 + Key 长度 ≥20 + 可 ASCII 编码"，不可用即直跳；同时 `services/parsing.py:86 is_ocr_error_text` 把 OCR 占位符文本判定为失败页，禁止空扫描件冒充正文入库。**实测**：15 页扫描件从"逐页重试网络 140.06s 且把占位符当正文"变为"0.63s 直接判定 + `commit` 抛 ValueError 拒绝入库" |
+| 如何对冲 | `services/parsing.py:336 ocr_supported` 在调用前判定"是否有视觉模型 + Key 长度 ≥20 + 可 ASCII 编码"，不可用即直跳；同时 `services/parsing.py:87 is_ocr_error_text` 把 OCR 占位符文本判定为失败页，禁止空扫描件冒充正文入库。**实测**：15 页扫描件从"逐页重试网络 140.06s 且把占位符当正文"变为"0.63s 直接判定 + `commit` 抛 ValueError 拒绝入库" |
 
 **Round 7/8 首次真实 API 实测（官方测试用例 A，此前从未实测通过）**
 
@@ -298,7 +298,7 @@ flowchart TD
 | 选了什么 | PyMuPDF 提取原生文本层 + **字符级 bbox** |
 | 为什么选 | ①双栏判定、图↔图注空间匹配、版式原生渲染全部依赖坐标信息——这是纯文本抽取库给不了的；②开页毫秒级，541 页 / 22MB 文档的**解析阶段仅 4.02s**（官方用例 B 实测） |
 | 放弃了什么 / 代价 |  pdfplumber / pdfminer.six 在表格结构识别上的某些便利性 ；代价： PyMuPDF 为 AGPL/商业双许可，商用需授权；版本间 API 敏感  |
-| 如何对冲 | `services/parsing.py:49 open_doc` 统一入口收敛所有 `fitz.open` 调用；`requirements.txt` 锁定版本 |
+| 如何对冲 | `services/parsing.py:50 open_doc` 统一入口收敛所有 `fitz.open` 调用；`requirements.txt` 锁定版本 |
 
 ## 4.2 集成方式
 
@@ -366,15 +366,15 @@ flowchart TD
 
 | 优化项 | 参数 | 实测（541 页官方教材，`round4_worker9_official.md` §3） |
 |---|---|---|
-| 分批解析建块 | `services/library.py:17 PDF_BATCH_SIZE = 20` | 解析阶段 **4.02s** |
-| 批内句柄复用 + 单页超时跳过 | 同批共用一个文档实例，批末关闭；`services/library.py:18 PDF_PAGE_TIMEOUT_SECONDS = 30` 守护线程（`services/library.py:463 _extract_page_with_timeout`） | 消除 541 次重复 open；注入挂死页时仅该页失败，`failed_pages` 精确记录 |
+| 分批解析建块 | `services/library.py:19 PDF_BATCH_SIZE = 20` | 解析阶段 **4.02s** |
+| 批内句柄复用 + 单页超时跳过 | 同批共用一个文档实例，批末关闭；`services/library.py:20 PDF_PAGE_TIMEOUT_SECONDS = 30` 守护线程（`services/library.py:544 _extract_page_with_timeout`） | 消除 541 次重复 open；注入挂死页时仅该页失败，`failed_pages` 精确记录 |
 | 进度回调 | 每 50 页 + 末页 | 541 页共 **11 次**回调，UI 不假死 |
 | 向量化与索引（commit） | 1305 chunk embedding（ONNX/CPU）+ BM25 重建 | **21.30s**（耗时主要在此，非解析） |
 | **整体结果** | — | **537/541 页提取（4 页无文本层）、1305 chunks、0 失败页、25.32s（46.8ms/页）、峰值 RSS 893.1MB** |
 
 ### 4.3.4 版面判定优化：双栏误判 19.1% → 0%
 
-朴素"中线二分"会把长正文行横跨中线的单栏论文误判成双栏。优化后的 `_detect_two_columns`（`services/parsing.py:171`）要求 4 条必要条件同时成立，其中**"横跨 split_x 否决"**（`services/parsing.py:239-244`，阈值 `_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:17`）对**全部文本块生效，包括已被剔除出候选集的宽块**——旧实现正是漏检这些宽块才误判；另一处是 `_gutter_free_ratio`（`services/parsing.py:150`）沿 y 采样统计中缝空白带占比。
+朴素"中线二分"会把长正文行横跨中线的单栏论文误判成双栏。优化后的 `_detect_two_columns`（`services/parsing.py:172`）要求 4 条必要条件同时成立，其中**"横跨 split_x 否决"**（`services/parsing.py:239-244`，阈值 `_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18`）对**全部文本块生效，包括已被剔除出候选集的宽块**——旧实现正是漏检这些宽块才误判；另一处是 `_gutter_free_ratio`（`services/parsing.py:151`）沿 y 采样统计中缝空白带占比。
 
 **实测**：1111 页单栏语料误判率 **19.1% → 0%**，同时真双栏论文（BERT）正文页 10/10 仍被正确识别（没有用"永远判单栏"换取指标）。
 
@@ -382,7 +382,7 @@ flowchart TD
 
 - **被引数两级缓存**：按归一化标题缓存结果（`services/citation_quality.py:72 _CACHE`）+ 标题归一化结果缓存（`services/citation_quality.py:73 _TITLE_CACHE`），重复评估同一篇文献不再重复打三次 API。
 - **三级降级**：OpenAlex → Semantic Scholar → Crossref（`services/citation_quality.py:689 _LOOKUPS`），任一被限流即切换并显式打 `low_confidence` + 口径说明；选优策略改为"高置信标题匹配内取被引数最大"（`services/citation_quality.py:472 _pick_best`），修复了"同名噪声记录靠年份加成反超正主"——AlexNet 被引数 **760 → 108512**，与真值一致。
-- **OCR 前置判定**：`services/parsing.py:335 ocr_supported` 在无可用视觉 Key 时不再逐页重试网络，15 页扫描件耗时 **140.06s → 0.63s**。
+- **OCR 前置判定**：`services/parsing.py:336 ocr_supported` 在无可用视觉 Key 时不再逐页重试网络，15 页扫描件耗时 **140.06s → 0.63s**。
 - **GitHub 限流降级**：未认证 60 次/小时，限流时返回"因限流不做推测性评级"而非编造星级。
 - **完整降级矩阵见 4.7**——8 类外部依赖全部有确定行为，且每一类都在 UI 上说明"发生了什么 + 可能原因 + 怎么办"。
 
@@ -589,13 +589,13 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 本图为「上传与解析」页签（上传即解析：元数据与排版识别结果以 JSON 展开，可直接复核）；语义去重与版本管理见「版本差异」页签，双栏判定实测见 4.3.4。
 
-上传即自动解析入库：分批（20 页/批）解析建块 + 内容级语义去重 + 版本识别。**双栏判定**是本轮重点修复项——`_detect_two_columns@services/parsing.py:171` 现在要求 4 条必要条件同时满足：两侧块数 ≥3、横跨否决（任何块横跨候选分栏线每侧重叠 >5pt 即判单栏，`_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:17` 判据落点 `services/parsing.py:242`）、竖直空白带占比 >0.6、栏宽平衡 ≥0.3。实测单栏语料 1111 页误判率从 19.1% 降至 **0%**，真双栏 BERT 正文页 10/10 正确识别。
+上传即自动解析入库：分批（20 页/批）解析建块 + 内容级语义去重 + 版本识别。**双栏判定**是本轮重点修复项——`_detect_two_columns@services/parsing.py:172` 现在要求 4 条必要条件同时满足：两侧块数 ≥3、横跨否决（任何块横跨候选分栏线每侧重叠 >5pt 即判单栏，`_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18` 判据落点 `services/parsing.py:18`）、竖直空白带占比 >0.6、栏宽平衡 ≥0.3。实测单栏语料 1111 页误判率从 19.1% 降至 **0%**，真双栏 BERT 正文页 10/10 正确识别。
 
-**长文档工程化**（`services/library.py:565 prepare_pdf`）：541 页《Understanding Deep Learning》官方实测 **537 页成功提取 / 25.32s（46.8ms/页）/ 0 失败页**；4 个无原生文本层的空白页不计入失败页，`failed_pages = 0`。注入挂死页时单页 30s 超时线程跳过，其余页照常入库。**幽灵文献拦截**（`_validate_prepared :206`）：损坏/加密/0 页/成功页 <70% 的 PDF 一律拒绝入库，commit 双保险（`:800 commit`），24/24 拦截用例通过。
+**长文档工程化**（`services/library.py:646 prepare_pdf`）：541 页《Understanding Deep Learning》官方实测 **537 页成功提取 / 25.32s（46.8ms/页）/ 0 失败页**；4 个无原生文本层的空白页不计入失败页，`failed_pages = 0`。注入挂死页时单页 30s 超时线程跳过，其余页照常入库。**幽灵文献拦截**（`_validate_prepared :206`）：损坏/加密/0 页/成功页 <70% 的 PDF 一律拒绝入库，commit 双保险（`:888 commit`），24/24 拦截用例通过。
 
 细粒度解析区提供：标题树（书签优先，无书签走字号/编号推断）、表格抽取、插图↔图注关联展示、公式 LaTeX 提取、结构化参考文献。扫描件（`1706.03762v1_img.pdf`）自动判定并走多模态 OCR（整页转 PNG + vision 模型，prompt 要求按阅读顺序、公式转 LaTeX、表格转 Markdown），**Round 7/8 首次真实实测**：前 3 页原生文本 0 字符 → `detect_scanned=True`，单页 OCR **2833 字符 / 9.3s**，词级准确率 93.9% / 召回 98.5%（详见 4.1.2）。
 
-**Round 8 标题抽取缺陷修复**（`services/library.py:107-189`）：真实入库链路下 BERT 论文（`1810.04805v2.pdf`）的标题曾被抽成 `Language Understanding`——`_DANGLING_RE` 词表含 `for`，而 BERT 标题首行恰以 `for` 断行，首行被整行丢弃，后续合并分支又只认 `:`/`-` 收尾，**永远执行不到**（反讽之处：该函数 docstring 举的例子正是 BERT 自己）。修法是把悬垂词表拆成"强悬垂（拼不出续行才丢弃）"与"弱悬垂（含 `for`，只触发拼接）"两层，并加 `_title_case_ratio ≥ 0.5` 门槛防止样板残片吞掉真标题。全量 8 个 PDF 修复前/后对照 **8/8 符合预期**（复跑 `scripts/verify_title_extract.py`，修复前基线钉 `5dbf937`；对照表 `PDF@docs/review/round8_fixR7_title.md:163`），v1/v7 去重预警（`dup_sim=0.9632`）与版本分组行为未回归。
+**Round 8 标题抽取缺陷修复**（`services/library.py:233`）：真实入库链路下 BERT 论文（`1810.04805v2.pdf`）的标题曾被抽成 `Language Understanding`——`_DANGLING_RE` 词表含 `for`，而 BERT 标题首行恰以 `for` 断行，首行被整行丢弃，后续合并分支又只认 `:`/`-` 收尾，**永远执行不到**（反讽之处：该函数 docstring 举的例子正是 BERT 自己）。修法是把悬垂词表拆成"强悬垂（拼不出续行才丢弃）"与"弱悬垂（含 `for`，只触发拼接）"两层，并加 `_title_case_ratio ≥ 0.5` 门槛防止样板残片吞掉真标题。全量 8 个 PDF 修复前/后对照 **8/8 符合预期**（复跑 `scripts/verify_title_extract.py`，修复前基线钉 `5dbf937`；对照表 `PDF@docs/review/round8_fixR7_title.md:163`），v1/v7 去重预警（`dup_sim=0.9632`）与版本分组行为未回归。
 
 ## 5.2 跨文献问答与溯源（模块②）
 
@@ -733,7 +733,7 @@ docker compose down         # 停止
 | 5 | `para_idx` 为估算值：跨页 chunk 与 150 字重叠导致段号漂移 | `annotate_paragraphs@services/rag.py:399` | 定位到页级精确、段级近似；根治方案见 Roadmap（chunk 不跨页 + 原生段落 bbox） |
 | 6 | 部分启发式阈值在现有语料调优，异形排版可能保守回退 | 双栏判定/作者块识别 | 全部失败路径可回退且不崩溃 |
 | 7 | `t_run_python` 临时目录无 finally 清理（每次调用泄漏一个 `ai4s_code_*`） | `tools/definitions.py` | 量级小（KB 级/次），修复已列入待办 |
-| 8 | `commit()` 未清洗文件名（含 `/` 时建路径失败） | `services/library.py:800 commit` | 正常文件名不受影响；建议 `os.path.basename()` + 非法字符替换 |
+| 8 | `commit()` 未清洗文件名（含 `/` 时建路径失败） | `services/library.py:888 commit` | 正常文件名不受影响；建议 `os.path.basename()` + 非法字符替换 |
 | 9 | `st.components.v1.html` 已被 Streamlit 标记弃用 | `ui/common.py embed_html` | streamlit 1.63 正常工作；迁移 `st.iframe` 需回归高度自适应 JS |
 
 ## 6.6 质量过程：Round 1–12 评审与修复闭环
