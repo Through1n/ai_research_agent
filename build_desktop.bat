@@ -27,6 +27,7 @@ if not defined PY (
 )
 if not defined PY (
     echo [FAIL] 未找到 Python，请先安装 Anaconda/Miniconda，或把 python 加入 PATH
+    pause
     exit /b 1
 )
 echo 使用 Python: %PY%
@@ -39,6 +40,7 @@ echo [2/3] PyInstaller 打包...
 "%PY%" -m PyInstaller AI4SResearchAgent.spec --clean --noconfirm
 if errorlevel 1 (
     echo [FAIL] PyInstaller 打包失败
+    pause
     exit /b 1
 )
 
@@ -50,4 +52,6 @@ if exist dist\AI4SResearchAgent (
     )
 )
 echo DONE.
+REM 契约 §7 要求「结束 pause」：双击运行时窗口不闪退，体积统计看得见
+pause
 endlocal

@@ -26,6 +26,16 @@
 # 与根目录 start.sh 的区别：start.sh 是 macOS/Linux 本地交互式一键启动（含依赖安装、
 # Key 检查、自动开浏览器）；本文件是**无交互**的线上部署入口，供发布平台以
 # `sh start_app.sh` 调用，不读键盘、不开浏览器。
+#
+# Round 16 加固（两处，都不改变既有行为，只堵新变种故障）：
+#   ④ PORT 数字校验：① 修的是「PORT 未注入 → 空串」。但沙箱若注入一个**非数字**
+#      的 PORT（占位符、误配置），`--server.port=$PORT` 照样让 streamlit 以
+#      Invalid value 退出——同一类故障的新变种，在这里一并堵掉。
+#   ⑤ 预热钩子 + 启动诊断落盘：exec streamlit 之前先跑 scripts/_prewarm.py，
+#      把 ONNX 模型下载（若随包预置没盖上）挪出首帧路径；启动参数写进
+#      logs/start.log，云平台控制台日志被截断时仍有据可查。
+#      预热失败**只告警不阻断**（`|| echo` 包裹）——应用层有后台预热 +
+#      有界等待 + 降级兜底，本脚本绝不让「预热失败」升级成「应用起不来」。
 set -e
 
 # 无论以何种相对/绝对路径被调用，都先切到脚本所在目录（项目根），
@@ -34,6 +44,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR" || { echo "✗ 无法进入目录：$SCRIPT_DIR"; exit 1; }
 
 PORT="${PORT:-8501}"
+
+# ---------- ④ PORT 数字校验（Round 16 加固，见头部注释）----------
+# POSIX 兼容的数字校验：空串或含任何非数字字符 → 回落 8501 并告警。
+# 不静默改：日志里能看到「PORT 值不合法」，排障时才知道平台注入了什么。
+case "$PORT" in
+    ''|*[!0-9]*)
+        echo "[start] ⚠️ PORT 值不合法（'${PORT}'），回落默认端口 8501"
+        PORT=8501
+        ;;
+esac
 
 # ---------- ③ 预置 ONNX embedding 模型 ----------
 # 注意：chroma 用 Path.home()/.cache/chroma/onnx_models，所以必须先确保 HOME 可写。
@@ -76,6 +96,32 @@ if [ -d "$ONNX_SRC" ]; then
 else
     echo "[start] ⚠️ 发布包内无 onnx_models/，模型将按需从网络加载"
 fi
+
+# ---------- ⑤ 预热钩子（Round 16 加固，见头部注释）----------
+# 解释器探测：沙箱里 python3/python 名字不保证，谁在算谁。
+# 预热脚本本身幂等：模型已就绪时秒退（Docker 镜像构建期已烤过的场景零成本）。
+PYW="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+if [ -n "$PYW" ] && [ -f "scripts/_prewarm.py" ]; then
+    "$PYW" scripts/_prewarm.py \
+        || echo "[start] ⚠️ 预热未完全成功（不阻断启动：应用后台会继续加载，向量功能可能变慢）"
+else
+    echo "[start] 未找到预热脚本或 Python 解释器，跳过预热（不影响启动）"
+fi
+
+# ---------- ⑤ 启动诊断落盘（Round 16 加固）----------
+# 云平台控制台日志常有滚动截断，把关键启动参数追加进 logs/start.log，
+# 出事回看这一行就知道「用的什么 PORT / HOME / ONNX 状态」。
+# 任何一步失败都不阻断启动（|| true 全链路包裹）。
+mkdir -p logs 2>/dev/null || true
+{
+    _ts="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '?')"
+    _pyv="$("$PYW" -V 2>&1 || echo 'python 不可用')"
+    _onnx="missing"
+    if [ -f "${HOME}/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx/model.onnx" ]; then
+        _onnx="ready"
+    fi
+    echo "[${_ts}] start: port=${PORT} home=${HOME} onnx=${_onnx} cwd=$(pwd) ${_pyv}"
+} >> logs/start.log 2>/dev/null || true
 
 echo "[start] binding 0.0.0.0:${PORT}"
 exec streamlit run app.py \
