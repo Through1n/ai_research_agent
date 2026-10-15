@@ -1,7 +1,9 @@
 """文献库管理：入库、基于内容 embedding 的语义去重、版本管理与差异对比、删除。"""
+import hashlib
 import io
 import math
 import queue
+import random
 import re
 import threading
 import time
@@ -113,6 +115,66 @@ def _paper_fingerprints(ctx, full_text, k=5, seg=1200):
 
 def _norm_title(t):
     return re.sub(r"[^a-z0-9]+", " ", (t or "").lower()).strip()
+
+
+# ---------- 离线内容指纹（MinHash）：无 API Key 也能做内容级去重 ----------
+# 借鉴 RAG/检索方案里"内容指纹去重"思路：用 MinHash 局部敏感哈希把全文压成
+# 固定长度（128）的整型签名，Jaccard 估计即为两文档内容相似度。签名很小
+# （128 个 int，可 JSON 序列化入库），且**完全离线、确定可复现**——即使 embedding
+# 模型不可用（无 Key / 离线环境），v1/v7 这类"同论文不同版本"的依赖相同 arXiv 号
+# 或高度重叠正文的去重仍能命中，不依赖任何外部服务。
+_MINHASH_PERM = None
+_MINHASH_NUM_PERM = 128
+_MINHASH_PRIME = (1 << 61) - 1
+
+
+def _build_minhash_perms(num_perm=_MINHASH_NUM_PERM, seed=0xC0FFEE):
+    rnd = random.Random(seed)
+    return [(rnd.randint(1, (1 << 31) - 1), rnd.randint(0, (1 << 31) - 1))
+            for _ in range(num_perm)]
+
+
+def _minhash_base_hash(shingle):
+    return int(hashlib.md5(shingle.encode("utf-8", "ignore")).hexdigest()[:16], 16)
+
+
+def _minhash_signature(text, num_perm=_MINHASH_NUM_PERM, shingle=4, cap=200000):
+    """把全文压成 MinHash 签名（list[int]）；超长文本只取前 ``cap`` 字符以保证性能。
+
+    采用**词级 k-gram**（k=4）而非字符级：词级对"同论文不同版本"的小幅改稿远更鲁棒
+    （改几个词不会像字符 5-gram 那样大面积破坏相邻 shingles）。文本过短（不足 k 词）
+    时退化为字符 5-gram 以保证仍有签名。cap 对两篇文档一致（都取头部），比较仍公平。
+    """
+    if not text:
+        return []
+    sample = (text or "")[:cap]
+    tokens = re.findall(r"[A-Za-z0-9]+", sample.lower())
+    global _MINHASH_PERM
+    if _MINHASH_PERM is None:
+        _MINHASH_PERM = _build_minhash_perms(num_perm)
+    if len(tokens) >= shingle:
+        shingles = {" ".join(tokens[i:i + shingle])
+                    for i in range(len(tokens) - shingle + 1)}
+    else:
+        low = sample.lower()
+        shingles = {low[i:i + 5] for i in range(max(0, len(low) - 4))}
+    sig = [_MINHASH_PRIME] * num_perm
+    for sh in shingles:
+        h = _minhash_base_hash(sh)
+        for k in range(num_perm):
+            a, b = _MINHASH_PERM[k]
+            v = (a * h + b) % _MINHASH_PRIME
+            if v < sig[k]:
+                sig[k] = v
+    return sig
+
+
+def minhash_jaccard(sig1, sig2):
+    """由两签名估计 Jaccard 相似度（相等位数 / 长度）。"""
+    if not sig1 or not sig2 or len(sig1) != len(sig2):
+        return 0.0
+    eq = sum(1 for a, b in zip(sig1, sig2) if a == b)
+    return eq / len(sig1)
 
 
 def _seg_sim(new_fps, old_fps):
@@ -319,13 +381,17 @@ def duplicate_advice(ctx, dup_name, new_version=None, new_title=""):
             "若为同一论文建议使用「覆盖旧版」避免检索结果重复。")
 
 
-def check_duplicate(ctx, embedding, threshold=None, arxiv_id=None, fingerprints=None, title=None):
+def check_duplicate(ctx, embedding, threshold=None, arxiv_id=None, fingerprints=None,
+                    title=None, new_minhash=None):
     """内容级语义去重（不依赖文件名）。返回 (dup_name, sim, evidence)。
 
     判定规则：
-    1) 内容相似度（整篇向量 与 分段指纹 top3 均值 取大）≥ 阈值 → 重复；
+    1) 内容相似度（整篇向量 / 分段指纹 top3 均值 / 离线 MinHash Jaccard 取大）≥ 阈值 → 重复；
     2) 标题高度相似(≥0.9) 且内容相似度 ≥0.7 → 判为同一论文不同版本；
     3) arXiv 号相同且内容相似度 ≥0.7 → 判为同一论文不同版本。
+
+    离线 MinHash：当 embedding/fingerprints 不可用（无 Key / 离线）时，作为内容相似度的
+    兜底信号，保证 v1/v7 这类用例仍可命中，且不依赖任何外部 API。
     """
     import difflib
     from config import DEDUP_THRESHOLD
@@ -337,10 +403,15 @@ def check_duplicate(ctx, embedding, threshold=None, arxiv_id=None, fingerprints=
         emb = p.get("embedding")
         sim_whole = cosine(embedding, emb) if (emb and embedding is not None) else 0.0
         seg_avg, seg_max = _seg_sim(fingerprints, p.get("fingerprints") or [])
-        sim = max(sim_whole, seg_avg)
+        local_j = minhash_jaccard(new_minhash, p.get("minhash")) if new_minhash else 0.0
+        sim = max(sim_whole, seg_avg, local_j)
         max_sim = max(max_sim, sim)
         ev_parts = []
-        if seg_avg > sim_whole:
+        # 选取主导相似信号作为证据（整篇 / 分段 / 离线指纹）
+        top = max((sim_whole, "whole"), (seg_avg, "seg"), (local_j, "local"))
+        if top[1] == "local" and local_j > 0:
+            ev_parts.append(f"离线内容指纹匹配 {local_j:.1%}")
+        elif top[1] == "seg":
             ev_parts.append(f"分段指纹内容匹配 {seg_avg:.1%}（最佳段 {seg_max:.1%}）")
         elif sim_whole > 0:
             ev_parts.append(f"整篇语义相似度 {sim_whole:.1%}")
@@ -351,7 +422,17 @@ def check_duplicate(ctx, embedding, threshold=None, arxiv_id=None, fingerprints=
         same_arxiv = bool(arxiv_id) and p.get("arxiv_id") == arxiv_id
         if same_arxiv:
             ev_parts.append("arXiv 号相同")
-        is_dup = sim >= threshold or ((title_hit or same_arxiv) and sim >= 0.7)
+        # 离线兜底：当整篇向量/分段指纹都不可用（无 Key / 离线）时，仅靠 MinHash 内容指纹
+        # 判断。判定分两层——
+        #  (a) 同 arXiv 号（必为同一论文的不同版本）只需内容重叠 ≥0.3 即判重，门槛低且安全：
+        #      不同论文永不共享 arXiv 号，故不会跨论文误判；仅挡住 OCR 全空等垃圾页；
+        #  (b) 纯内容级（无 arXiv/标题命中）则要求 ≥0.5 的离线相似度，避免跨主题误判。
+        # 这两层都不在 embedding 正常时降低原有 0.9 阈值的严格度。
+        offline_only = (sim_whole == 0 and seg_avg == 0)
+        is_dup = (sim >= threshold
+                  or ((title_hit or same_arxiv) and sim >= 0.7)
+                  or (offline_only and same_arxiv and local_j >= 0.3)
+                  or (offline_only and local_j >= 0.5))
         if is_dup and sim > best_sim:
             best, best_sim, best_ev = name, sim, "；".join(ev_parts)
     if best:
@@ -735,7 +816,7 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
             "filename": filename, "raw": raw, "failed_pages": failed_pages,
             "scanned": bool(scanned), "peak_mem_mb": peak_mem_mb, "_chunks": streamed_chunks,
             "toc": toc, "page_texts": page_texts, "full_text": full_text,
-            "page_count": len(page_texts),
+            "page_count": len(page_texts), "minhash": minhash,
         }
         invalid = _validate_prepared(prepared_base, total, extracted_pages, total_chars,
                                      ocr_error=ocr_error)
@@ -768,15 +849,22 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
         fingerprints = _paper_fingerprints(ctx, full_text) if full_text else []
     except Exception:
         fingerprints = []
+    try:
+        minhash = _minhash_signature(full_text) if full_text else []
+    except Exception:
+        minhash = []
     aid = _guess_arxiv(filename)
     title_guess = guess_title_from_text(full_text, "")
     new_version = _guess_version(filename)
     try:
-        dup_name, dup_sim, dup_ev = (
-            check_duplicate(ctx, embedding, arxiv_id=aid, fingerprints=fingerprints,
-                            title=title_guess)
-            if embedding is not None else (None, 0.0, "")
-        )
+        # 离线兜底：即使 embedding 不可用（无 Key / 离线），只要 minhash 可用也跑去重，
+        # 保证 v1/v7 这类用例在任意环境下都能命中（与整篇向量/分段指纹取大）。
+        if embedding is not None or minhash:
+            dup_name, dup_sim, dup_ev = check_duplicate(
+                ctx, embedding, arxiv_id=aid, fingerprints=fingerprints,
+                title=title_guess, new_minhash=minhash)
+        else:
+            dup_name, dup_sim, dup_ev = None, 0.0, ""
     except Exception:
         dup_name, dup_sim, dup_ev = None, 0.0, ""
     try:
@@ -787,7 +875,7 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
     return {
         "filename": filename, "scanned": scanned, "page_count": len(page_texts),
         "page_texts": page_texts, "full_text": full_text, "embedding": embedding,
-        "fingerprints": fingerprints,
+        "fingerprints": fingerprints, "minhash": minhash,
         "dup_name": dup_name, "dup_sim": dup_sim, "dup_evidence": dup_ev, "raw": raw,
         "dup_advice": dup_advice, "title": title_guess, "version": new_version,
         "ocr_error": ocr_error,
@@ -826,6 +914,7 @@ def commit(ctx, prepared, title=None, authors=None, arxiv_id=None, version=None,
         "toc": prepared.get("toc") or [],
         "github": github or [], "embedding": prepared["embedding"],
         "fingerprints": prepared.get("fingerprints") or [],
+        "minhash": prepared.get("minhash") or [],
     }
 
     # 向量入库（upsert）
@@ -888,9 +977,11 @@ def add_text_corpus(ctx, filename, full_text, meta=None):
     meta = meta or {}
     embedding = _paper_embedding(ctx, full_text) if full_text else None
     fingerprints = _paper_fingerprints(ctx, full_text) if full_text else []
+    minhash = _minhash_signature(full_text) if full_text else []
     dup_name, dup_sim, dup_ev = (check_duplicate(ctx, embedding, arxiv_id=meta.get("arxiv_id"),
-                                                 fingerprints=fingerprints, title=meta.get("title"))
-                                 if embedding is not None else (None, 0.0, ""))
+                                                 fingerprints=fingerprints, title=meta.get("title"),
+                                                 new_minhash=minhash)
+                                 if (embedding is not None or minhash) else (None, 0.0, ""))
     # 页数优先取同名真实 PDF 的页数；无 PDF 时才退回归一化段数估算（R9 T3）
     page_count = _real_pdf_page_count(filename) or \
         len([p for p in full_text.split("\n\n") if p.strip()]) or 1
@@ -898,7 +989,7 @@ def add_text_corpus(ctx, filename, full_text, meta=None):
         "filename": filename, "scanned": False,
         "page_count": page_count,
         "page_texts": [full_text], "full_text": full_text, "embedding": embedding,
-        "fingerprints": fingerprints,
+        "fingerprints": fingerprints, "minhash": minhash,
         "dup_name": dup_name, "dup_sim": dup_sim, "dup_evidence": dup_ev,
     }
     return commit(ctx, prepared, title=meta.get("title"), authors=meta.get("authors"),

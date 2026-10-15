@@ -2,6 +2,7 @@
 import base64
 import io
 import re
+import unicodedata
 from collections import Counter
 
 import pymupdf as fitz
@@ -371,9 +372,47 @@ def ocr_page_text(page, llm, zoom=2.0):
             temperature=0.1,
             **_llm_kwargs(llm),
         )
-        return _llm_response_text(response)
+        return _postprocess_ocr_text(_llm_response_text(response))
     except Exception as exc:
         return f"[OCR 失败: {str(exc)[:160]}]"
+
+
+# ---------- OCR 文本后处理（借鉴 OCRmyPDF 的"文本层清理"思路） ----------
+# 视觉模型对扫描件逐页 OCR 后，返回文本常带有：跨行被硬断开的英文折词
+# （"atten-\ntion"）、多余的全/半角兼容字符、成片的空行/多余空格。这些噪声
+# 进入向量库后会污染检索与去重。以下后处理在入库前统一清理，并对接
+# is_ocr_error_text 的契约（空结果仍返回 [OCR ...] 占位以便 UI 拦截）。
+_OCR_HYPHEN_RE = re.compile(r"(\w)-\n(\w)")
+_OCR_FENCE_RE = re.compile(r"^\s*```[a-zA-Z]*\s*|\s*```\s*$")
+_OCR_MULTISPACE_RE = re.compile(r"[ \t]{2,}")
+_OCR_BLANKLINES_RE = re.compile(r"(?:\r?\n[ \t]*){3,}")
+
+
+def _postprocess_ocr_text(text):
+    """清理视觉模型 OCR 输出：Unicode 归一化、折词修复、空白/空行归一化。
+
+    返回空串（或纯符号）时回退为 [OCR 结果为空] 降级占位，避免把空白页当正文入库。
+    """
+    if not text:
+        return ""
+    # 1) Unicode 兼容/全角归一化（全角字母、兼容连字符等统一为半角）
+    text = unicodedata.normalize("NFKC", text)
+    # 2) 去除视觉模型偶尔包上的 Markdown 代码围栏
+    text = _OCR_FENCE_RE.sub("", text)
+    # 3) 跨行连字符折词修复：仅当下个词首字母小写（确为续行）才合并，避免误并标题/缩写
+    text = _OCR_HYPHEN_RE.sub(
+        lambda m: (m.group(1) + m.group(2)) if m.group(2).islower() else m.group(0),
+        text,
+    )
+    # 4) 多余空格/制表符压成单个空格
+    text = _OCR_MULTISPACE_RE.sub(" ", text)
+    # 5) 3 个及以上连续空行压成 1 个空行（保留段落分隔）
+    text = _OCR_BLANKLINES_RE.sub("\n\n", text)
+    text = text.strip()
+    # 6) 空结果（去噪后仅剩空白或纯标点）降级标记
+    if not text or not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", text):
+        return "[OCR 结果为空，可能该页为纯图片/图表页，未提取到有效文本]"
+    return text
 
 
 def ocr_document(doc, llm, pages=None, progress_cb=None, zoom=2.0):
@@ -660,7 +699,14 @@ def _caption_distance(image_bbox, caption_bbox):
         return None
 
 
-def _nearest_caption(image_rects, captions, used_caption_indexes):
+def _nearest_caption(image_rects, captions, used_caption_indexes, max_gap=None):
+    """为插图挑选最近的未用图注；``max_gap`` 限定最大间距，避免远距离/跨区误关联。
+
+    借鉴 MinerU 版面分析中"图注就近归属"的约束：图注只在空间上真正贴近某张图时才
+    归该图所有，超过阈值（默认半页）的"最近图注"往往是邻近其它图的，应放弃关联
+    而不是硬塞，否则会出现"图 1 配了图 3 的图注"这类错误。横向重叠不足已由
+    ``_caption_distance`` 返回 None 排除（侧栏图注不会误配）。
+    """
     best = None
     try:
         for rect in image_rects:
@@ -670,6 +716,8 @@ def _nearest_caption(image_rects, captions, used_caption_indexes):
                     continue
                 distance = _caption_distance(bbox, caption["bbox"])
                 if distance is None:
+                    continue
+                if max_gap is not None and distance > max_gap:
                     continue
                 candidate = (distance, ci, caption["text"], bbox)
                 if best is None or candidate[0] < best[0]:
@@ -713,7 +761,14 @@ def extract_figures(doc, out_dir):
                         rects = page.get_image_rects(xref) or []
                     except Exception:
                         rects = []
-                    caption, image_bbox, caption_index = _nearest_caption(rects, captions, used_captions)
+                    try:
+                        page_h = float(page.rect.height)
+                    except Exception:
+                        page_h = 0.0
+                    # 半页以内才算"就近"图注（借鉴 MinerU 版面图注归属约束）
+                    max_gap = max(60.0, page_h * 0.5) if page_h > 0 else None
+                    caption, image_bbox, caption_index = _nearest_caption(
+                        rects, captions, used_captions, max_gap=max_gap)
                     if caption_index is not None:
                         used_captions.add(caption_index)
                     if image.mode in ("RGBA", "LA", "P"):
