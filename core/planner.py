@@ -255,7 +255,7 @@ def plan(ctx, goal, expert):
                 return copy.deepcopy(cached)
             try:
                 raw = ctx.llm.json_chat([{"role": "user", "content": prompt}], temperature=0.2)
-                tasks = normalize_tasks(raw, expert, goal)
+                tasks = validate_plan(normalize_tasks(raw, expert, goal))
                 if tasks:
                     # 缓存存快照、返回也給调用方独立副本：调用方会在执行期就地改写
                     # status / note（⏳→✅/❌）。若缓存与返回值共用同一对象，运行态会
@@ -269,7 +269,7 @@ def plan(ctx, goal, expert):
                 pass
     except Exception:
         pass
-    return fallback_tasks(goal, expert)
+    return validate_plan(fallback_tasks(goal, expert))
 
 
 # ---------------------------------------------------------------- 动态规划（Re-Planning）
@@ -331,11 +331,146 @@ def replan(ctx, goal, tasks, index, failed_task, reason, expert):
                 tools=", ".join(allowed_tools(expert)))
             try:
                 raw = ctx.llm.json_chat([{"role": "user", "content": prompt}], temperature=0.2)
-                new = normalize_tasks(raw, expert, goal)
+                new = validate_plan(normalize_tasks(raw, expert, goal))
                 if new:
                     return new[:6]
             except Exception:
                 pass
     except Exception:
         pass
-    return heuristic_replan(failed_task, remaining, expert, reason)
+    return validate_plan(heuristic_replan(failed_task, remaining, expert, reason))
+
+
+# ---------------------------------------------------------------- 计划校验与自评（确定性，无 LLM）
+def validate_plan(tasks, expert=""):
+    """校验并修复结构化计划的**依赖图**，返回清洗后的任务列表（为空/不可修复返回 None）。
+
+    `run()` 按**列表顺序**逐个执行子任务，`depends` 只用于"前序失败则跳过本步"这一处判定
+    （见 core.agent._deps_failed）。因此只有"指向排在自己之前的真实任务"的依赖才是可执行、
+    可判定的；LLM 规划或启发式拆解可能产出以下几类**病态依赖**，这里统一收敛为诚实 DAG：
+
+      1) 重复 id     → 追加 `#n` 后缀去重（保留首个），否则 audit / 展示会张冠李戴；
+      2) 悬挂依赖    → 删除指向不存在任务的 depends（by_id 取不到 → 永远"看起来满足"，语义失真）；
+      3) 前向/自依赖 → 删除指向"排在自己之后或自己"的依赖（本循环按序执行，前向依赖本就无法执行）；
+      4) 依赖成环    → 由规则 3 自动破除（任何环在线性序里至少含一条前向边，删掉即成 DAG）。
+
+    纯函数、确定性、不调用 LLM；任何异常都安全回落到"原样返回"，绝不阻断执行。
+    """
+    try:
+        seq = [t for t in (tasks or []) if isinstance(t, dict)]
+        if not seq:
+            return None
+        # 1) 去重 id（保留首个，后续追加 #n）
+        seen = {}
+        for t in seq:
+            tid = str(t.get("id") or "?")
+            if tid in seen:
+                seen[tid] += 1
+                t["id"] = f"{tid}#{seen[tid]}"
+            else:
+                seen[tid] = 0
+        order = {t["id"]: i for i, t in enumerate(seq)}
+        # 2/3/4) 逐任务清理依赖：去悬挂、去前向/自引用、去重 → 天然破除成环
+        for i, t in enumerate(seq):
+            kept = []
+            for d in [str(x) for x in (t.get("depends") or []) if x]:
+                j = order.get(d)
+                if j is None or j >= i:       # 悬挂 / 前向 / 自引用
+                    continue
+                if d not in kept:             # 依赖去重
+                    kept.append(d)
+            t["depends"] = kept
+        return seq or None
+    except Exception:
+        return list(tasks) if tasks else None
+
+
+# 阶段识别：工具职能分组 + 标题关键词（与 fallback_tasks 的工具分组保持一致）
+_GATHER_KW = ("检索", "抓取", "下载", "收集", "盘点", "search", "download", "fetch", "gather", "追踪")
+_ANALYZE_KW = ("比对", "推理", "分析", "核查", "复核", "综合", "定位", "analy", "compar", "reason")
+_SYNTH_KW = ("生成", "给出", "输出", "作答", "答案", "结论", "撰写", "成文", "synthesi", "answer", "produce")
+
+
+def _dep_depth(tasks):
+    """依赖链最大深度（以"边"计：全并行=0，纯串行 N 步=N-1）。"""
+    by_id = {t["id"]: t for t in tasks}
+    memo = {}
+
+    def depth(tid, stack):
+        if tid in memo:
+            return memo[tid]
+        if tid in stack:            # 防御性：理论上 validate_plan 已破环
+            return 0
+        deps = (by_id.get(tid) or {}).get("depends") or []
+        d = 0
+        for p in deps:
+            if p in by_id:
+                d = max(d, 1 + depth(p, stack | {tid}))
+        memo[tid] = d
+        return d
+
+    return max((depth(t["id"], frozenset()) for t in tasks), default=0)
+
+
+def plan_health(tasks, goal=""):
+    """确定性"计划自评"：不调用 LLM，仅从结构与目标关键词评估计划质量。
+
+    返回 dict：
+      n_steps        计划步数
+      dep_depth      依赖链最大深度（边计）
+      phases         命中的阶段标签（检索 gather / 分析 analyze / 综合 synth）
+      tool_coverage  带建议工具的步数占比（0~1）
+      covers_goal    目标与步骤标题是否共享 ≥2 字/词片段（粗糙覆盖度）
+      verdict        ok / thin（步数过少或缺检索·分析阶段）
+      notes          人读自评要点（list[str]）
+
+    用途：core.agent.run() 在规划后把自评写入 Trace，让"Agent 是否理解并覆盖了自己的计划"
+    变得可观测，而非只丢一串步骤字符串。
+    """
+    res = {"n_steps": 0, "dep_depth": 0, "phases": [], "tool_coverage": 0.0,
+           "covers_goal": False, "verdict": "ok", "notes": []}
+    try:
+        seq = [t for t in (tasks or []) if isinstance(t, dict)]
+        res["n_steps"] = len(seq)
+        if not seq:
+            res["verdict"] = "thin"
+            res["notes"].append("空计划：无任何子任务")
+            return res
+        phases, has_tool = set(), 0
+        for t in seq:
+            title = str(t.get("title") or "").lower()
+            tool = str(t.get("tool") or "")
+            if tool:
+                has_tool += 1
+            if tool in _GATHER_TOOLS or any(k in title for k in _GATHER_KW):
+                phases.add("检索")
+            if tool in _ANALYZE_TOOLS or any(k in title for k in _ANALYZE_KW):
+                phases.add("分析")
+            if any(k in title for k in _SYNTH_KW):
+                phases.add("综合")
+        res["phases"] = sorted(phases)
+        res["tool_coverage"] = round(has_tool / len(seq), 2)
+        res["dep_depth"] = _dep_depth(seq)
+        # 目标覆盖：目标切 2-gram / 拉丁词，与步骤标题比对
+        try:
+            g = (goal or "").lower()
+            grams = set(re.findall(r"[a-z0-9]{2,}", g))
+            grams |= {g[i:i + 2] for i in range(len(g) - 1)
+                      if any('一' <= c <= '鿿' for c in g[i:i + 2])}
+            titles = " ".join(str(t.get("title") or "").lower() for t in seq)
+            res["covers_goal"] = bool(grams) and any(x in titles for x in grams)
+        except Exception:
+            res["covers_goal"] = False
+        thin = (len(seq) < 3) or ("检索" not in phases and "分析" not in phases)
+        res["verdict"] = "thin" if thin else "ok"
+        res["notes"] = [
+            f"共 {len(seq)} 步，依赖深度 {res['dep_depth']}",
+            f"覆盖阶段：{'、'.join(res['phases']) or '（未识别）'}",
+            f"建议工具覆盖率 {int(res['tool_coverage'] * 100)}%",
+            ("目标关键词已进入步骤标题" if res["covers_goal"] else "步骤标题未显式覆盖目标关键词"),
+        ]
+        if thin:
+            res["notes"].append("步骤偏少或缺少检索/分析阶段，计划覆盖可能不足")
+    except Exception:
+        pass
+    return res
