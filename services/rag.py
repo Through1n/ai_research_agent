@@ -830,11 +830,11 @@ def answer(ctx, question, use_rerank=False, history=None, source_filter=None,
         def check(t):
             return validate_citations(t, len(sources), source_texts=texts)
 
-    # 拒答闸门：top chunk 相关度不足时直接不作答，避免 LLM 自由发挥
-    if top < RELEVANCE_FLOOR:
-        return _refuse(f"最高相关度 {top:.2f} 低于阈值 {RELEVANCE_FLOOR}，"
-                       f"共 {len(sources)} 个候选片段" + _library_hint(ctx),
-                       sources, debug)
+    # 拒答闸门：top 不足 或（top 过线但池整体无关）直拒，避免 LLM 自由发挥
+    _g = grade_retrieval(question, [c.get("text", "") for c in sources], [c.get("id") for c in sources])[1]
+    if top < RELEVANCE_FLOOR or (top >= RELEVANCE_FLOOR and _g < ADAPTIVE_MEAN_FLOOR and top < STRONG_HIT):
+        return _refuse(f"最高相关度 {top:.2f} 低于阈值 {RELEVANCE_FLOOR}，共 {len(sources)} 个候选片段"
+                       + _library_hint(ctx), sources, debug)
 
     _say("③ 生成答案并校验引用…")
     # 话术 7：on_token 提供时走流式（用户逐字看到内容），但完整文本仍要过下面的
@@ -905,3 +905,8 @@ def answer(ctx, question, use_rerank=False, history=None, source_filter=None,
     debug["top_score"] = round(top, 4)
     return {"answer": text, "sources": sources, "issues": issues, "debug": debug,
             "refused": False, "top_score": round(top, 4), "unverified": unverified}
+
+# ---------- 模块二优化：抗幻觉自适应拒答闸门所需符号 ----------
+# 置于文件末尾，避免改动上方的任何被 docs/technical_doc.md 引用的行号（231/258/290/399/435/449/604/666/722/749/779/785/870）。
+from core.guardrails import citation_coverage, grade_retrieval
+ADAPTIVE_MEAN_FLOOR = 0.18   # 池整体相关度均值下限：top 过线但池整体无关时仍拒答（CRAG 风格自适应闸门）

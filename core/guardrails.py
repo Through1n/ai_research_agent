@@ -479,3 +479,71 @@ ACADEMIC_SYSTEM = (
     "“资料未提供/无法确定/未提及”等相反表述——自相矛盾比答错更严重；同一结论在多个来源"
     "（含同一文献的不同版本）中一致时只陈述一次，不逐来源重复、不追加否定补充句。\n"
 )
+
+
+# =====================================================================
+# Round 13：抗幻觉增强（确定性、无 LLM 依赖；append-only，不改动上方被
+# docs/technical_doc.md 引用行号的代码，避免文档行号漂移）。
+# =====================================================================
+
+def _char_ngrams(text, n=2):
+    """仅中文的字符 n-gram 集合（跨语言场景：中文答案句 vs 中文来源也能判定支持度）。
+
+    英文来源返回空集——此时 _overlap 退化回 token 锚点口径，与原行为一致，不引入回归。
+    """
+    s = "".join(ch for ch in (text or "") if "\u4e00" <= ch <= "\u9fff")
+    s = re.sub(r"\s+", "", s)
+    if len(s) < n:
+        return {s} if s else set()
+    return {s[i:i + n] for i in range(len(s) - n + 1)}
+
+
+def citation_coverage(answer, source_texts, threshold=SUSPICION_THRESHOLD):
+    """逐处【n】引用的"锚点覆盖率"（0~1）+ 总体指标。
+
+    用于 answer() 生成后判定"模型引用的来源是否真的包含该句主张"——覆盖率=0 即
+    "引用来源与主张零词面重合"，是强幻觉信号（AGREE 的 claims-not-supported）。
+    返回 {"coverage": {n: score}, "mean": float, "any_zero": bool, "unsupported": [n...]}。
+    """
+    cov, ctxs = {}, {}
+    for marks, body in citation_sentences(answer):
+        for n in marks:
+            if isinstance(n, int):
+                ctxs.setdefault(n, "")
+                ctxs[n] += " " + body
+    for n in sorted(ctxs):
+        if not (1 <= n <= len(source_texts)):
+            cov[n] = 0.0
+            continue
+        sent, src = ctxs[n].strip(), source_texts[n - 1] or ""
+        if len(_anchor_tokens(sent)) < 2 and not _char_ngrams(sent):
+            cov[n] = 1.0            # 无锚点可判，按支持处理（宁可漏报，不误报）
+            continue
+        cov[n] = round(_overlap(sent, src), 4)
+    mean = (sum(cov.values()) / len(cov)) if cov else 1.0
+    return {"coverage": cov, "mean": round(mean, 4),
+            "any_zero": any(v <= 0.0 for v in cov.values()),
+            "unsupported": sorted(n for n, v in cov.items() if 0 < v < threshold)}
+
+
+def grade_retrieval(query, source_texts, source_ids=None):
+    """CRAG 式"知识条"相关性评分（确定性，无 LLM）：对每个候选片段算 query↔chunk 的
+    词面覆盖，返回 (scores_by_id, mean, max)。
+
+    answer() 的拒答闸门可借此区分"仅单一来源高亮、整体无关"与"整体相关"两种情形。
+    复用 query 与 chunk 的中英锚点覆盖率，避免引入外部模型依赖。source_ids 为 None
+    时按 0-based 下标作为 key。
+    """
+    q = (query or "").lower()
+    q_tokens = set(re.findall(r"[a-z0-9][a-z0-9\-\.]*", q))
+    scores = {}
+    for i, t in enumerate(source_texts or []):
+        cid = (source_ids[i] if source_ids else i)
+        toks = set(re.findall(r"[a-z0-9][a-z0-9\-\.]*", (t or "").lower()))
+        if not q_tokens:
+            scores[cid] = 0.0
+            continue
+        hit = len(q_tokens & toks) / len(q_tokens)
+        scores[cid] = round(min(max(hit, 0.0), 1.0), 4)
+    vals = list(scores.values()) or [0.0]
+    return scores, round(sum(vals) / len(vals), 4), round(max(vals), 4)
