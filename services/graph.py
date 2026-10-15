@@ -6,10 +6,10 @@
 - 双重匹配：词面窗口匹配失败时，用论文标题与参考文献条目的语义向量兜底；
 - 版本归并：同一 arXiv 号仅取最新版本入图，避免重复节点。
 
-新增（对应赛题 D 路审计整改）：
+新增（对应赛题 D 路审计整改 + Round 13 图谱增强）：
 - detect_frontier：真正的 frontier 模型（低被引 + 时间新近 + 高出度 + 跨学科向量距离 + 外部真实被引）；
-- generate_review：社区发现聚簇 → 簇代表 → 时间线 → 引用骨干边，图谱结构驱动综述；
-- explore_future_structured：用引用图 1/2 跳可达性判定 Future Work 是否已被后续论文解决。
+- generate_review / explore_future_structured：社区聚簇综述 + 引用图 1/2 跳可达性判定 Future Work 解决状态；
+- Round 13 增强（见文件末尾）：引文语境与意图（Scite 式）、共引/文献耦合推荐、引文速度热点。
 """
 import re
 import math
@@ -806,6 +806,13 @@ def generate_review(ctx, G, metrics, cornerstone, progress_cb=None):
         f"- 《{ctx.papers[n].get('title', n)}》({_node_year(ctx, n) or '年份未知'}) "
         f"{str(ctx.papers[n].get('abstract', ''))[:200]}" for n in (cornerstone or [])) or "（无）"
 
+    # Round 13 增强：引文语境 / 分歧 / 相关推荐 / 引文速度热点（确定性计算，注入 prompt 与附录）
+    try:
+        ins = graph_insights(ctx, G)
+    except Exception:
+        ins = None
+    intent_block, related_block, hotspot_block = _insight_blocks(ctx, ins)
+
     prompt = f"""你在为本领域撰写一篇**基于引用图谱的**中文综述（900字内）。图谱由 networkx 从本地文献库
 真实解析的引用关系计算而来：共 {st['n_nodes']} 个节点、{st['n_edges']} 条引用边，已做社区发现聚簇。
 请严格用以下四个 Markdown 小标题组织内容（不要增加其他一级结构）：
@@ -830,11 +837,18 @@ def generate_review(ctx, G, metrics, cornerstone, progress_cb=None):
 {bridge_block}
 引用骨干边（谁引用了谁，构成发展脉络）：
 {backbone_block}
+引文语境（Scite 式 supporting/contrasting/mentioning 判定，确定性计算，附原文引文句）：
+{intent_block}
+相关但未被直接引用的论文（共引 / 文献耦合，Connected Papers 式，可作"相关的工作"素材）：
+{related_block}
+新兴热点（引文速度 = 本地被引 ÷ 论文年龄，小图仅作方向性参考）：
+{hotspot_block}
 
 硬性要求：
 1) 只能使用上面列出的论文与边，**禁止引入任何本地库之外的文献或编造引用关系**；
 2) 每个小标题下必须至少点名 1-2 篇上面给出的论文；
-3) 客观、连贯，不要平铺摘要。"""
+3) 客观、连贯，不要平铺摘要；
+4) 「分歧与展望」中的分歧判断必须引用上述引文语境原文，禁止编造引文句。"""
 
     body = _llm_text(ctx, prompt, 0.4)
     if not _llm_ok(body):
@@ -842,7 +856,7 @@ def generate_review(ctx, G, metrics, cornerstone, progress_cb=None):
         note = "\n\n> 注：LLM 不可用，以下综述由 networkx 图谱结构确定性生成（未编造内容）。"
     else:
         note = ""
-    return f"{body}{note}\n\n{_structure_appendix(ctx, st)}"
+    return f"{body}{note}\n\n{_structure_appendix(ctx, st)}{insights_appendix(ctx, ins)}"
 
 
 # Future Work 关键词抽取时忽略的停用词
@@ -1049,4 +1063,450 @@ def explore_future(ctx, G):
     if not _llm_ok(body):
         body = ("## 语义确认\nLLM 不可用，以下直接使用引用图可达性的确定性判定结果（未做语义改写、未编造证据）。\n"
                 + structured)
-    return f"{stat_line}\n\n{table}\n\n{body}"
+    # Round 13 增强：引文速度视角的新兴热点（Price 累积优势模型信号，确定性计算）
+    hot_block = ""
+    try:
+        hot = detect_hotspots(ctx, G)
+    except Exception:
+        hot = []
+    if hot:
+        _hl = ["", "## 新兴热点（引文速度：年轻且已被本地引用）", "",
+               "> 口径：本地入度 ÷ max(1, 当前年份−发表年份)，近似 Price(1965) 累积优势模型中"
+               "「晚发表但被引超预期」的信号；本地图规模小，仅作方向性参考，不构成学术结论。"]
+        for h in hot[:3]:
+            _hl.append(f"- 《{h['title']}》（{h['year']}）：本地被引 {h['indegree']} 次 / "
+                       f"年龄 {h['age']} 年 → 引文速度 {h['velocity']:.2f} 次/年")
+        hot_block = "\n".join(_hl)
+    return f"{stat_line}\n\n{table}\n\n{body}{hot_block}"
+
+
+# ---------- Round 13 增强：引文语境 / 引用意图 / 相似推荐 / 研究空白 ----------
+# 业界对标（全部做成离线确定性实现：正则 + 集合运算 + networkx，不依赖 LLM 与外部 API）：
+# ① Scite「Smart Citations」：抽取引文语句（citation statement）并三分类
+#    supporting / contrasting / mentioning。本模块用「句子 vs 被引论文标题」的 token
+#    重叠定位引文语境句、用线索词表做三分类的**无 LLM 近似**；contrasting 稀少且
+#    信息量最大，边级保守标出供人工复核，不冒充高准确率分类器。
+# ② Connected Papers / ResearchRabbit / VOSviewer：共引（co-citation，被同一篇论文
+#    引用）与文献耦合（bibliographic coupling，引用同一批论文）相似度，用于推荐
+#    「相关但未被直接引用」的论文；Salton 余弦归一化，证据列明共同邻居。
+# ③ Price(1965) 累积优势模型 / Newman(2009)「晚发表但被引超预期」：引文速度
+#    （本地入度 ÷ 论文年龄）作为新兴热点信号；小图上仅作方向性参考。
+# 全部新符号追加在文件末尾：既有函数行号不变，docs/technical_doc.md 的行号引用零漂移。
+
+# 引用意图线索词（对引文语境句做小写子串计数；contrasting 优先级高于 supporting）
+_INTENT_CONTRAST_CUES = ("however", "in contrast", "by contrast", "unlike", "whereas",
+                         "although", "though", "nevertheless", "nonetheless",
+                         "on the other hand", "but ", " yet ", "limitation", "drawback",
+                         "shortcoming", "fails to", "fail to", "cannot", "can not",
+                         "struggle", "suffer", "weakness", "deficien", "flaw",
+                         "question whether", "questions the", "question the", "doubt")
+_INTENT_SUPPORT_CUES = ("following", "based on", "building on", "build upon", "build on",
+                        "extend", "adopt", "as shown in", "as demonstrated", "demonstrat",
+                        "achieve", "state-of-the-art", "outperform", "successfully",
+                        "leverage", "inspired by", "according to",
+                        "confirm", "consistent with", "in line with")
+# 引文语境判定：句子与「被引论文标题」的 token 重叠率下限（arXiv 号命中记 1.0）
+CONTEXT_OVERLAP_STRONG = 0.6   # 达标记为普通语境
+CONTEXT_OVERLAP_WEAK = 0.4     # 仅达到时标记 weak（诚实降级，不丢弃唯一线索）
+# 综述 / agent 工具输出中各类清单的最大条数
+INSIGHT_MAX_DISAGREE = 5
+INSIGHT_MAX_RELATED = 6
+INSIGHT_MAX_HOTSPOT = 5
+# 单条引文语境的最大截断长度（字符）
+CONTEXT_MAX_CHARS = 220
+
+
+def _split_sentences(text):
+    """离线分句：保护 et al. / e.g. / i.e. 等缩写点号，再按 . ! ? 。！？ 切分。"""
+    if not text:
+        return []
+    t = text
+    for ab in ("et al.", "e.g.", "i.e.", "etc.", "vs.", "cf.", "Fig.", "fig.",
+               "approx.", "No."):
+        t = t.replace(ab, ab.replace(".", "\x00"))
+    parts = re.split(r"(?<=[.!?。！？])\s+", t)
+    return [p.replace("\x00", ".").strip() for p in parts if p and p.strip()]
+
+
+def _node_full_text(ctx, n):
+    """取节点对应 PDF 的全文（与 build_graph 同口径：拼接该 source 的全部 chunk）。"""
+    try:
+        return "\n".join(c.get("text", "") for c in ctx.chunks if c.get("source") == n)
+    except Exception:
+        return ""
+
+
+def _node_title(ctx, n):
+    """节点标题：G 属性优先，退回 ctx.papers，再退回文件名。"""
+    try:
+        return ctx.papers.get(n, {}).get("title", n) or n
+    except Exception:
+        return n
+
+
+def _citation_title_tokens(title):
+    """被引论文标题的判别性 token（与 _candidates 同口径：len>2 且非停用词）。"""
+    return [w for w in norm(title or "").split() if len(w) > 2 and w not in _STOP]
+
+
+def _sentence_overlap(sent_toks, b_tokens, sentence, arxiv_b):
+    """句子对论文 B 的引用关联度：标题 token 重叠率；含 B 的 arXiv 号记 1.0。"""
+    if arxiv_b and re.search(r"\d{4}\.\d{4,5}", arxiv_b) and arxiv_b in (sentence or ""):
+        return 1.0
+    if not b_tokens or not sent_toks:
+        return 0.0
+    return len(sent_toks & set(b_tokens)) / len(b_tokens)
+
+
+def _classify_citation_intent(sentence):
+    """单句引用意图：线索词计数，contrasting > supporting > mention（确定性近似，非 LLM）。"""
+    low = (sentence or "").lower()
+    n_c = sum(low.count(w) for w in _INTENT_CONTRAST_CUES)
+    n_s = sum(low.count(w) for w in _INTENT_SUPPORT_CUES)
+    if n_c > n_s:
+        return "contrasting"
+    if n_s > n_c:
+        return "supporting"
+    return "mention"
+
+
+def annotate_citation_intents(ctx, G, max_contexts=2):
+    """为引用图每条边抽取「引文语境」并判定引用意图（Scite Smart Citations 式，离线确定性版）。
+
+    对每条真实引用边 A→B：
+      1. 把 A 的**正文**（剔除 References 区，避免把文献条目本身当成引文语境）分句，
+         找出与 B 标题 token 重叠率 ≥ CONTEXT_OVERLAP_STRONG（或含 B 的 arXiv 号）的
+         句子作为引文语境；仅达到 WEAK 的标记 weak；
+      2. 对每个语境句以线索词表分类 supporting / contrasting / mention；
+      3. 边级意图：任一 contrasting → contrasting；否则任一 supporting → supporting；
+         有语境但无信号 → mention；**完全没找到语境 → no_context**
+         （不把"没找到"伪装成"中性提及"——无证据时如实说无证据）。
+    结果写回边属性 intent / contexts，返回统计 dict；同一张图只注解一次（G.graph 标记）。
+    演示模式示意边（evidence 含「演示模式/示意」）一律跳过：那不是真实引用，不能造语境。
+    """
+    stats = {"n_edges": 0, "by_intent": {"supporting": 0, "mention": 0,
+                                        "contrasting": 0, "no_context": 0},
+             "n_annotated": 0, "n_no_context": 0, "skipped_demo": 0}
+    if G is None or len(G.nodes) == 0 or G.number_of_edges() == 0:
+        return stats
+    if G.graph.get("intents_done"):
+        # 已注解过：从边属性重新汇总统计，保证返回值与图当前状态一致
+        for a, b in G.edges:
+            it = G.edges[a, b].get("intent", "no_context")
+            stats["n_edges"] += 1
+            stats["by_intent"][it] = stats["by_intent"].get(it, 0) + 1
+            if it == "no_context":
+                stats["n_no_context"] += 1
+            else:
+                stats["n_annotated"] += 1
+        return stats
+
+    body_cache = {}
+
+    def _body_sentences(a):
+        if a not in body_cache:
+            full = _node_full_text(ctx, a)
+            refs = ref_section(full)
+            body = full[:len(full) - len(refs)] if refs else full
+            body_cache[a] = _split_sentences(body)
+        return body_cache[a]
+
+    for a, b in list(G.edges):
+        ev = G.edges[a, b].get("evidence", "") or ""
+        if "演示模式" in ev or "示意" in ev:
+            stats["skipped_demo"] += 1
+            G.edges[a, b]["intent"] = "no_context"
+            G.edges[a, b]["contexts"] = []
+            continue
+        stats["n_edges"] += 1
+        b_title = G.nodes[b].get("title") or _node_title(ctx, b)
+        b_tokens = _citation_title_tokens(b_title)
+        arxiv_b = ""
+        try:
+            arxiv_b = ctx.papers.get(b, {}).get("arxiv_id", "") or ""
+        except Exception:
+            arxiv_b = ""
+        sents = _body_sentences(a)
+        bset = set(b_tokens)
+        scored = []
+        for s in sents:
+            ov = _sentence_overlap(set(norm(s).split()), b_tokens, s, arxiv_b)
+            if ov >= CONTEXT_OVERLAP_WEAK:
+                scored.append((ov, s))
+        scored.sort(key=lambda x: -x[0])   # 稳定排序：同分保留正文出现顺序
+        picked = scored[:max_contexts]
+        intents = [_classify_citation_intent(s) for _, s in picked]
+        if any(i == "contrasting" for i in intents):
+            edge_intent = "contrasting"
+        elif any(i == "supporting" for i in intents):
+            edge_intent = "supporting"
+        elif picked:
+            edge_intent = "mention"
+        else:
+            edge_intent = "no_context"
+        G.edges[a, b]["intent"] = edge_intent
+        G.edges[a, b]["contexts"] = [
+            {"text": s[:CONTEXT_MAX_CHARS], "intent": i, "overlap": round(ov, 2),
+             "weak": ov < CONTEXT_OVERLAP_STRONG}
+            for (ov, s), i in zip(picked, intents)]
+        stats["by_intent"][edge_intent] = stats["by_intent"].get(edge_intent, 0) + 1
+        if edge_intent == "no_context":
+            stats["n_no_context"] += 1
+        else:
+            stats["n_annotated"] += 1
+    G.graph["intents_done"] = True
+    return stats
+
+
+def disagreement_points(ctx, G, top_k=INSIGHT_MAX_DISAGREE):
+    """引用意图为 contrasting 的真实引用边 = 有原文依据的技术路线分歧 / 被质疑点。
+
+    每条附引文语境原文（截断），供综述「分歧与展望」与人工复核使用；
+    未注解的图会先跑 annotate_citation_intents。纯确定性，无 LLM、无编造。
+    """
+    if G is None or G.number_of_edges() == 0:
+        return []
+    if not G.graph.get("intents_done"):
+        annotate_citation_intents(ctx, G)
+    out = []
+    for a, b in G.edges:
+        if G.edges[a, b].get("intent") != "contrasting":
+            continue
+        ctxs = [c["text"] for c in G.edges[a, b].get("contexts", []) if c.get("text")]
+        out.append({"from": a, "to": b,
+                    "from_title": G.nodes[a].get("title") or _node_title(ctx, a),
+                    "to_title": G.nodes[b].get("title") or _node_title(ctx, b),
+                    "contexts": ctxs[:2]})
+    return out[:top_k]
+
+
+def _cocitation_map(G):
+    """共引强度 {frozenset({x,y}): strength}：被同一批论文引用的强度（Salton 余弦）。
+
+    共引 = |citers(x) ∩ citers(y)| / sqrt(|citers(x)|·|citers(y)|)，
+    衡量「经常被一起引用 = 主题相近」（Connected Papers 核心信号之一）。
+    """
+    citers = {n: set(G.predecessors(n)) for n in G.nodes}
+    out = {}
+    nodes = list(G.nodes)
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            x, y = nodes[i], nodes[j]
+            inter = citers[x] & citers[y]
+            if not inter:
+                continue
+            denom = math.sqrt(max(1, len(citers[x])) * max(1, len(citers[y])))
+            out[frozenset((x, y))] = len(inter) / denom
+    return out
+
+
+def _coupling_map(G):
+    """文献耦合强度 {frozenset({x,y}): strength}：引用同一批论文的强度（Salton 余弦）。
+
+    耦合 = |refs(x) ∩ refs(y)| / sqrt(|refs(x)|·|refs(y)|)，
+    衡量「引用相同的文献基础 = 研究脉络同源」（Connected Papers 核心信号之一）。
+    """
+    refs = {n: set(G.successors(n)) for n in G.nodes}
+    out = {}
+    nodes = list(G.nodes)
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            x, y = nodes[i], nodes[j]
+            inter = refs[x] & refs[y]
+            if not inter:
+                continue
+            denom = math.sqrt(max(1, len(refs[x])) * max(1, len(refs[y])))
+            out[frozenset((x, y))] = len(inter) / denom
+    return out
+
+
+def recommend_related(ctx, G, top_k=3, min_score=0.34):
+    """Connected Papers 式「相关但未被直接引用」推荐：共引 + 文献耦合（+ 语义向量兜底）。
+
+    对每个节点 x，仅在「与 x 无直接引用边（两个方向都没有）」的节点中按强度取 Top-K；
+    两种信号都命中的标注「共引+文献耦合」并附证据（共同被引 / 共同引用的论文标题）。
+    图信号为空且 embedding 可用时，补 1 条主题向量最近的未连接论文（明确标注方法），
+    embedding 不可用则跳过——**不编造关系**。小图上强度值易饱和，故证据列明共同邻居。
+    """
+    if G is None or len(G.nodes) < 2:
+        return []
+    cocit, coupl = _cocitation_map(G), _coupling_map(G)
+    try:
+        vecs = _paper_vectors(ctx, list(G.nodes)) or {}
+    except Exception:
+        vecs = {}
+    out = []
+    for x in G.nodes:
+        recs = []
+        for y in G.nodes:
+            if y == x or G.has_edge(x, y) or G.has_edge(y, x):
+                continue
+            key = frozenset((x, y))
+            sc, cc = cocit.get(key, 0.0), coupl.get(key, 0.0)
+            if max(sc, cc) < min_score:
+                continue
+            methods, ev = [], []
+            if cc:
+                methods.append("文献耦合")
+                shared = sorted(set(G.successors(x)) & set(G.successors(y)))
+                ev.append("共同引用：" + "、".join(f"《{_node_title(ctx, s)}》" for s in shared[:2]))
+            if sc:
+                methods.append("共引")
+                shared = sorted(set(G.predecessors(x)) & set(G.predecessors(y)))
+                ev.append("共同被引于：" + "、".join(f"《{_node_title(ctx, s)}》" for s in shared[:2]))
+            recs.append({"paper": y, "title": _node_title(ctx, y),
+                         "score": round(max(sc, cc), 3),
+                         "method": "+".join(methods), "evidence": "；".join(ev)})
+        if not recs and vecs.get(x) is not None:
+            best, bs = None, 0.0
+            for y in G.nodes:
+                if y == x or G.has_edge(x, y) or G.has_edge(y, x) or vecs.get(y) is None:
+                    continue
+                s = cosine(vecs[x], vecs[y])
+                if s > bs:
+                    best, bs = y, s
+            if best is not None and bs >= 0.5:
+                recs.append({"paper": best, "title": _node_title(ctx, best),
+                             "score": round(bs, 3), "method": "主题向量(embedding)",
+                             "evidence": f"主题向量余弦 {bs:.2f}（图内无共引/耦合信号）"})
+        recs.sort(key=lambda r: -r["score"])
+        if recs:
+            out.append({"paper": x, "title": _node_title(ctx, x),
+                        "recommendations": recs[:top_k]})
+    out.sort(key=lambda d: -max(r["score"] for r in d["recommendations"]))
+    return out
+
+
+def detect_hotspots(ctx, G, top_k=INSIGHT_MAX_HOTSPOT):
+    """引文速度视角的新兴热点（Price 累积优势 / Newman「晚发表但被引超预期」信号）。
+
+    velocity = 本地入度 ÷ max(1, 当前年份 − 发表年份)。年轻论文若已获本地引用，
+    单位年龄被引量高于老论文，可能是正在崛起的方向。**本地图谱规模小，该指标只作
+    方向性参考，不构成学术结论**；年份缺失或入度 0 的节点不参与（无证据不排序）。
+    """
+    if G is None or len(G.nodes) == 0:
+        return []
+    cur = time.localtime().tm_year
+    rows = []
+    for n in G.nodes:
+        ind = G.in_degree(n)
+        if ind <= 0:
+            continue
+        y = _node_year(ctx, n)
+        if not y:
+            continue
+        age = max(1, cur - y)
+        rows.append({"paper": n, "title": _node_title(ctx, n), "year": y,
+                     "indegree": ind, "age": age, "velocity": round(ind / age, 3)})
+    rows.sort(key=lambda r: (-r["velocity"], -r["indegree"], r["year"]))
+    return rows[:top_k]
+
+
+def graph_insights(ctx, G):
+    """汇总引文语境 / 分歧 / 相关推荐 / 新兴热点为确定性 insights（综述与 agent 工具复用）。
+
+    任何一步异常都降级返回剩余部分（保证综述链路不中断）；图为空返回含空清单的 dict。
+    """
+    ins = {"n_nodes": len(G.nodes) if G is not None else 0,
+           "n_edges": G.number_of_edges() if G is not None else 0,
+           "intents": {}, "disagreements": [], "related": [], "hotspots": []}
+    if G is None or len(G.nodes) == 0:
+        return ins
+    try:
+        ins["intents"] = annotate_citation_intents(ctx, G)
+    except Exception:
+        pass
+    try:
+        ins["disagreements"] = disagreement_points(ctx, G)
+    except Exception:
+        pass
+    try:
+        ins["related"] = recommend_related(ctx, G)
+    except Exception:
+        pass
+    try:
+        ins["hotspots"] = detect_hotspots(ctx, G)
+    except Exception:
+        pass
+    return ins
+
+
+def _insight_sections(ctx, ins):
+    """把 insights 渲染为 [(小标题, [行...]), ...]；无信号返回空列表（调用方给占位文案）。"""
+    if not ins or not ins.get("n_edges"):
+        return []
+    secs = []
+    it = ins.get("intents") or {}
+    by = it.get("by_intent", {})
+    lines = [f"- 引用意图分布（Scite 式三分类近似）：支持 {by.get('supporting', 0)} / "
+             f"提及 {by.get('mention', 0)} / 对比 {by.get('contrasting', 0)} / "
+             f"无引文语境 {by.get('no_context', 0)}（共 {it.get('n_edges', 0)} 条真实引用边）"]
+    for d in ins.get("disagreements", []):
+        q = "；".join(d["contexts"]) or "（无引文语境原文）"
+        lines.append(f"- 技术路线分歧：《{d['from_title']}》→《{d['to_title']}》：{q}")
+    secs.append(("引文语境与分歧", lines))
+    rel = ins.get("related", [])
+    if rel:
+        lines = []
+        for r in rel:
+            for rec in r["recommendations"][:2]:
+                lines.append(f"- 《{r['title']}》 ↔ 《{rec['title']}》：{rec['method']} "
+                             f"{rec['score']:.2f}（{rec['evidence']}）")
+        if lines:
+            secs.append(("相关但未被直接引用（共引 / 文献耦合）", lines))
+    hot = ins.get("hotspots", [])
+    if hot:
+        lines = [f"- 《{h['title']}》（{h['year']}）：本地被引 {h['indegree']} 次 / {h['age']} 年 "
+                 f"→ 引文速度 {h['velocity']:.2f} 次/年" for h in hot]
+        secs.append(("新兴热点（引文速度 = 本地被引 ÷ 论文年龄，小图仅作方向性参考）", lines))
+    return secs
+
+
+def _insight_blocks(ctx, ins):
+    """prompt 注入用三个文本块（引文语境 / 相关推荐 / 热点）；无信号统一给占位文案。"""
+    secs = _insight_sections(ctx, ins)
+    ph = "（无引用边或信号不足，本节不可用）"
+    intent = related = hot = ph
+    for title, lines in secs:
+        body = "\n".join(lines)
+        if title.startswith("引文语境"):
+            intent = body
+        elif title.startswith("相关"):
+            related = body
+        elif title.startswith("新兴热点"):
+            hot = body
+    return intent, related, hot
+
+
+def insights_appendix(ctx, ins):
+    """附录 Markdown：图谱增强信号明细（确定性计算，非 LLM 生成）；无信号返回空串。"""
+    secs = _insight_sections(ctx, ins)
+    if not secs:
+        return ""
+    lines = ["", "---", "#### 引文语境与研究空白（确定性计算，非 LLM 生成）", ""]
+    for title, body in secs:
+        lines.append(f"**{title}**")
+        lines.extend(body)
+        lines.append("")
+    # 语料规模坦诚：节点数远低于赛题「20 篇批量文献」时明确标注，不冒充大图效果
+    if (ins or {}).get("n_nodes", 0) < SMALL_CORPUS_NODES:
+        lines.append(f"⚠️ **语料规模坦诚说明**：当前图谱仅 {ins.get('n_nodes')} 个逻辑节点，"
+                     f"共引 / 耦合强度与引文速度在极小图上区分度有限，仅证明信号链路可用，"
+                     f"不代表 20 篇规模下的效果。")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def insights_markdown(ctx, ins):
+    """引文语境 / 推荐 / 热点的完整中文 Markdown（agent 工具直接返回；确定性，无 LLM）。"""
+    secs = _insight_sections(ctx, ins)
+    if not secs:
+        return "（图谱为空或无真实引用边：引文语境、共引/耦合推荐、引文速度热点均不可用）"
+    out = []
+    for title, body in secs:
+        out.append(f"**{title}**")
+        out.append("\n".join(body))
+        out.append("")
+    if (ins or {}).get("n_nodes", 0) < SMALL_CORPUS_NODES:
+        out.append(f"⚠️ 语料规模坦诚说明：当前图谱仅 {ins.get('n_nodes')} 个逻辑节点，"
+                   f"上述信号在极小图上区分度有限，仅证明链路可用。")
+    return "\n".join(out).strip()

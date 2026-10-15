@@ -445,4 +445,27 @@ def build_registry():
     r.register("recall_memory", "从长期记忆中检索与问题相关的笔记。",
                {"type": "object", "properties": {"query": {"type": "string"}},
                 "required": ["query"]}, t_recall)
+    # Round 13 图谱增强工具（注册行追加在文档引用行 371 之后，避免行号漂移）
+    r.register("citation_insights",
+               "引文语境分析（Scite 式支持/对比/提及）＋共引与文献耦合推荐＋引文速度热点，全部确定性离线计算。",
+               {"type": "object", "properties": {}}, t_citation_insights)
     return r
+
+
+def t_citation_insights(ctx):
+    """引文语境 / 共引耦合推荐 / 引文速度热点（确定性计算，无 LLM、无网络依赖）。
+
+    对标 Scite Smart Citations（引文语句三分类）、Connected Papers（共引 + 文献耦合
+    相似图）、Price 累积优势模型（引文速度）。图谱为空或无真实引用边时如实说明，
+    不编造引文语境与推荐关系。
+    """
+    G, _ = gsvc.build_graph(ctx)
+    ins = gsvc.graph_insights(ctx, G)
+    by = (ins.get("intents") or {}).get("by_intent", {})
+    return {"summary": {"nodes": ins.get("n_nodes"), "edges": ins.get("n_edges"),
+                        "intent_counts": by,
+                        "n_disagreements": len(ins.get("disagreements") or []),
+                        "n_related": sum(len(r.get("recommendations") or [])
+                                         for r in (ins.get("related") or [])),
+                        "n_hotspots": len(ins.get("hotspots") or [])},
+            "insights_markdown": gsvc.insights_markdown(ctx, ins)}
