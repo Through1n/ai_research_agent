@@ -196,7 +196,7 @@ LLM 调用 3 次退避重试（1.5/3.0/4.5s），失败落盘并返回友好伪�
 python scripts/verify_official.py          # 官方 PDF 去重/扫描件/长文档/图谱实测
 python scripts/bench_graph.py              # 20/40 篇图谱规模压测
 python scripts/selftest.py                 # 离线端到端自检（无需 Key）
-python -m unittest discover -s tests -v    # 18 项单元测试
+python -m unittest discover -s tests -v    # 181 项单元测试
 python scripts/apptest_check.py            # Streamlit 全页面渲染检查
 ```
 
@@ -304,7 +304,7 @@ ai_research_agent/
 ├── services/                  # 业务服务：parsing / library / rag / query_expansion / graph / track / writing / translate / extern / citation_quality / state / wcopilot_dotrender
 ├── tools/                     # 注册中心 + 21 个 Function Schema 工具
 ├── ui/                        # 9 个页面 + 公共组件（错误边界 / 空库守卫 / flash / 锚点卡片）
-├── tests/                     # 单元测试（18 项）
+├── tests/                     # 单元测试（181 项）
 ├── scripts/                   # verify_official / bench_graph / selftest / apptest_check / resnap(截图) / watch_daemon
 ├── pdf/ 与 demo_data/         # 赛题测试 PDF 与演示数据
 ├── docs/                      # 技术文档（md/html/pdf）、评审报告、界面截图 docs/shots/
@@ -386,7 +386,7 @@ ai_research_agent/
 | 类别 | 具体占比 | 说明 |
 |---|---|---|
 | 样板 / 胶水代码、表单与错误提示文案 | 高（约 60–70%） | 9 个页面的 `st.empty/spinner/expander` 骨架、统一的中文友好错误提示（`ui/common.py:friendly_error`） |
-| 单元测试与边界用例扩展 | 高（约 60%） | `tests/` 18 项用例的初始草稿，人工补充断言与真实数据 |
+| 单元测试与边界用例扩展 | 高（约 60%） | `tests/` 初始 18 项用例的草稿（现扩至 181 项），人工补充断言与真实数据 |
 | 文档初稿（README / 技术文档 / 脚本） | 中（约 40–50%） | 结构与措辞建议，实测数字一律由人工实跑填入 |
 | 算法与核心链路代码 | **低（< 20%）** | 仅用于局部实现建议与代码风格统一，核心逻辑由人工设计 |
 

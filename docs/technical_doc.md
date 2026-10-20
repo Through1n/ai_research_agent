@@ -76,7 +76,7 @@
 
 ## 1.5 当前状态一句话总结
 
-Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有真跑才会暴露"的缺陷后：9 页面 UI 冒烟 0 未捕获异常、18/18 单元测试、阅读页专项 60/60、**AI 链路端到端 21/21 PASS**；541 页官方教材 537 页提取 / 0 失败页 / 25.32s；双栏误判 0%；抗幻觉四道防线**全部在真实 LLM 下实测生效**（OCR 首次实测通过、细粒度三问全命中真值、References 40/40 逐字一致）。
+Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有真跑才会暴露"的缺陷后：9 页面 UI 冒烟 0 未捕获异常、181/181 单元测试、阅读页专项 61/61、**AI 链路端到端 21/21 PASS**；541 页官方教材 537 页提取 / 0 失败页 / 25.32s；双栏误判 0%；抗幻觉四道防线**全部在真实 LLM 下实测生效**（OCR 首次实测通过、细粒度三问全命中真值、References 40/40 逐字一致）。
 
 在此之上仍有三条诚实声明（详见 8.2 / 9.4）：①本地 `pdf/` 语料共 5 个文件，经版本合并后为 **3 个独立文档**，其中**检出引用边并进入图节点的是 2 个**（教材章节未检出引用关系），赛题"批量文献（如 20 篇）"规模**未在本次实测中覆盖**；②OpenAlex / Semantic Scholar 在实测期间处于 IP 级 429 限流，被引数链路验证的是"诚实降级"而非真值获取；③"纯中文句的引用一致性校验盲区"与"沙箱为软隔离"仍是我们认知到的两项最重要的能力边界。
 
@@ -671,12 +671,12 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 | 层 | 命令 | 本轮实测结果 |
 |---|---|---|
-| 单元测试 | `python -m unittest discover -s tests -v` | **18/18 OK** |
+| 单元测试 | `python -m unittest discover -s tests -v` | **181/181 OK** |
 | **AI 链路端到端实测（真实 Key）** | `python -u scripts/_verify_live_api.py` | **21/21 PASS**（严格化后的最新版本，原 19 条；分组：OCR / 细粒度问答 / 抗幻觉闸门 / 跨文献对比 / 写作 / 图谱 / 外部被引）。脚本自带"不污染 `storage/`"（跑在临时目录）与"Key 不可用即记 SKIP 不记 PASS"两条纪律 |
 | 离线端到端自检 | `python scripts/selftest.py` | 全链路冒烟通过（无需 Key） |
 | 官方数据集复跑 + 长文档专项 | `python scripts/_verify_official.py`（= A/B/C/D 四用例） | 扫描件离线降级 PASS；541 页 → **537 页提取 / 1305 chunks / 25.32s（解析 4.02s + 入库 21.30s）/ 峰值 RSS 893.1MB / 0 失败页 / 进度回调 11 次**；v1↔v7 去重 **0.963228**、完全改名仍命中 **1.000000**；3 篇连续入库 chunks 归属隔离（133 条，4.38s） |
 | UI 冒烟 + 全页面渲染检查 | `python scripts/_smoke_ui.py`、`python scripts/apptest_check.py` | 9 页面 + 9 项故障注入 **exception = 0**；9 页面渲染 0 未捕获异常 |
-| 阅读页专项 | `python scripts/_smoke_read.py` | **PASS 60 / FAIL 0** |
+| 阅读页专项 | `python scripts/_smoke_read.py` | **PASS 61 / FAIL 0** |
 | 图谱压测 | `python scripts/bench_graph.py` | n=20 建图 7.9s，n=40 建图 25.0s（脚本可复跑，近两轮未重复实测） |
 | 演示路径回归 | `streamlit.testing.v1.AppTest` | **7/7 条演示路径 0 未捕获异常**，含断网注入 7b 分支 |
 | LLM 重试专项 | `measure_call_counts@scripts/_degrade_drill_api.py:609`（必失败端口注入） | 恒定 ≤4 次调用，退避实测 [1.5, 3.0, 4.5]s |
@@ -807,13 +807,13 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 | ③ 自主工具调用 | 21 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 + AST 白名单沙箱 + arXiv/PubMed/Web 检索 + 定时追踪 + GitHub 复现性 | **21/21 工具全部接入专家白名单，无孤岛**；沙箱子进程 `timeout=25`；被引数三级降级与真值一致（AlexNet **108512**） |
 | ④ 图谱挖掘 | 真实引用关系建图 + PageRank/入度/介数/特征向量 + 社区发现（三级降级）+ frontier 五维打分 + 四段式综述 + Future Work 三态判定 | 综述 **1928 字**含真实年份 2017/2018；Future Work **2/2** 有效状态；前沿分 14.3→3.3。**规模诚实声明：实测图谱仅 2 节点 1 边，「20 篇批量」未覆盖** |
 | ⑤ 学术 Copilot | 无幻觉 References 白名单写作、Mermaid/TikZ/Graphviz/Matplotlib 四类图、CSV 自动出图 + 数值事实注入 Caption、中英对照同步阅读、划词翻译、中文原位 PDF 输出 | References **40/40 与白名单逐字一致 / 0 处占位 / 14364 字 / 44.6s**（修复前：4515 字但整章占位符、139.3s）；引用↔参考文献双向跳转 **36/36 锚点、死链 0**；正文引用标记 **58 个**全部可反向回正文 |
-| ⑥ Agent 内核 | 任务规划 / 多专家路由（含关键词离线兜底）/ 长期记忆与画像 / 三层 Guardrails（注入检测·角标校验·密钥脱敏）/ Trace 思考可视化 | 9 页面 UI 冒烟 + 9 项故障注入 **exception=0**；7/7 条演示路径 0 未捕获异常；单测 **18/18**、阅读页专项 **60/60**、AI 链路 **21/21 PASS** |
+| ⑥ Agent 内核 | 任务规划 / 多专家路由（含关键词离线兜底）/ 长期记忆与画像 / 三层 Guardrails（注入检测·角标校验·密钥脱敏）/ Trace 思考可视化 | 9 页面 UI 冒烟 + 9 项故障注入 **exception=0**；7/7 条演示路径 0 未捕获异常；单测 **181/181**、阅读页专项 **61/61**、AI 链路 **21/21 PASS** |
 
 ### 8.1.2 工程规模
 
 - **代码**：39 个 Python 模块文件（core 10 / services 14 / tools 3 / ui 12）加 `app.py` 与 `config.py`；9 个交互页面；严格自上而下的四层依赖（`ui → services → core`、`tools → services`）。运行时数据集中在 `storage/`（路径由 `config.py` 定义为 `STORAGE_DIR` 并启动时自动建子目录）；另有 3 处直连落盘：`core/llm.py`（失败日志）、`services/citation_quality.py`（引用质量缓存）、`services/library.py`（上传目录与重建前备份）。
 - **能力面**：6 个专家、5 家可切换 Provider、7 张真实截图（`docs/shots/p0–p6`，一图一模块）。
-- **测试**：单元测试 18/18；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 60/60；其余复跑脚本（官方四用例、图谱压测、截图重定向、桌面版校验）全部留在 `scripts/`（附录 A）。
+- **测试**：单元测试 181/181；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 61/61；其余复跑脚本（官方四用例、图谱压测、截图重定向、桌面版校验）全部留在 `scripts/`（附录 A）。
 - **过程留痕**：`docs/review/` 下 Round 1–11 累计 **45 份**历史过程报告（含 `FINAL_SUMMARY.md`），Round 12 审计与部署报告 **13 份**，Round 13 **6 份**，均另列于附录 B。每份都交代了"改了哪些文件、实测数字是什么、哪些没修"。
 - **交付物**：技术文档（本文档）、README、演示视频脚本、在线演示部署指南、桌面版指南、团队信息与 Docker/桌面两条部署链路；另有答辩问答手册、录制工程化脚本、提交历史分析、一键复现包（`start.bat`/`start.sh`/`Dockerfile.quick`）与评委 FAQ。
 
@@ -919,7 +919,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 ## 9.4 AI 使用边界与诚实声明
 
 - **可追溯性**：本节每条经验都对应一次真实运行，证据落在 Round 7/8 各修复报告（路径见附录 B）。
-- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 18/18、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
+- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 181/181、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
 - **AI 未参与**：真实 API Key 的获取与管理、演示视频录制、`docs/团队信息.md` 署名内容。
 - **尚未做到**：AI 目前主要覆盖"修复已知缺陷"与"撰写文档"，**不足以独立判断哪些功能该做**（如是否自建 ≥20 篇图谱 fixture），优先级决策仍由人工承担。
 
@@ -1001,7 +1001,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 ```bash
 PY=C:/Users/Administrator/anaconda3/envs/ai_research/python.exe
 $PY -m compileall -q core services tools ui app.py config.py   # ① 字节码
-$PY -m unittest discover -s tests                                 # ② 期望 18 OK
+$PY -m unittest discover -s tests                                 # ② 期望 181 OK
 $PY scripts/_smoke_ui.py                                          # ③ 9 页面 0 异常
 $PY scripts/_smoke_read.py                                        # ④ 阅读页专项（勿与③并行）
 $PY scripts/_check_doc_refs.py                                    # ⑤ 引用校验 0 疑似
