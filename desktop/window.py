@@ -114,9 +114,30 @@ def _check_update() -> None:
     ctypes.windll.user32.MessageBoxW(None, msg, "AI4S 科研助手", flags)
 
 
+def _ensure_webview2_gpu_fallback() -> None:
+    """给 WebView2 browser 追加 --disable-gpu（保留外部已设的参数）。
+
+    Round 13 桌面版白屏事故修复。现象与根因（崩溃转储 + Watson 元数据实锤）：
+    启动桌面版后窗口出现但页面全白，约 18 秒后进程静默退出；streamlit 侧
+    零页面访问，launcher 无任何错误日志。崩溃转储显示 WebView2 browser 进程
+    启动 GPU 子进程失败后直接 FATAL 自杀（msedge.dll int 3，退出码
+    0x80000003，日志 "GPU process isn't usable. Goodbye."）。已实证诱因：
+    游戏全屏独占显卡（Edge 浏览器自身有软件渲染回退，WebView2 嵌入式没有）。
+    Streamlit UI 不依赖 GPU，显式禁用 GPU 走 SwiftShader 软件渲染，
+    用可忽略的性能代价换"GPU 不可用时不整个应用暴毙"的稳定性。
+    """
+    existing = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
+    flags = existing.split() if existing.strip() else []
+    if "--disable-gpu" not in flags:
+        flags.append("--disable-gpu")
+    os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = " ".join(flags)
+
+
 def open_window(port: int) -> None:
     """创建 1440x900（最小 1200x720）原生窗口并进入 WebView2 消息循环。"""
     url = f"http://127.0.0.1:{port}"
+
+    _ensure_webview2_gpu_fallback()
 
     # pywebview 5.4 create_window 不支持 icon 参数；窗口/任务栏图标由 exe 自身决定
     # （PyInstaller spec 已设置 icon=assets/icon.ico），开发模式使用默认图标。
@@ -157,6 +178,45 @@ def open_window(port: int) -> None:
         except Exception:
             pass
 
+    # 页面加载成功标记：browser 进程崩溃时 webview.start() 会静默返回，
+    # loaded 不触发 → 下方据此弹出诊断提示，避免用户只看到窗口一闪即消失。
+    page_loaded = {"ok": False}
+
+    def _mark_loaded() -> None:
+        page_loaded["ok"] = True
+
+    window.events.loaded += _mark_loaded
     window.events.loaded += _bring_to_front
 
-    webview.start(gui="edgechromium")
+    # storage_path 持久化 + 关闭无痕模式：
+    # 1) pywebview 5.4 在 private_mode=True 且无 storage_path 时用
+    #    tempfile.TemporaryDirectory().name 作用户数据目录，该临时对象随即被
+    #    GC、目录当场删除，WebView2 行为依赖运行时宽容度（隐患）；
+    # 2) 持久目录保留缓存/登录态，且位于 data_root 下可随应用数据一起清理。
+    webview.start(
+        gui="edgechromium",
+        private_mode=False,
+        storage_path=str(paths.data_root() / "webview"),
+    )
+
+    if not page_loaded["ok"]:
+        _report_page_load_failure()
+
+
+def _report_page_load_failure() -> None:
+    """页面从未加载成功（browser 崩溃静默退出）时的原生提示。"""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "应用页面加载失败（WebView2 未能渲染页面）。\n\n"
+            "常见原因：显卡驱动异常，或显卡被其他程序（如全屏游戏）独占。\n"
+            "请尝试：\n"
+            "1. 关闭全屏游戏/占显卡的程序后重试；\n"
+            "2. 更新显卡驱动；\n"
+            "3. 查看日志目录：%APPDATA%\\AI4SResearchAgent\\logs\\",
+            "AI4S 科研助手",
+            0x10,
+        )
+    except Exception:
+        pass
