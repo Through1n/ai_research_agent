@@ -54,7 +54,13 @@ services:
       # ---- 策略类：给真实默认值 ----
       # services/state.py:81 —— _env_str("LLM_PROVIDER", "zhipu")，默认值与这里保持一致
       LLM_PROVIDER: ${LLM_PROVIDER:-zhipu}
-      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      # HF_ENDPOINT 默认留空：本服务显式 AI4S_DESKTOP=0（云平台态），按 config.py:131
+      # 的设计「仅桌面态（国内）启镜像；云平台留空走 huggingface.co（境外连镜像更慢/
+      # 易超时）」。曾默认注入 hf-mirror 与已修正的 Dockerfile ENV 属同类缺陷——compose
+      # 的 environment 会绕过 config.py 的 setdefault 桌面态守卫。且该镜像对 chroma 的
+      # ONNX 模型无效（那个走 chroma 自己的 AWS S3）。确需镜像的用户显式设
+      # HF_ENDPOINT=https://hf-mirror.com 即可（环境变量/.env 优先，能力不删）。
+      HF_ENDPOINT: ${HF_ENDPOINT:-}
       # config.py 的 DESKTOP_MODE —— AI4S_DESKTOP 必须为 0/空！设为 1 会进入桌面模式，
       # 数据目录跑到 %APPDATA%/AI4SResearchAgent，容器里路径全错
       AI4S_DESKTOP: "0"
