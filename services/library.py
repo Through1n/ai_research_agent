@@ -808,6 +808,16 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
         except Exception:
             pass
 
+    # minhash 签名必须**先于**完整性校验计算：下方 prepared_base 与最终返回都要用它。
+    # 2026-10-22 事故：此前 minhash 在完整性校验之后才赋值，而 prepared_base 的构造
+    # （"minhash": minhash）早已引用它 → 每次调用必抛 UnboundLocalError，被外层
+    # except 吞成「PDF 完整性校验异常：cannot access local variable 'minhash'」，
+    # 所有 PDF 解析 100% 失败，且报错完全指错方向（用户以为"论文不适配"）。
+    try:
+        minhash = _minhash_signature(full_text) if full_text else []
+    except Exception:
+        minhash = []
+
     # 完整性校验：损坏/截断/空 PDF 必须带 error 返回，禁止静默入库（R1 缺陷2）
     try:
         extracted_pages = sum(1 for text in page_texts if (text or "").strip())
@@ -849,10 +859,6 @@ def prepare_pdf(ctx, path=None, data=None, filename="paper.pdf", progress_cb=Non
         fingerprints = _paper_fingerprints(ctx, full_text) if full_text else []
     except Exception:
         fingerprints = []
-    try:
-        minhash = _minhash_signature(full_text) if full_text else []
-    except Exception:
-        minhash = []
     aid = _guess_arxiv(filename)
     title_guess = guess_title_from_text(full_text, "")
     new_version = _guess_version(filename)

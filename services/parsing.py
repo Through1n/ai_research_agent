@@ -48,9 +48,33 @@ _REF_ENTRY_START_RE = re.compile(
 
 
 def open_doc(path_or_bytes, filetype="pdf"):
+    """打开 PDF；对「仅所有者密码」类加密文件追加空密码认证，扩大可解析范围。
+
+    2026-10 R19 适配加固（动机：用户反馈"有些论文不适配"）：
+    MuPDF 对多数损坏/带垃圾头尾的文件已能自愈打开（实证：头部垃圾前缀、尾部
+    垃圾、仅设所有者密码的 PDF 均可直接打开），**不要**再叠切片类回退——那是
+    死代码。真正剩下的缺口是：个别生产者（非 fitz 生成的）会把用户密码设为
+    空串却仍置 needs_pass，直接走"已加密"拒收。这里在 needs_pass 时补一次
+    ``authenticate("")``：成功即可读；失败（真用户密码）原样抛出加密错误。
+    调用方（services/library.py prepare_pdf）仍保留 needs_pass 复检，双保险。
+    """
     if isinstance(path_or_bytes, (bytes, bytearray)):
-        return fitz.open(stream=bytes(path_or_bytes), filetype=filetype)
-    return fitz.open(path_or_bytes)
+        doc = fitz.open(stream=bytes(path_or_bytes), filetype=filetype)
+        if bool(getattr(doc, "needs_pass", False)) and not doc.authenticate(""):
+            try:
+                doc.close()
+            except Exception:
+                pass
+            raise RuntimeError("PDF 已加密，需要密码才能读取")
+        return doc
+    doc = fitz.open(path_or_bytes)
+    if bool(getattr(doc, "needs_pass", False)) and not doc.authenticate(""):
+        try:
+            doc.close()
+        except Exception:
+            pass
+        raise RuntimeError("PDF 已加密，需要密码才能读取")
+    return doc
 
 
 def detect_scanned(doc, sample=6):
@@ -291,10 +315,18 @@ def extract_page_blocks_column_aware(page):
 
 
 def extract_page_text_column_aware(page, return_blocks=False):
-    """提取单页栏感知文本；``return_blocks=True`` 时同时返回带 column 的块。"""
+    """提取单页栏感知文本；``return_blocks=True`` 时同时返回带 column 的块。
+
+    2026-10 R19 适配加固：栏感知链路（get_text("dict") → 块过滤 → 分栏排序）
+    在个别页面上会产出**空文本**（dict 块被过滤光/分栏逻辑剔空），而朴素
+    ``get_text()`` 仍能读到内容。空结果时回退一次纯文本，避免整页被记为
+    "解析失败"——实测无效也不会更差（纯文本同样为空）。
+    """
     try:
         blocks = extract_page_blocks_column_aware(page)
         text = "\n\n".join(block["text"] for block in blocks if block["text"].strip()).strip()
+        if not text:
+            text = (page.get_text() or "").strip()
         if return_blocks:
             return text, blocks
         return text
