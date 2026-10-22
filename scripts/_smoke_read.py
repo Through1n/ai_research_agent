@@ -407,6 +407,36 @@ render(_Ctx())
 '''
 
 
+def _bg_wait(at, timeout=600):
+    """等待本页提交的后台任务进入终态（Round 19 后台化后，点击只提交不执行）。
+
+    返回 (tid, state)；超时/异常返回 (None, None)。AppTest 无浏览器定时器，
+    侧边栏 fragment 的「完成即重绘」不会自动发生，故由测试轮询到终态后手动
+    at.run() 驱动交付（等价于用户一次交互）。
+    """
+    try:
+        from services import tasks as _tasks
+    except Exception:
+        return None, None
+    # 注意：AppTest 的 session_state 代理（SafeSessionState）没有 .get() 方法
+    # （2026-10-22 实证），必须用索引 + try/except，否则静默取不到 tid。
+    try:
+        ids = list(at.session_state["_bg_task_ids"] or [])
+    except Exception:
+        ids = []
+    tid = ids[-1] if ids else None
+    if tid is None:
+        return None, None
+    t0 = time.time()
+    final = None
+    while time.time() - t0 < timeout:
+        final = _tasks.get(tid)
+        if final and final.get("state") in ("done", "error"):
+            return tid, final.get("state")
+        time.sleep(0.5)
+    return tid, (final or {}).get("state")
+
+
 def part2():
     print("\n=== Part 2：AppTest 渲染阅读页 ===")
     try:
@@ -441,15 +471,23 @@ def part2():
         check("点击「检测本页栏数」无异常", False, str(e)[:200])
 
     # 长文档批量扫描（B1+B2）：前 120 页
+    # Round 19 后台化：点击只提交任务，worker 在后台线程跑。实证（2026-10-22）：
+    # AppTest 里 st.rerun 不会中止本轮——交付 + 结果渲染在同一个 at.run() 内完成，
+    # 故只需一轮；且快扫描可能在点击回合内就已完成交付，两处 info 都要收。
     try:
         at.number_input(key="ld_end").set_value(120).run()
         at.button(key="ld_go").click().run()
         ok = not at.exception
-        infos = [i.value for i in at.info]
-        hit = [t for t in infos if "峰值内存" in t and "耗时" in t]
+        cand = [i.value for i in at.info]          # 点击回合内已完成交付的情况
+        _tid, _st = _bg_wait(at)
+        if _st in ("done", "error"):
+            at.run()                               # 交付回合（未在点击回合完成时）
+            ok = ok and not at.exception
+            cand += [i.value for i in at.info]
+        hit = [t for t in cand if "峰值内存" in t and "耗时" in t]
         check("长文档批量扫描（120 页）无异常", ok, str(at.exception)[:300] if at.exception else "")
         check("长文档扫描后 st.info 展示「峰值内存 / 耗时」", bool(hit),
-              hit[0][:160] if hit else f"infos={infos[:2]}")
+              hit[0][:160] if hit else f"infos={cand[:2]}")
     except Exception as e:
         check("长文档批量扫描（120 页）无异常", False, str(e)[:200])
 
@@ -473,9 +511,15 @@ def part2():
         before = len(_fig_dirs())
         at.checkbox(key="ld_fig").check().run()
         at.button(key="ld_go").click().run()
+        # Round 19 后台化：必须等后台扫描真跑完再数目录——否则"点击即返回"会让
+        # after<=before 恒真（空转门禁：扫描从未发生，自然无残留）。
+        _tid, _st = _bg_wait(at)
+        cand = [i.value for i in at.info]          # 点击回合内已完成交付的情况
+        if _st in ("done", "error"):
+            at.run()                               # 交付回合
+            cand += [i.value for i in at.info]
         after = len(_fig_dirs())
-        infos = [i.value for i in at.info]
-        hit = [x for x in infos if "抽取图片" in x]
+        hit = [x for x in cand if "抽取图片" in x]
         check("B2 图片抽取：扫描后 fig_* 临时目录被清理（无残留）", after <= before,
               f"before={before} after={after}")
         check("B2 图片抽取：扫描结果展示抽取数量", bool(hit), hit[0][:140] if hit else "-")
@@ -490,9 +534,16 @@ def part2():
         at.number_input(key="ld_end").set_value(541).run()
         t0 = time.time()
         at.button(key="ld_go").click().run()
+        # Round 19 后台化：541 页扫描在 worker 线程跑；轮询终态后驱动一轮交付渲染
+        # （实证：AppTest 里 st.rerun 不中止本轮，交付+渲染同一个 at.run() 内完成）。
+        # 端到端计时改为「提交 + 后台执行 + 交付」全链路（旧版是同步扫描耗时）。
+        _tid, _st = _bg_wait(at)
+        cand = [i.value for i in at.info]          # 点击回合内已完成交付的情况
+        if _st in ("done", "error"):
+            at.run()
+            cand += [i.value for i in at.info]
         dt = time.time() - t0
-        infos = [i.value for i in at.info]
-        hit = [x for x in infos if "峰值内存" in x and "耗时" in x]
+        hit = [x for x in cand if "峰值内存" in x and "耗时" in x]
         check("541 页长文档扫描无异常", not at.exception,
               str(at.exception)[:300] if at.exception else "")
         check("541 页长文档扫描输出「峰值内存 / 耗时」", bool(hit),

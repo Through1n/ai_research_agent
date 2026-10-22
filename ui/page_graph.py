@@ -9,7 +9,8 @@ from services import library as _lib
 from ui.common import (embed_html, require_library, page_header, pretty_table, ensure_state,
                        friendly_error, empty_state, empty_state_card, llm_guard, metric_strip,
                        long_block, step_text, at, is_llm_degraded, llm_degraded_banner,
-                       is_llm_offline_generated, llm_offline_generated_banner)
+                       is_llm_offline_generated, llm_offline_generated_banner,
+                       bg_submit, bg_consume, bg_running)
 from ui.sidebar import set_flash
 
 # 分区卡片样式（与 common.page_header 同色系）。图谱可视化区与综述/前沿生成区分区，层级一致。
@@ -28,6 +29,13 @@ def _sec_head(title: str, icon: str = ""):
 
 # 引用关系列表一次展示的最大条数（其余折叠）
 MAX_EDGE_SHOW = 12
+
+# 后台任务 kind（2026-10 R19 后台化改造）：本页三个长任务提交/认领的唯一标识。
+# bg_consume 按 kind 路由（只认领本页的，其余留给所属页）；bg_running 只数本页
+# 同类任务防重复提交，不拦其他板块的并发（跨板块同时运行是特性，不是缺陷）。
+_GRAPH_BUILD_KIND = "graph_build"      # 🕸️ 构建引用图谱（重本地计算）
+_GRAPH_REVIEW_KIND = "graph_review"    # 📝 一键生成领域综述（压测 31.9s，全场最长）
+_GRAPH_FUTURE_KIND = "graph_future"    # 🚀 Future Work 前沿扫描（排除已解决）
 
 
 def _init():
@@ -63,17 +71,38 @@ def _metrics_rows(ctx, nodes, metrics):
     }).sort_values("PageRank", ascending=False)
 
 
-def _build_real(ctx, bar=None, note=None):
-    """真实引用关系建图（保持原业务逻辑，仅补异常兜底）。"""
-    G, edges = g.build_graph(ctx, progress_cb=(lambda r: bar.progress(min(max(float(r), 0.0), 1.0)))
-                             if bar is not None else None)
-    if note is not None:
-        note.caption(step_text("📊 图论指标计算"))
-    if bar is not None:
-        bar.progress(1.0)
+def _build_worker(ctx, progress):
+    """后台线程执行引用图谱构建（2026-10 R19 后台化改造）。
+
+    硬约束：本函数运行在 services/tasks.py 的 worker 线程里，**禁止任何 st.\*
+    调用**（会报 missing ScriptRunContext）——原内联的 bar/note 进度条与
+    friendly_error（图谱 HTML 生成失败话术）都含 st.*，均不可用：
+    · 进度改经 progress(stage, pct) 回调上报，由侧边栏任务中心渲染；
+    · HTML 生成失败时置空并在结果里带 html_error 标记，由交付流程经
+      _render_pack 用人话提示（表格版图论指标不受影响）。
+    """
+    progress("🕸️ 解析引用关系", 0.02)
+
+    def _pcb(r):
+        try:
+            progress("🕸️ 解析引用关系", min(max(float(r or 0.0), 0.0), 0.9))
+        except Exception:
+            pass
+
+    G, edges = g.build_graph(ctx, progress_cb=_pcb)
+    progress("📊 图论指标计算", 0.95)
     metrics = g.analyze(G)
     corner, edge = g.classify_papers(G, metrics)
-    return G, edges, metrics, corner, edge
+    progress("🧩 生成可视化与组装", 0.98)
+    html, html_err = "", ""
+    try:
+        html = g.graph_html(G, metrics, corner)
+    except Exception as e:
+        html, html_err = "", str(e)
+    pack = _make_pack(G, edges, metrics, corner, edge)
+    pack["html"] = html
+    pack["html_error"] = html_err
+    return pack
 
 
 def _build_demo(ctx):
@@ -165,6 +194,154 @@ def _make_pack(G, edges, metrics, corner, edge, demo=False):
             "edges": edges or [], "nodes": list(G.nodes), "demo": demo, "G": G}
 
 
+def _degrade_tier(text):
+    """降级分档（纯文本判定，无 st.*，可在 worker 线程内调用）。
+
+    返回 "degraded"（离线占位响应，什么都没算出来）/ "offline"（本地确定性
+    生成，内容真实但非大模型输出）/ "ok"（真实模型输出）。交付处理器按档位
+    给提示——**绝不让降级内容顶着「✅ 已生成」出现**（Round 12 假成功比报错
+    更危险）；内容区每次渲染也会复查档位并展示横幅，不依赖 flash 单槽位。
+    """
+    if is_llm_degraded(text):
+        return "degraded"
+    if is_llm_offline_generated(text):
+        return "offline"
+    return "ok"
+
+
+def _review_worker(ctx, G, progress):
+    """后台线程执行领域综述生成（2026-10 R19 后台化改造；原压测 31.9s，全场最长）。
+
+    硬约束同 _build_worker：worker 线程内禁止任何 st.* 调用——原内联的
+    st.session_state（读图包）、st.status、llm_degraded_banner 等都不可用。故：
+    · 图包 G 由提交时的主线程闭包传入（None = 未构建或演示图谱，线程内自建，
+      与原内联「G is None or demo 时重建」的分支等价）；
+    · 降级判定在线程内完成，档位随结果返回，交付处理器写回 session_state
+      并按档位 set_flash 提示。
+    """
+    if G is None:
+        progress("⓪ 解析引用关系建图…", None)
+        G, _ = g.build_graph(ctx)
+    progress("📐 图论指标计算", None)
+    metrics = g.analyze(G)
+    corner, edge = g.classify_papers(G, metrics)
+
+    def _rev_progress(stage):
+        try:
+            progress(str(stage), None)
+        except Exception:
+            pass
+
+    review = g.generate_review(ctx, G, metrics, corner, progress_cb=_rev_progress) or ""
+    return {"review": review, "tier": _degrade_tier(review)}
+
+
+def _future_worker(ctx, G, progress):
+    """后台线程执行 Future Work 前沿扫描（2026-10 R19 后台化改造）。
+
+    硬约束同 _review_worker：G 由主线程闭包传入，降级档位随结果返回。
+    """
+    if G is None:
+        progress("⓪ 解析引用关系建图…", None)
+        G, _ = g.build_graph(ctx)
+    progress("🔭 引用图可达性判定 + 语义确认", None)
+    future = g.explore_future(ctx, G) or ""
+    return {"future": future, "tier": _degrade_tier(future)}
+
+
+def _consume_build(ctx, kind, t):
+    """后台图谱构建交付：写回 graph_pack，成功/空边/失败分档提示。
+
+    与原内联流程逐分支等价；图谱 HTML 失败不再走 friendly_error（线程外交付
+    也没有内联展开区），错误标记随 pack 持久化，由 _render_pack 持续展示。
+    """
+    if kind != _GRAPH_BUILD_KIND:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 构建引用图谱失败：%s"
+                           "\n\n🩺 可能原因：论文正文缺少 References 章节导致解析为空；"
+                           "embedding 推理失败 / 内存不足"
+                           "\n\n🛠️ 怎么办：重试一次；点「🎭 演示模式示意图谱」；"
+                           "或减少文献数量后重试" % str(t.get("error") or "")[:150])
+        return
+    pack = t.get("result")
+    if not isinstance(pack, dict):
+        set_flash("error", "⚠️ 图谱构建返回数据异常，请重试。")
+        return
+    st.session_state.graph_pack = pack
+    edges = pack.get("edges") or []
+    nodes = pack.get("nodes") or []
+    if edges:
+        set_flash("success", f"✅ 图谱构建完成：{len(nodes)} 个节点 · {len(edges)} 条真实引用关系")
+    else:
+        set_flash("warning", "⚠️ 未检测到文献间的真实引用关系，已生成仅含节点的图谱。"
+                             "\n\n🩺 可能原因：论文正文未包含 References 章节 / 演示语料引用条目过少。"
+                             "\n\n🛠️ 怎么办：①上传含完整参考文献的真实 PDF（如 BERT 与 Transformer）；"
+                             "②或点「🎭 演示模式示意图谱」兜底演示。")
+
+
+def _consume_review(ctx, kind, t):
+    """后台综述交付：写回 session_state["review"] 并按降级档位提示。
+
+    降级档位由 worker 判定随结果返回；综述内容区每次渲染都会复查档位并展示
+    横幅，故降级结论不依赖 flash 单槽位也能持续可见。
+    """
+    if kind != _GRAPH_REVIEW_KIND:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 生成综述失败：%s"
+                           "\n\n🩺 可能原因：大模型返回超时 / 额度不足；文献库为空导致无素材"
+                           "\n\n🛠️ 怎么办：重试一次；或减少单次综述的文献数量"
+                   % str(t.get("error") or "")[:150])
+        return
+    res = t.get("result")
+    if not isinstance(res, dict) or not str(res.get("review") or "").strip():
+        set_flash("error", "⚠️ 综述生成返回数据异常，请重试。")
+        return
+    st.session_state["review"] = res.get("review") or ""
+    _tier = res.get("tier")
+    if _tier == "degraded":
+        set_flash("error", "⚠️ 领域综述未生成：大模型暂时不可用，本次没有生成任何真实结果"
+                           "（离线占位响应，请勿作为答案引用）。"
+                           "\n\n🛠️ 怎么办：在左侧「接入方式」检查 API Key / 平台额度 / 网络后重试。")
+    elif _tier == "offline":
+        set_flash("warning", "⚠️ 大模型不可用：领域综述由本地确定性算法生成，不是大模型输出"
+                             "（内容取自本地真实数据，未编造）。"
+                             "\n\n🛠️ 怎么办：在左侧「接入方式」检查 API Key / 平台额度 / 网络后重试，"
+                             "即可改由大模型撰写。")
+    else:
+        set_flash("success", "✅ 领域综述已生成")
+
+
+def _consume_future(ctx, kind, t):
+    """后台前沿扫描交付：写回 session_state["future"] 并按降级档位提示（同综述两档）。"""
+    if kind != _GRAPH_FUTURE_KIND:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 前沿扫描失败：%s"
+                           "\n\n🩺 可能原因：大模型返回超时 / 额度不足；图谱为空"
+                           "\n\n🛠️ 怎么办：先点「🕸️ 构建引用图谱」；或重试一次"
+                   % str(t.get("error") or "")[:150])
+        return
+    res = t.get("result")
+    if not isinstance(res, dict) or not str(res.get("future") or "").strip():
+        set_flash("error", "⚠️ 前沿扫描返回数据异常，请重试。")
+        return
+    st.session_state["future"] = res.get("future") or ""
+    _tier = res.get("tier")
+    if _tier == "degraded":
+        set_flash("error", "⚠️ 前沿方向未生成：大模型暂时不可用，本次没有生成任何真实结果"
+                           "（离线占位响应，请勿作为答案引用）。"
+                           "\n\n🛠️ 怎么办：在左侧「接入方式」检查 API Key / 平台额度 / 网络后重试。")
+    elif _tier == "offline":
+        set_flash("warning", "⚠️ 大模型不可用：前沿方向由本地确定性算法生成，不是大模型输出"
+                             "（内容取自本地真实数据，未编造）。"
+                             "\n\n🛠️ 怎么办：在左侧「接入方式」检查 API Key / 平台额度 / 网络后重试，"
+                             "即可改由大模型撰写。")
+    else:
+        set_flash("success", "✅ 前沿方向扫描完成")
+
+
 def _render_pack(ctx, pack):
     """渲染图谱 + 指标表 + 基石/边缘结论（HTML 生成失败不影响其余展示）。"""
     if pack.get("demo"):
@@ -175,7 +352,15 @@ def _render_pack(ctx, pack):
             st.caption(pack["degrade_note"])
     html = pack.get("html") or ""
     if not html:
-        st.caption("⚠️ 图谱可视化 HTML 不可用（下方表格版图论指标不受影响）。")
+        _hint = str(pack.get("html_error") or "")
+        if _hint:
+            # 后台化改造：HTML 生成失败在 worker 内置空 + 带标记（线程内禁 st.*），
+            # 这里随 pack 持久化展示，话术沿用原 friendly_error 的原因/动作要点
+            st.warning("⚠️ 图谱可视化 HTML 生成失败（下方表格版图论指标不受影响）。")
+            st.caption(f"🩺 可能原因：lib/vis-9.1.2 可视化库文件缺失；{_hint[:160]}")
+            st.caption("🛠️ 怎么办：检查 lib/ 目录完整性；表格版图论指标仍可正常使用。")
+        else:
+            st.caption("⚠️ 图谱可视化 HTML 不可用（下方表格版图论指标不受影响）。")
     if html:
         embed_html(html, height=560)
 
@@ -246,6 +431,14 @@ def _render_pack(ctx, pack):
 
 def render(ctx):
     _init()
+    # 后台任务交付：三个长任务（构建图谱 / 领域综述 / 前沿扫描）完成（含失败）时
+    # 按 kind 认领，一次性交付并触发整页重绘。必须放在页面顶部——flash 由 app.py
+    # 在页面渲染前重放，交付里写入的提示依赖 bg_consume 内部的重绘才能在当轮可见。
+    bg_consume({
+        _GRAPH_BUILD_KIND: lambda k, t: _consume_build(ctx, k, t),
+        _GRAPH_REVIEW_KIND: lambda k, t: _consume_review(ctx, k, t),
+        _GRAPH_FUTURE_KIND: lambda k, t: _consume_future(ctx, k, t),
+    })
     page_header("🕸️ 引用图谱与综述",
                 "自动解析论文间真实引用关系，PageRank/中心性挖掘基石论文，结合时间线过滤已被解决的旧 idea。",
                 icon="🕸️")
@@ -256,45 +449,23 @@ def render(ctx):
     # ===== 区一：引用图谱可视化（构建 / 结果 / 演示，均属图谱范畴） =====
     _sec_head("引用图谱可视化", "🕸️")
     with st.container(border=True):
-        if st.button("🕸️ 构建引用图谱"):
-            bar = st.progress(0.0)
-            note = st.empty()
+        _gr_build = bg_running(kinds={_GRAPH_BUILD_KIND})
+        if st.button("🕸️ 构建引用图谱", disabled=_gr_build,
+                     help="后台构建：提交后可切换其他页面，实时进度见左侧任务中心"):
+            # 后台化改造（2026-10 R19）：原内联流程跑主线程，跑时整个 UI 冻结。
+            # worker 内完成建图 + HTML + pack 组装并返回 pack，交付处理器写回
+            # graph_pack（落点与改造前完全一致）。
+            bg_submit("构建引用图谱",
+                      lambda progress: _build_worker(ctx, progress),
+                      kind=_GRAPH_BUILD_KIND)
             try:
-                note.caption(step_text("🕸️ 解析引用关系"))
-                G, edges, metrics, corner, edge = _build_real(ctx, bar=bar, note=note)
-                try:
-                    html = g.graph_html(G, metrics, corner)
-                except Exception as e:
-                    html = ""
-                    friendly_error("图谱 HTML 生成", e,
-                                   reasons=["lib/vis-9.1.2 可视化库文件缺失"],
-                                   actions=["检查 lib/ 目录完整性", "表格版图论指标仍可正常使用"])
-                try:
-                    bar.empty()
-                    note.empty()
-                except Exception:
-                    pass
-                pack = _make_pack(G, edges, metrics, corner, edge)
-                pack["html"] = html
-                st.session_state.graph_pack = pack
-                if edges:
-                    st.success(f"✅ 图谱构建完成：{len(pack['nodes'])} 个节点 · {len(edges)} 条真实引用关系")
-                else:
-                    st.warning("⚠️ 未检测到文献间的真实引用关系，已生成仅含节点的图谱。")
-                    st.caption("🩺 可能原因：论文正文未包含 References 章节 / 演示语料引用条目过少。")
-                    st.caption("🛠️ 怎么办：①上传含完整参考文献的真实 PDF（如 BERT 与 Transformer）；"
-                               "②或点下方「🎭 演示模式示意图谱」兜底演示。")
-            except Exception as e:
-                try:
-                    bar.empty()
-                    note.empty()
-                except Exception:
-                    pass
-                friendly_error("构建引用图谱", e,
-                               reasons=["论文正文缺少 References 章节导致解析为空",
-                                        "embedding 推理失败 / 内存不足"],
-                               actions=["重试一次", "点下方「🎭 演示模式示意图谱」",
-                                        "或减少文献数量后重试"])
+                st.toast("🕸️ 已转入后台构建，进度见左侧任务中心，可随时切换其他页面",
+                         icon="🚀")
+            except Exception:
+                pass
+        if _gr_build:
+            st.caption("⏳ 图谱构建正在后台运行（实时进度见左侧「任务中心」）——"
+                       "可切换其他页面，完成后结果自动出现在本页。")
 
         pack = st.session_state.get("graph_pack")
         if pack and isinstance(pack, dict):
@@ -344,68 +515,50 @@ def render(ctx):
     _sec_head("领域综述与前沿方向生成", "📝")
     with st.container(border=True):
         c2, c3 = st.columns([1, 1])
-        if c2.button("📝 一键生成领域综述"):
+        _gr_review = bg_running(kinds={_GRAPH_REVIEW_KIND})
+        _gr_future = bg_running(kinds={_GRAPH_FUTURE_KIND})
+        if c2.button("📝 一键生成领域综述", disabled=_gr_review,
+                     help="后台生成：提交后可切换其他页面，实时进度见左侧任务中心"):
             if llm_guard(ctx, "领域综述生成"):
-                # 话术 3：该步压测 31.90s，静态 spinner 全程文案不变，演示时观感等同卡死。
-                # 改用 st.status 并把 generate_review 上报的阶段实时反映到标题上。
-                with st.status(step_text("📝 正在生成领域综述"), expanded=True) as status:
-
-                    def _rev_progress(stage):
-                        try:
-                            status.update(label=f"📝 正在生成领域综述 · {stage}")
-                        except Exception:
-                            pass
-
-                    try:
-                        # 复用已构建的真实图谱（演示图谱不复用），避免重复解析引用关系
-                        pack = st.session_state.get("graph_pack") or {}
-                        G = pack.get("G") if isinstance(pack, dict) else None
-                        if G is None or pack.get("demo"):
-                            _rev_progress("⓪ 解析引用关系建图…")
-                            G, _ = g.build_graph(ctx)
-                        metrics = g.analyze(G)
-                        corner, edge = g.classify_papers(G, metrics)
-                        st.session_state["review"] = g.generate_review(
-                            ctx, G, metrics, corner, progress_cb=_rev_progress) or ""
-                        # 离线降级绝不能顶着「✅ 已生成」出现（Round 12 ②残留）
-                        # 两种降级分档：占位响应（什么都没算出来）/ 确定性生成（算出来了，
-                        # 但不是大模型写的）—— 后者内容真实，不能套「占位」措辞。
-                        _r = st.session_state["review"]
-                        if is_llm_degraded(_r):
-                            status.update(label="⚠️ 领域综述未生成：大模型暂时不可用",
-                                          state="error")
-                            llm_degraded_banner()
-                        elif is_llm_offline_generated(_r):
-                            status.update(label="⚠️ 领域综述为离线确定性生成，非大模型输出",
-                                          state="error")
-                            llm_offline_generated_banner("领域综述")
-                        else:
-                            status.update(label="✅ 领域综述已生成", state="complete")
-                            st.success("✅ 领域综述已生成")
-                    except Exception as e:
-                        friendly_error("生成综述", e,
-                                       reasons=["大模型返回超时 / 额度不足", "文献库为空导致无素材"],
-                                       actions=["重试一次", "或减少单次综述的文献数量"])
-        if c3.button("🚀 Future Work 前沿扫描（排除已解决）"):
+                # 后台化改造（2026-10 R19）：该步压测 31.90s，原内联 st.status 跑主线程，
+                # 全程 UI 冻结。llm_guard 等前置检查保留在主线程提交前；图包 G 在提交时
+                # 由主线程闭包捕获（worker 线程禁止访问 st.session_state）——复用已构建的
+                # 真实图谱（演示图谱不复用），避免重复解析引用关系。
+                _pack = st.session_state.get("graph_pack") or {}
+                _G = _pack.get("G") if isinstance(_pack, dict) else None
+                if not isinstance(_pack, dict) or _pack.get("demo"):
+                    _G = None
+                bg_submit("一键生成领域综述",
+                          lambda progress, _G=_G: _review_worker(ctx, _G, progress),
+                          kind=_GRAPH_REVIEW_KIND)
+                try:
+                    st.toast("📝 已转入后台生成，进度见左侧任务中心，可随时切换其他页面",
+                             icon="🚀")
+                except Exception:
+                    pass
+        if _gr_review:
+            c2.caption("⏳ 领域综述正在后台生成（实时进度见左侧「任务中心」）——"
+                       "可切换其他页面，完成后结果自动出现在本页。")
+        if c3.button("🚀 Future Work 前沿扫描（排除已解决）", disabled=_gr_future,
+                     help="后台扫描：提交后可切换其他页面，实时进度见左侧任务中心"):
             if llm_guard(ctx, "Future Work 前沿扫描"):
-                with st.spinner(step_text("🚀 正在扫描前沿方向")):
-                    try:
-                        pack = st.session_state.get("graph_pack") or {}
-                        G = pack.get("G") if isinstance(pack, dict) else None
-                        if G is None or pack.get("demo"):
-                            G, _ = g.build_graph(ctx)
-                        _f = g.explore_future(ctx, G) or ""
-                        st.session_state["future"] = _f
-                        if is_llm_degraded(_f):
-                            llm_degraded_banner()
-                        elif is_llm_offline_generated(_f):
-                            llm_offline_generated_banner("前沿方向")
-                        else:
-                            st.success("✅ 前沿方向扫描完成")
-                    except Exception as e:
-                        friendly_error("前沿扫描", e,
-                                       reasons=["大模型返回超时 / 额度不足", "图谱为空"],
-                                       actions=["先点「🕸️ 构建引用图谱」", "或重试一次"])
+                # 后台化改造（2026-10 R19）：同综述——G 闭包传入，结果与降级档位
+                # 由 worker 返回，交付处理器写回 session_state["future"]。
+                _pack = st.session_state.get("graph_pack") or {}
+                _G = _pack.get("G") if isinstance(_pack, dict) else None
+                if not isinstance(_pack, dict) or _pack.get("demo"):
+                    _G = None
+                bg_submit("Future Work 前沿扫描",
+                          lambda progress, _G=_G: _future_worker(ctx, _G, progress),
+                          kind=_GRAPH_FUTURE_KIND)
+                try:
+                    st.toast("🚀 已转入后台扫描，进度见左侧任务中心，可随时切换其他页面",
+                             icon="🚀")
+                except Exception:
+                    pass
+        if _gr_future:
+            c3.caption("⏳ 前沿扫描正在后台运行（实时进度见左侧「任务中心」）——"
+                       "可切换其他页面，完成后结果自动出现在本页。")
 
         review_txt = st.session_state.get("review", "") or ""
         future_txt = st.session_state.get("future", "") or ""

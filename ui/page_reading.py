@@ -33,6 +33,16 @@
   D7 合成编号幻觉（meta.numbered=False 时明示「[n] 为按出现顺序生成的索引号」）；
   D9 双语对照一交互就丢（read_bilingual 快照，同页 rerun 自动重渲染）；
   D8 翻译缓存无上限（read_tr_cache 上限 400 条，超出丢最旧）。
+
+本轮（Round 19，2026-10）后台化改造（用户需求：「0 到 6 的板块中的任务任何一项都是
+可以同时运行的，而不只是 0 板块」）：本页 5 个长任务全部改为 services/tasks.py
+后台执行 + bg_consume 交付，主线程只留输入校验与结果渲染：
+  逐段翻译 / 长文档批量扫描 / 原位翻译 PDF / 划词片段翻译 / 本页术语抽取。
+线程安全三原则（PyMuPDF 文档句柄非线程安全）：
+  · worker 一律自行 parsing.open_doc(path) 独立实例，绝不跨线程共享 render 里的 doc；
+  · 读 session_state 的输入（术语表 _current_glossary）在提交时由主线程捕获传入；
+  · worker 内禁止任何 st.* 调用（线程内没有 ScriptRunContext）。
+保留下来的内联快操作：渲染该页 / 检测栏数 / 加载该页 / 清理陈旧目录 / 各类跳转。
 """
 import gc
 import json
@@ -47,7 +57,9 @@ from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
 
 from ui.common import (embed_html, page_header, show_error, empty_state,
-                       is_llm_degraded, llm_degraded_banner)
+                       is_llm_degraded, llm_degraded_banner,
+                       bg_submit, bg_consume, bg_running)
+from ui.sidebar import set_flash
 
 from config import UPLOAD_DIR, PDF_DIR
 from services import parsing, writing
@@ -55,7 +67,7 @@ from services.translate import (native_page_html, bilingual_html, in_place_pdf,
                                 citation_jump_html, selectable_text_html, detect_columns,
                                 build_reference_index, find_reference_start_page,
                                 citation_links_html, protect_math, restore_math,
-                                stream_translate_to_chinese, parse_glossary, extract_terms, DEFAULT_GLOSSARY_TEXT, _glossary_inject, _glossary_apply)
+                                parse_glossary, extract_terms, DEFAULT_GLOSSARY_TEXT, _glossary_inject, _glossary_apply)
 
 # ---------------- 常量（集中配置，便于调参） ----------------
 JUMP_KEY = "qa_jump_page"          # 与 ui/page_qa.py 约定（只读 + 消费后清理）
@@ -72,6 +84,13 @@ FIG_TTL_HOURS = 24                 # B2：fig_* 临时目录超过该时长视�
 CITE_SCAN_CAP = 260                # 引用跳转：正文/文献区回溯扫描页数上限
 _TR_PARA_CAP = 1500                # 逐段翻译：单段送模型的最大字符数（超出截断并明示）
 _TR_CACHE_CAP = 400                # 翻译缓存 read_tr_cache 条数上限（防长会话内存增长）
+
+# ---------------- 后台任务 kind（Round 19 后台化：本页提交/认领的唯一标识） ----------------
+_K_TR_PAIRS = "reading_translate_pairs"   # 逐段翻译（段落对齐）
+_K_SCAN = "reading_scan"                  # 长文档批量扫描
+_K_INPLACE_PDF = "reading_inplace_pdf"    # 原位翻译 PDF
+_K_TR_FRAG = "reading_translate_frag"     # 划词片段翻译
+_K_GLOSSARY = "reading_glossary"          # 本页术语抽取
 
 # ---------------- MemoryProbe 导入（缺失时降级为占位探针，绝不崩） ----------------
 try:
@@ -160,28 +179,6 @@ def _drop_state(keys):
                 st.session_state.pop(k, None)
             except Exception:
                 pass
-
-
-def _progress(pb, value, text=""):
-    """进度条更新：兼容不支持 text= 的旧版 Streamlit。"""
-    if pb is None:
-        return
-    try:
-        v = min(1.0, max(0.0, float(value)))
-    except Exception:
-        return
-    try:
-        pb.progress(v, text=str(text or ""))
-    except TypeError:
-        try:
-            pb.progress(v)
-        except Exception:
-            pass
-    except Exception:
-        try:
-            pb.progress(v)
-        except Exception:
-            pass
 
 
 def _run_with_timeout(fn, timeout, *args, **kwargs):
@@ -327,27 +324,37 @@ def _scan_one_page(doc, page_no):
     return len(txt), ncol
 
 
-def _long_doc_scan(doc, start_page, end_page, with_figures=False):
-    """B1+B2：长文档批量扫描（逐页 + 分批 + 超时跳过 + 失败汇总 + 临时目录 finally 清理）。"""
+def _long_doc_scan_core(doc, start_page, end_page, with_figures=False, progress=None):
+    """长文档批量扫描核心（Round 19 后台化改造）：**纯计算，无 st.* 调用**，
+    可安全运行在 services/tasks.py 的 worker 线程。
+
+    硬约束：doc 必须是**本线程独立打开的 Document 实例**——主线程每轮渲染仍在读
+    原 doc（引用索引/标题树/页码读取），PyMuPDF 同一句柄跨线程读写会崩，故 worker
+    侧自行 parsing.open_doc(path)（见 _w_scan）。
+
+    与旧内联版 _long_doc_scan 的差异仅在 I/O 方式，业务语义完全一致：
+    进度经 progress(done, total, msg) 上报；结果收进 dict 返回，由主线程
+    _render_scan_result 按旧话术渲染。逐页 + 分批 + 超时跳过 + 失败汇总 +
+    临时目录 finally 清理等全部保留。
+    """
+    res = {"ok": False, "total": 0, "chars": 0, "figs": 0, "two_col": [],
+           "failed": [], "timed_out": [], "empty_pages": [],
+           "peak": 0.0, "elapsed": 0.0, "error": ""}
     try:
         s, e = int(start_page), int(end_page)
     except Exception:
-        st.warning("⚠️ 页码范围非法，已取消扫描。")
-        return
+        res["error"] = "页码范围非法，已取消扫描。"
+        return res
     if e < s:
         s, e = e, s
     total = e - s + 1
     if total <= 0:
-        st.warning("⚠️ 页码范围为空，已取消扫描。")
-        return
+        res["error"] = "页码范围为空，已取消扫描。"
+        return res
+    res["total"] = total
 
     probe = _new_probe(f"长文档扫描 {total} 页")
     probe.start()
-    pb = st.progress(0.0, text="准备中…")
-    status = st.empty()
-    failed, timed_out, two_col, empty_pages = [], [], [], []
-    chars = 0
-    figs = 0
     fig_dir = None
     try:
         if with_figures:
@@ -355,27 +362,22 @@ def _long_doc_scan(doc, start_page, end_page, with_figures=False):
                 fig_dir = _new_figure_dir()
             except Exception:
                 fig_dir = None
-        t0 = time.time()
         for i, pno in enumerate(range(s, e + 1), 1):
             ok, payload, err = _run_with_timeout(_scan_one_page, PAGE_TIMEOUT, doc, pno)
             if ok and payload:
                 n_chars, ncol = payload
-                chars += int(n_chars or 0)
+                res["chars"] += int(n_chars or 0)
                 if ncol == 2:
-                    two_col.append(pno)
+                    res["two_col"].append(pno)
                 if not n_chars:
-                    empty_pages.append(pno)
+                    res["empty_pages"].append(pno)
                 if fig_dir:
-                    figs += _extract_page_images(doc, pno, fig_dir)
+                    res["figs"] += _extract_page_images(doc, pno, fig_dir)
             else:
                 if err and err.startswith("timeout"):
-                    timed_out.append(pno)
+                    res["timed_out"].append(pno)
                 else:
-                    failed.append(pno)
-                try:
-                    status.caption(f"⏭️ 第 {pno} 页跳过：{err}")
-                except Exception:
-                    pass
+                    res["failed"].append(pno)
             # 每 BATCH_FLUSH 页释放引用；每 PROGRESS_EVERY 页刷新进度
             if i % BATCH_FLUSH == 0:
                 try:
@@ -384,9 +386,13 @@ def _long_doc_scan(doc, start_page, end_page, with_figures=False):
                     pass
                 probe.sample()
             if i % PROGRESS_EVERY == 0 or i == total:
-                _progress(pb, i / total, f"已处理 {i}/{total} 页（{chars} 字符）…")
+                if progress:
+                    try:
+                        progress(i, total, f"已处理 {i}/{total} 页（{res['chars']} 字符）…")
+                    except Exception:
+                        pass
     except Exception as e:
-        st.warning(f"⚠️ 批量扫描中断（已完成部分页）：{str(e)[:160]}")
+        res["error"] = f"批量扫描中断（已完成部分页）：{str(e)[:160]}"
     finally:
         # 图片临时目录：try/finally 保证一定清理；rmtree 后验证真的消失
         # （Windows 上文件句柄未关时 ignore_errors 会静默失败，留下残挂目录）
@@ -396,32 +402,44 @@ def _long_doc_scan(doc, start_page, end_page, with_figures=False):
             gc.collect()
         except Exception:
             pass
-        try:
-            pb.empty()
-        except Exception:
-            pass
-        stale = cleanup_stale_figure_dirs(FIG_TTL_HOURS)
+        cleanup_stale_figure_dirs(FIG_TTL_HOURS)
 
-    elapsed = probe.elapsed()
-    peak = probe.peak_mb()
+    res["elapsed"] = probe.elapsed()
+    res["peak"] = probe.peak_mb()
+    res["ok"] = not res["error"]
+    return res
+
+
+def _render_scan_result(res):
+    """主线程渲染批量扫描结果（Round 19 后台化）：话术与旧内联版逐字一致。
+
+    只允许在主线程调用；渲染即清由调用方（session_state.pop）负责，
+    与旧内联「结果只出现一次」的行为一致。
+    """
+    if not isinstance(res, dict):
+        return
+    if res.get("error"):
+        st.warning(f"⚠️ {res['error']}")
+        return
     # 「峰值内存」不能省：这是内存探针的可观测输出（scripts/_smoke_read.py 有断言），
     # 也是长文档扫描性能透明的一部分。降噪要并块，不要删信息。
-    st.info(f"✅ 扫描完成：{total} 页 / {chars:,} 字符 / 抽取图片 {figs} 个 · "
-            f"峰值内存 {peak:.0f} MB / 耗时 {elapsed:.1f} 秒")
+    st.info(f"✅ 扫描完成：{res.get('total', 0)} 页 / {res.get('chars', 0):,} 字符 / "
+            f"抽取图片 {res.get('figs', 0)} 个 · "
+            f"峰值内存 {res.get('peak', 0.0):.0f} MB / 耗时 {res.get('elapsed', 0.0):.1f} 秒")
     note = _mem_warning()
     if note:
         st.caption(note)
-    if timed_out:
-        st.warning(f"⏱️ {len(timed_out)} 页处理超时（> {PAGE_TIMEOUT:.0f}s）已跳过："
-                   f"{timed_out[:20]}{' …' if len(timed_out) > 20 else ''}")
-    if failed:
-        st.warning(f"⚠️ {len(failed)} 页解析失败已跳过："
-                   f"{failed[:20]}{' …' if len(failed) > 20 else ''}")
-    if empty_pages:
-        st.caption(f"📭 空白页（无文本层）{len(empty_pages)} 个："
-                   f"{empty_pages[:12]}{' …' if len(empty_pages) > 12 else ''}")
-    st.caption(f"📑 双栏页 {len(two_col)} 个：{two_col[:12]}"
-               f"{' …' if len(two_col) > 12 else ''}")
+    if res.get("timed_out"):
+        st.warning(f"⏱️ {len(res['timed_out'])} 页处理超时（> {PAGE_TIMEOUT:.0f}s）已跳过："
+                   f"{res['timed_out'][:20]}{' …' if len(res['timed_out']) > 20 else ''}")
+    if res.get("failed"):
+        st.warning(f"⚠️ {len(res['failed'])} 页解析失败已跳过："
+                   f"{res['failed'][:20]}{' …' if len(res['failed']) > 20 else ''}")
+    if res.get("empty_pages"):
+        st.caption(f"📭 空白页（无文本层）{len(res['empty_pages'])} 个："
+                   f"{res['empty_pages'][:12]}{' …' if len(res['empty_pages']) > 12 else ''}")
+    st.caption(f"📑 双栏页 {len(res.get('two_col') or [])} 个：{(res.get('two_col') or [])[:12]}"
+               f"{' …' if len(res.get('two_col') or []) > 12 else ''}")
 
 
 # ============================ B3：LLM 调用统一超时/并发/兜底 ============================
@@ -445,20 +463,28 @@ def _safe_translate(ctx, text, timeout=LLM_CALL_TIMEOUT, glossary=None):
     return "", (err or "调用失败")
 
 
-def _translate_pairs(ctx, paras, label="段落翻译", glossary=None):
-    """并发翻译（≤ MAX_TRANSLATE_WORKERS）+ 顺序还原 + 缓存命中跳过。
+def _translate_pairs_core(ctx, paras, cache=None, label="段落翻译", glossary=None, progress=None):
+    """并发翻译核心（Round 19 后台化改造）：**纯计算，无任何 st.* 调用**，
+    可安全运行在 services/tasks.py 的 worker 线程。
 
-    返回 (pairs, errors)；pairs = [(原文, 译文), ...]，errors = [(段号, 原因), ...]
+    与旧内联版 _translate_pairs 的差异仅在 I/O 方式，业务语义完全一致：
+    · 缓存 dict 由调用方传入（worker 侧不碰 session_state，避免跨线程共享可变状态），
+      随结果一并返回，由主线程交付侧回写；
+    · 进度经 progress(done, total, msg) 回调上报（旧版的 st.progress 迁到主线程）；
+    · 汇总信息（调用段数/并发/截断/峰值内存/耗时/失败明细）收进 stats 返回，
+      由主线程 _render_tr_summary 按旧话术渲染。
+
+    返回 (pairs, errors, stats)。并发上限/单次超时/缓存上限/降级串不进缓存等
+    语义与旧版逐条一致。
     """
     pairs = [(p, "") for p in paras]
     errors = []
     n = len(paras)
+    stats = {"todo": 0, "workers": 0, "truncated": 0, "cached": 0,
+             "peak": 0.0, "elapsed": 0.0, "all_cached": False, "error": ""}
     if n == 0:
-        return pairs, errors
-    cache = st.session_state.get("read_tr_cache")
-    if not isinstance(cache, dict):
-        cache = {}
-        st.session_state["read_tr_cache"] = cache
+        return pairs, errors, stats
+    cache = cache if isinstance(cache, dict) else {}
     todo = []
     for i, p in enumerate(paras):
         key = _cache_key(p)
@@ -467,15 +493,18 @@ def _translate_pairs(ctx, paras, label="段落翻译", glossary=None):
             pairs[i] = (p, hit)
         else:
             todo.append(i)
+    stats["cached"] = n - len(todo)
 
     if not todo:
-        st.caption(f"♻️ {label}：全部 {n} 段命中本地缓存，未重复调用模型。")
-        return pairs, errors
+        stats["all_cached"] = True
+        return pairs, errors, stats
 
     workers = max(1, min(MAX_TRANSLATE_WORKERS, len(todo)))
-    pb = st.progress(0.0, text=f"{label} 0/{len(todo)} …")
+    stats["workers"] = workers
+    stats["todo"] = len(todo)
     done = 0
     truncated = sum(1 for i in todo if len(str(paras[i])) > _TR_PARA_CAP)
+    stats["truncated"] = truncated
     probe = _new_probe(label)
     probe.start()
     try:
@@ -500,39 +529,321 @@ def _translate_pairs(ctx, paras, label="段落翻译", glossary=None):
                     errors.append((i + 1, err or "调用失败"))
                 done += 1
                 if done % 5 == 0 or done == len(todo):
-                    _progress(pb, done / len(todo), f"{label} {done}/{len(todo)} …")
+                    if progress:
+                        try:
+                            progress(done, len(todo), f"{label} {done}/{len(todo)} …")
+                        except Exception:
+                            pass
                     probe.sample()
     except Exception as e:
-        st.warning(f"⚠️ {label}并发执行异常：{str(e)[:160]}")
-    finally:
-        try:
-            pb.empty()
-        except Exception:
-            pass
+        stats["error"] = f"{type(e).__name__}: {str(e)[:160]}"
     # 缓存上限：长会话/翻多篇论文时 read_tr_cache 不设上限会持续吃内存
     while len(cache) > _TR_CACHE_CAP:
         try:
             cache.pop(next(iter(cache)))
         except Exception:
             break
-    # 批次汇总：告诉用户这一批到底实调了多少段 / 并发多少 / 耗时多少。
+    stats["peak"] = probe.peak_mb()
+    stats["elapsed"] = probe.elapsed()
+    return pairs, errors, stats
+
+
+def _render_tr_summary(stats, errors, n_pairs):
+    """主线程渲染逐段翻译汇总（Round 19 后台化）：话术与旧内联版逐字一致。
+
+    旧内联的汇总渲染原来长在 _translate_pairs 里（含 st.*）；后台化后搬到此处，
+    只允许在主线程调用。stats 来自 _translate_pairs_core。
+    """
+    if stats.get("all_cached"):
+        st.caption(f"♻️ 逐段翻译：全部 {n_pairs} 段命中本地缓存，未重复调用模型。")
+        return
     # 这是真实可观测信息，不是装饰——降噪时曾被整段删掉，这里恢复，
     # 但只在「确实有批量工作或有失败」时出现，单次划词翻译不再弹块。
-    if todo or errors:
+    if stats.get("todo") or errors:
         try:
-            st.info(f"🧠 {label}：{len(todo)} 段调用（并发 ≤ {workers}，"
+            st.info(f"🧠 逐段翻译：{stats.get('todo', 0)} 段调用（并发 ≤ {stats.get('workers', 0)}，"
                     f"单次 ≤ {LLM_CALL_TIMEOUT:.0f}s）· "
-                    f"峰值内存 {probe.peak_mb():.0f} MB / 耗时 {probe.elapsed():.1f} 秒")
+                    f"峰值内存 {stats.get('peak', 0.0):.0f} MB / 耗时 {stats.get('elapsed', 0.0):.1f} 秒")
         except Exception:
             pass
-    if truncated:
-        st.caption(f"ℹ️ {truncated} 段超过 {_TR_PARA_CAP} 字符，已按前 {_TR_PARA_CAP} 字符翻译。")
+    if stats.get("truncated"):
+        st.caption(f"ℹ️ {stats['truncated']} 段超过 {_TR_PARA_CAP} 字符，已按前 {_TR_PARA_CAP} 字符翻译。")
     if errors:
         st.warning("⚠️ 以下段落翻译失败（已保留原文，未影响其余段落）："
                    + "；".join(f"第 {i} 段（{r}）" for i, r in errors[:8])
                    + ("…" if len(errors) > 8 else ""))
         st.caption("🛠️ 怎么办：检查 API Key / 网络后重试。")
-    return pairs, errors
+    if stats.get("error"):
+        st.warning(f"⚠️ 逐段翻译并发执行异常：{stats['error']}")
+
+
+# ============================ Round 19 后台化：worker / 交付处理器 ============================
+# worker 硬约束：运行在 services/tasks.py 的 worker 线程里，**禁止任何 st.* 调用**
+# （线程内没有 ScriptRunContext）；不跨线程共享 doc 句柄与 session_state。
+
+def _toast(msg):
+    try:
+        st.toast(msg, icon="🚀")
+    except Exception:
+        pass
+
+
+def _w_translate_pairs(ctx, paras, glossary, cache, progress, page=0):
+    """后台线程执行逐段翻译（Round 19）。
+
+    缓存 dict 由主线程传入、随结果返回，由交付侧回写 session_state
+    （不在线程里直接摸 session_state）；page 回显供交付侧钉到当前文档/页码。
+    """
+    def pcb(done, total, msg):
+        try:
+            pct = (float(done) / float(total)) if total else None
+        except Exception:
+            pct = None
+        progress(msg or ("已翻译 %s/%s 段" % (done, total)), pct)
+
+    pairs, errors, stats = _translate_pairs_core(ctx, paras, cache=cache,
+                                                 label="逐段翻译", glossary=glossary,
+                                                 progress=pcb)
+    return {"page": page, "pairs": pairs, "errors": errors, "stats": stats, "cache": cache}
+
+
+def _w_scan(ctx, path, s, e, with_figures, progress):
+    """后台线程执行长文档扫描（Round 19）。
+
+    线程安全关键：doc 句柄不跨线程共享——worker 用自己的 parsing.open_doc(path)
+    独立实例（主线程每轮渲染仍在读原 doc，PyMuPDF 同句柄跨线程读写会崩）。
+    """
+    def pcb(done, total, msg):
+        try:
+            pct = (float(done) / float(total)) if total else None
+        except Exception:
+            pct = None
+        progress(msg or ("已处理 %s/%s 页" % (done, total)), pct)
+
+    doc = None
+    try:
+        doc = parsing.open_doc(path)
+        return _long_doc_scan_core(doc, s, e, with_figures=with_figures, progress=pcb)
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+
+def _w_inplace_pdf(ctx, path, page, glossary, progress):
+    """后台线程生成原位翻译 PDF（Round 19）。
+
+    线程安全关键（相对旧内联的三点差异）：
+    · doc 不跨线程共享：worker 自行 parsing.open_doc(path) 独立实例
+      （in_place_pdf 会写文档，主线程同期仍在读原 doc，同一句柄跨线程读写会崩）；
+    · 术语表由主线程提交时捕获传入（_current_glossary 读 session_state，线程内不可用）；
+    · st.status 分阶段进度不可用，改经 progress(stage, pct) 上报；各失败分支不调
+      st.warning/st.error，改为随结果返回 stage 标记，由交付处理器按旧话术分档提示。
+    """
+    progress("① 提取原文并翻译中…", 0.1)
+    doc = None
+    tmp_dir, out = None, None
+    try:
+        try:
+            doc = parsing.open_doc(path)
+        except Exception as e:
+            return {"ok": False, "stage": "open", "page": int(page), "error": str(e)[:120]}
+        raw = ""
+        try:
+            raw = doc[page - 1].get_text()[:3000]
+        except Exception as e:
+            return {"ok": False, "stage": "read", "page": int(page), "error": str(e)[:120]}
+        if not raw.strip():
+            return {"ok": False, "stage": "empty", "page": int(page)}
+        zh, err = _safe_translate(ctx, raw, glossary=glossary)
+        if not zh:
+            return {"ok": False, "stage": "translate", "page": int(page), "error": err}
+        progress("② 排版并写回 PDF…", 0.7)
+        probe = _new_probe("原位 PDF 生成")
+        probe.start()
+        tmp_dir = _new_figure_dir()
+        out = os.path.join(tmp_dir, f"translated_p{page}.pdf")
+        in_place_pdf(doc, page, zh, out)
+        probe.sample()
+        if out and os.path.exists(out):
+            with open(out, "rb") as fh:
+                data = fh.read()
+            if data:
+                return {"ok": True, "page": int(page), "data": data,
+                        "kb": len(data) / 1024, "elapsed": probe.elapsed(),
+                        "peak": probe.peak_mb()}
+        return {"ok": False, "stage": "gen", "page": int(page)}
+    finally:
+        if tmp_dir:
+            _remove_dir_verified(tmp_dir)
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+
+def _w_translate_frag(ctx, text, glossary, progress):
+    """后台线程执行划词片段翻译（Round 19）。
+
+    与旧内联的差异：旧版用 st.write_stream 流式展示（后台线程里无人观看增量，
+    且 write_stream 是主线程渲染 API），改用带超时的非流式 _safe_translate；
+    失败/降级话术在交付侧完整保留。
+    """
+    progress("正在翻译片段", None)
+    zh, err = _safe_translate(ctx, text, glossary=glossary)
+    return {"zh": zh, "err": err}
+
+
+def _w_glossary_terms(path, page, progress):
+    """后台线程抽取本页候选术语（Round 19）。
+
+    术语表合并（_merge_terms_into_glossary）写 session_state，必须在主线程执行，
+    故 worker 只负责「独立 doc 实例读页 + extract_terms」，返回候选列表。
+    """
+    progress("正在抽取第 %d 页术语" % int(page), None)
+    doc = None
+    page_txt = ""
+    try:
+        doc = parsing.open_doc(path)
+        page_txt = doc[int(page) - 1].get_text() or ""
+    except Exception:
+        page_txt = ""
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
+    try:
+        terms = extract_terms(page_txt) if page_txt else []
+    except Exception:
+        terms = []
+    return {"terms": terms or []}
+
+
+def _consume_tr_pairs(kind, t, doc_id=""):
+    """逐段翻译交付（Round 19）：与旧内联逐分支等价。
+
+    快照写 read_bilingual（带 doc 字段防串档）+ fresh 一次性标记 + 汇总；
+    渲染由「中英同步滚动」页签负责（fresh 时展示本次结果，之后走快照恢复）。
+    """
+    if kind != _K_TR_PAIRS:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 逐段翻译失败：%s"
+                           "\n\n🩺 可能原因：大模型返回超时 / 额度不足；单页文本过长"
+                           "\n\n🛠️ 怎么办：重试一次；或改用「🖱️ 划词翻译」处理少量文本"
+                  % str(t.get("error") or "")[:150])
+        return
+    payload = t.get("result") or {}
+    if not isinstance(payload, dict) or not isinstance(payload.get("pairs"), list):
+        set_flash("error", "⚠️ 逐段翻译返回数据异常，请重试。")
+        return
+    # 缓存回写：worker 返回更新后的 dict（降级占位串在核心里已过滤，不会进缓存）
+    cache = payload.get("cache")
+    if isinstance(cache, dict):
+        st.session_state["read_tr_cache"] = cache
+    pairs = payload.get("pairs") or []
+    page = payload.get("page") or 0
+    try:
+        st.session_state["read_bilingual"] = {"doc": doc_id, "page": int(page),
+                                              "pairs": pairs}
+    except Exception:
+        pass
+    st.session_state["read_bi_fresh"] = True
+    st.session_state["read_bi_summary"] = {"stats": payload.get("stats") or {},
+                                           "errors": payload.get("errors") or []}
+
+
+def _consume_scan(kind, t):
+    """批量扫描交付（Round 19）：结果写 session_state，由扫描区按旧话术渲染（渲染即清）。"""
+    if kind != _K_SCAN:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 批量扫描失败：%s"
+                           "\n\n🛠️ 怎么办：重试一次；或缩小页码范围"
+                  % str(t.get("error") or "")[:150])
+        return
+    res = t.get("result")
+    if not isinstance(res, dict):
+        set_flash("error", "⚠️ 批量扫描返回数据异常，请重试。")
+        return
+    st.session_state["read_scan_result"] = res
+
+
+def _consume_inplace_pdf(kind, t, doc_id=""):
+    """原位 PDF 交付（Round 19）：按旧内联五档分档提示（打开/读取/空文本/翻译/生成）。
+
+    成功时写 inplace_pdf_result（带 doc 字段防串档），下载按钮由既有渲染路径展示。
+    """
+    if kind != _K_INPLACE_PDF:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 原位 PDF 生成失败：%s"
+                           "\n\n🛠️ 怎么办：检查 API Key / 网络后重试；"
+                           "或改用「🖱️ 划词翻译」手动翻译少量文本。"
+                  % str(t.get("error") or "")[:150])
+        return
+    r = t.get("result") or {}
+    if not isinstance(r, dict) or not r.get("ok"):
+        _stage = r.get("stage") if isinstance(r, dict) else ""
+        _pg = (r.get("page") if isinstance(r, dict) else None) or "?"
+        if _stage == "open":
+            set_flash("error", "⚠️ 打开 PDF 失败：%s" % str(r.get("error"))[:120])
+        elif _stage == "read":
+            set_flash("error", "⚠️ 读取第 %s 页失败：%s" % (_pg, str(r.get("error"))[:120]))
+        elif _stage == "empty":
+            set_flash("error", "⚠️ 该页无可提取文本（可能是扫描件）。")
+        elif _stage == "translate":
+            set_flash("error", "⚠️ 翻译失败（%s），已中止原位 PDF 生成。"
+                               "\n\n🛠️ 怎么办：检查 API Key / 网络后重试；"
+                               "或改用「🖱️ 划词翻译」手动翻译少量文本。"
+                      % str(r.get("error") or "未知原因")[:120])
+        else:
+            set_flash("error", "❌ PDF 生成失败：输出文件不存在或为空。")
+        return
+    # 结果写入 session_state：切页/其他交互触发重绘后下载按钮不再消失（旧内联行为一致）
+    st.session_state["inplace_pdf_result"] = {
+        "page": r.get("page"), "data": r.get("data"),
+        "kb": r.get("kb") or 0.0, "elapsed": r.get("elapsed") or 0.0,
+        "peak": r.get("peak") or 0.0, "doc": doc_id,
+    }
+    set_flash("success", "✅ 原位 PDF 已生成（第 %d 页，%.0f KB，%.1f 秒）"
+                         % (int(r.get("page") or 0), float(r.get("kb") or 0.0),
+                            float(r.get("elapsed") or 0.0)))
+
+
+def _consume_tr_frag(kind, t):
+    """划词片段翻译交付（Round 19）：译文写 session_state，由划词区渲染（渲染即清）。"""
+    if kind != _K_TR_FRAG:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 片段翻译失败：%s"
+                           "\n\n🛠️ 怎么办：稍后重试或缩短片段。"
+                  % str(t.get("error") or "")[:150])
+        return
+    r = t.get("result") or {}
+    st.session_state["hl_tr_result"] = {"zh": r.get("zh") or "", "err": r.get("err") or ""}
+
+
+def _consume_glossary(kind, t):
+    """术语抽取交付（Round 19）：合并动作在主线程执行（写 session_state）。"""
+    if kind != _K_GLOSSARY:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 术语抽取失败：%s" % str(t.get("error") or "")[:150])
+        return
+    terms = (t.get("result") or {}).get("terms") or []
+    if not terms:
+        st.session_state["gl_extract_result"] = {"empty": True, "n_new": 0}
+        return
+    n_new = _merge_terms_into_glossary(terms)
+    st.session_state["gl_extract_result"] = {"empty": False, "n_new": n_new}
+    # 旧内联在 n_new 时显式 st.rerun() 同步编辑框；bg_consume 交付后本就会整页重绘，
+    # _glossary_sync_widget 下一轮渲染即完成同步，无需再显式 rerun。
 
 
 def _safe_int_pos(v, default=0):
@@ -1240,7 +1551,10 @@ def render(ctx):
     # 注意：只初始化「非 widget」key；widget key（np/sp/pp/hp/cit/hl_frag/ld_*）
     # 若在这里预设会触发 Streamlit 的 "default value + session_state" 警告。
     _ensure_state({"read_tr_cache": {}, "read_jump_page": 1, "read_jump_para": None, "hl": "",
-                   "read_doc_id": "", "read_bilingual": None, GLOSSARY_KEY: DEFAULT_GLOSSARY_TEXT})
+                   "read_doc_id": "", "read_bilingual": None, GLOSSARY_KEY: DEFAULT_GLOSSARY_TEXT,
+                   # Round 19 后台化新增（均为非 widget key）
+                   "read_bi_fresh": False, "read_bi_summary": None, "read_scan_result": None,
+                   "hl_tr_result": None, "gl_extract_result": None})
 
     doc = None
     try:
@@ -1294,6 +1608,18 @@ def render(ctx):
             # 跨文档的双语对照/跳转快照一并失效，避免串档
             if isinstance(st.session_state.get("read_bilingual"), dict):
                 st.session_state["read_bilingual"] = None
+
+        # 后台任务交付（Round 19）：放在 doc_id 算完之后——交付处理器需要 doc_id
+        # 把结果钉到当前文档（原位 PDF 的 inplace_pdf_result 带 doc 字段防串档）。
+        # flash 由 app.py 在页面渲染前重放，交付里写入的提示依赖 bg_consume 内部的
+        # 重绘才能在当轮可见（RerunException 继承 BaseException，不会被 except 吞掉）。
+        bg_consume({
+            _K_TR_PAIRS: lambda k, t: _consume_tr_pairs(k, t, doc_id=doc_id),
+            _K_SCAN: lambda k, t: _consume_scan(k, t),
+            _K_INPLACE_PDF: lambda k, t: _consume_inplace_pdf(k, t, doc_id=doc_id),
+            _K_TR_FRAG: lambda k, t: _consume_tr_frag(k, t),
+            _K_GLOSSARY: lambda k, t: _consume_glossary(k, t),
+        })
 
         # ② 消费 qa_jump_page（含 para_idx），得到默认页码；无则消费标题树跳转
         jump = _consume_qa_jump(ctx, tps)
@@ -1361,8 +1687,23 @@ def render(ctx):
                         e_pg = st.number_input("结束页", 1, tps, value=min(tps, 120), key="ld_end")
                     with c3:
                         do_fig = st.checkbox("抽取页面图片", value=False, key="ld_fig")
-                    if st.button("🚀 开始批量扫描", key="ld_go"):
-                        _long_doc_scan(doc, int(s_pg), int(e_pg), bool(do_fig))
+                    _scan_run = bg_running(kinds={_K_SCAN})
+                    if st.button("🚀 开始批量扫描", key="ld_go", disabled=_scan_run,
+                                 help="后台扫描：提交后可切换其他页面，逐页进度见左侧「任务中心」"):
+                        # 后台化改造（Round 19）：原内联跑主线程，扫 120+ 页时整个 UI 冻结。
+                        # worker 用独立 doc 实例（线程安全），结果写 session_state 后由下方渲染。
+                        bg_submit("长文档扫描（第 %d–%d 页）" % (int(s_pg), int(e_pg)),
+                                  lambda progress, _s=int(s_pg), _e=int(e_pg), _f=bool(do_fig):
+                                      _w_scan(ctx, path, _s, _e, _f, progress),
+                                  kind=_K_SCAN)
+                        _toast("🚀 已转入后台扫描，可切换其他页面")
+                    if _scan_run:
+                        st.caption("⏳ 批量扫描正在后台运行（实时进度见左侧「任务中心」）——"
+                                   "可切换其他页面，完成后结果自动出现在本区。")
+                    # 上一轮扫描结果：后台交付写入，渲染即清（与旧内联行为一致）
+                    _scan_res = st.session_state.pop("read_scan_result", None)
+                    if _scan_res is not None:
+                        _render_scan_result(_scan_res)
                     if st.button("🧹 立即清理陈旧图片临时目录", key="ld_clean"):
                         try:
                             n = cleanup_stale_figure_dirs(FIG_TTL_HOURS)
@@ -1376,11 +1717,11 @@ def render(ctx):
         with tabs[1]:
             try:
                 p2 = st.number_input("页码", 1, tps, value=default_page, key="sp")
-                _gl = _glossary_editor(doc, int(p2))
+                _gl = _glossary_editor(doc, int(p2), path)
                 _gl_mark = _gl if st.session_state.get(GLOSSARY_HL_KEY) else None
-                translated_now = False
-                if st.button("📥 加载并逐段翻译（段落对齐）", key="sp_go"):
-                    translated_now = True
+                _tr_run = bg_running(kinds={_K_TR_PAIRS})
+                if st.button("📥 加载并逐段翻译（段落对齐）", key="sp_go", disabled=_tr_run,
+                             help="后台翻译：提交后可切换其他页面，逐段进度见左侧「任务中心」"):
                     if not getattr(getattr(ctx, "llm", None), "available", False):
                         st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
                         st.caption("🛠️ 怎么办：在左侧「接入方式」填写 Key 后重试。")
@@ -1389,42 +1730,51 @@ def render(ctx):
                         if not paras:
                             st.error("该页文本过少，可能是扫描件（无文本层）。")
                         else:
-                            pairs, _errs = _translate_pairs(ctx, paras, label="逐段翻译", glossary=_gl)
-                            # 离线占位不能当译文展示（Round 12 ②残留）：模型不可用时
-                            # translate_to_chinese 返回的是带降级标记的占位串，
-                            # 直接塞进「中英对照」= 给评委看一段假译文。
-                            if any(is_llm_degraded(_zh) for _en, _zh in pairs):
-                                llm_degraded_banner()
-                            # 持久化：任何 rerun（切 tab/点别的按钮）后按原样恢复，
-                            # 不再「翻译结果一交互就丢、要重新点一次」。
-                            # 带 doc 字段：换 PDF 后旧文档的对照不串档。
-                            try:
-                                st.session_state["read_bilingual"] = {"doc": doc_id,
-                                                                      "page": int(p2),
-                                                                      "pairs": pairs}
-                            except Exception:
-                                pass
-                            try:
-                                st.markdown("**🌐 中英对照（逐段对齐 · 句级联动 · 左右同步滚动）**")
-                                embed_html(bilingual_html(pairs, glossary=_gl_mark),
-                                           height=760, scrolling=False)
-                            except Exception as e:
-                                st.warning(f"⚠️ 双语视图渲染失败：{str(e)[:160]}")
-                # rerun 恢复：本次没有点翻译、且快照的文档/页码都与当前一致时重渲染
-                if not translated_now:
-                    _prev_bi = st.session_state.get("read_bilingual")
-                    if (isinstance(_prev_bi, dict)
-                            and str(_prev_bi.get("doc") or "") == str(doc_id)
-                            and int(_prev_bi.get("page", 0) or 0) == int(p2)
-                            and isinstance(_prev_bi.get("pairs"), list)
-                            and _prev_bi.get("pairs")):
-                        st.caption("♻️ 已恢复上次的翻译结果（换页后需重新加载）。")
-                        try:
-                            st.markdown("**🌐 中英对照（逐段对齐 · 句级联动 · 左右同步滚动）**")
-                            embed_html(bilingual_html(_prev_bi["pairs"], glossary=_gl_mark),
-                                       height=760, scrolling=False)
-                        except Exception:
-                            pass
+                            # 后台化改造（Round 19）：原内联跑主线程，逐段 LLM 调用期间
+                            # 整个 UI 冻结。术语表/段落/缓存在提交时由主线程捕获传入，
+                            # 结果经 bg_consume 交付后由下方 fresh 分支渲染。
+                            _cache = st.session_state.get("read_tr_cache")
+                            if not isinstance(_cache, dict):
+                                _cache = {}
+                            bg_submit("逐段翻译（第 %d 页）" % int(p2),
+                                      lambda progress, _p=paras, _g=_gl, _c=_cache, _pg=int(p2):
+                                          _w_translate_pairs(ctx, _p, _g, _c, progress, page=_pg),
+                                      kind=_K_TR_PAIRS)
+                            _toast("📥 已转入后台翻译，可切换其他页面")
+                if _tr_run:
+                    st.caption("⏳ 逐段翻译正在后台运行（实时进度见左侧「任务中心」）——"
+                               "可切换其他页面，完成后结果自动出现在本页。")
+                # 后台交付的本次结果（fresh 一次性标记）：降级横幅 + 汇总 + 双语视图
+                _bi_fresh = st.session_state.pop("read_bi_fresh", False)
+                _prev_bi = st.session_state.get("read_bilingual")
+                if (_bi_fresh and isinstance(_prev_bi, dict)
+                        and int(_prev_bi.get("page", 0) or 0) == int(p2)):
+                    pairs = _prev_bi.get("pairs") or []
+                    # 离线占位不能当译文展示（Round 12 ②残留）：模型不可用时
+                    # translate_to_chinese 返回的是带降级标记的占位串，
+                    # 直接塞进「中英对照」= 给评委看一段假译文。
+                    if any(is_llm_degraded(_zh) for _en, _zh in pairs):
+                        llm_degraded_banner()
+                    _sum = st.session_state.get("read_bi_summary") or {}
+                    _render_tr_summary(_sum.get("stats") or {}, _sum.get("errors") or [], len(pairs))
+                    try:
+                        st.markdown("**🌐 中英对照（逐段对齐 · 句级联动 · 左右同步滚动）**")
+                        embed_html(bilingual_html(pairs, glossary=_gl_mark),
+                                   height=760, scrolling=False)
+                    except Exception as e:
+                        st.warning(f"⚠️ 双语视图渲染失败：{str(e)[:160]}")
+                elif (isinstance(_prev_bi, dict)      # rerun 恢复：快照的文档/页码都与当前一致时重渲染
+                        and str(_prev_bi.get("doc") or "") == str(doc_id)
+                        and int(_prev_bi.get("page", 0) or 0) == int(p2)
+                        and isinstance(_prev_bi.get("pairs"), list)
+                        and _prev_bi.get("pairs")):
+                    st.caption("♻️ 已恢复上次的翻译结果（换页后需重新加载）。")
+                    try:
+                        st.markdown("**🌐 中英对照（逐段对齐 · 句级联动 · 左右同步滚动）**")
+                        embed_html(bilingual_html(_prev_bi["pairs"], glossary=_gl_mark),
+                                   height=760, scrolling=False)
+                    except Exception:
+                        pass
             except Exception as e:
                 st.warning(f"⚠️ 同步滚动区异常：{str(e)[:160]}")
 
@@ -1432,77 +1782,26 @@ def render(ctx):
         with tabs[2]:
             try:
                 p3 = st.number_input("页码", 1, tps, value=default_page, key="pp")
-                if st.button("⚡ 翻译并生成原位 PDF", key="pp_go"):
+                _pdf_run = bg_running(kinds={_K_INPLACE_PDF})
+                if st.button("⚡ 翻译并生成原位 PDF", key="pp_go", disabled=_pdf_run,
+                             help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
                     if not getattr(getattr(ctx, "llm", None), "available", False):
                         st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
                         st.caption("🛠️ 怎么办：在左侧「API 模型」区填入 Key 后重试。")
                     else:
-                        p3 = min(max(1, int(p3)), tps)
-                        # 分阶段进度（问题六）：翻译 → 排版落盘，每步节点可见
-                        _st_pdf = st.status("① 提取原文并翻译中…", expanded=True)
-                        try:
-                            with _st_pdf:
-                                raw = ""
-                                try:
-                                    raw = doc[p3 - 1].get_text()[:3000]
-                                except Exception as e:
-                                    _st_pdf.update(label=f"⚠️ 读取第 {p3} 页失败", state="error")
-                                    st.warning(f"⚠️ 读取第 {p3} 页失败：{str(e)[:120]}")
-                                if not raw.strip():
-                                    _st_pdf.update(label="⚠️ 该页无可提取文本（可能是扫描件）",
-                                                   state="error")
-                                    st.error("该页无可提取文本，可能是扫描件。")
-                                else:
-                                    zh, err = _safe_translate(ctx, raw, glossary=_current_glossary())
-                                    if not zh:
-                                        _st_pdf.update(label="⚠️ 翻译失败，已中止", state="error")
-                                        st.warning(f"⚠️ 翻译失败（{err}），已中止原位 PDF 生成。")
-                                        st.caption("🛠️ 怎么办：检查 API Key / 网络后重试；"
-                                                   "或改用「🖱️ 划词翻译」手动翻译少量文本。")
-                                    else:
-                                        _st_pdf.update(label="② 排版并写回 PDF…")
-                                        probe = _new_probe("原位 PDF 生成")
-                                        probe.start()
-                                        tmp_dir, out = None, None
-                                        try:
-                                            tmp_dir = _new_figure_dir()
-                                            out = os.path.join(tmp_dir, f"translated_p{p3}.pdf")
-                                            in_place_pdf(doc, p3, zh, out)
-                                            probe.sample()
-                                            if out and os.path.exists(out):
-                                                with open(out, "rb") as fh:
-                                                    data = fh.read()
-                                                if data:
-                                                    # 结果写入 session_state：切页/其他交互
-                                                    # 触发重绘后下载按钮不再消失（问题三根因之一）
-                                                    st.session_state["inplace_pdf_result"] = {
-                                                        "page": int(p3), "data": data,
-                                                        "kb": len(data) / 1024,
-                                                        "elapsed": probe.elapsed(),
-                                                        "peak": probe.peak_mb(),
-                                                        "doc": doc_id,
-                                                    }
-                                                    _st_pdf.update(
-                                                        label=f"✅ 原位 PDF 已生成"
-                                                              f"（第 {p3} 页，"
-                                                              f"{len(data) / 1024:.0f} KB，"
-                                                              f"{probe.elapsed():.1f} 秒）",
-                                                        state="complete")
-                                            else:
-                                                _st_pdf.update(label="❌ PDF 生成失败", state="error")
-                                                st.error("❌ PDF 生成失败：输出文件不存在或为空。")
-                                        except Exception as e:
-                                            _st_pdf.update(label="⚠️ 原位 PDF 生成失败", state="error")
-                                            st.warning(f"⚠️ 原位 PDF 生成失败：{str(e)[:160]}")
-                                        finally:
-                                            if tmp_dir:
-                                                _remove_dir_verified(tmp_dir)
-                        except Exception as e:
-                            try:
-                                _st_pdf.update(label="⚠️ 原位 PDF 区异常", state="error")
-                            except Exception:
-                                pass
-                            st.warning(f"⚠️ 原位 PDF 区异常：{str(e)[:160]}")
+                        _p3 = min(max(1, int(p3)), tps)
+                        # 后台化改造（Round 19）：原内联 st.status 跑主线程，翻译 + 排版
+                        # 全程 UI 冻结。worker 用独立 doc 实例（in_place_pdf 会写文档，
+                        # 句柄不跨线程共享），术语表提交时捕获；各失败分支随结果返回
+                        # stage 标记，由 _consume_inplace_pdf 按旧话术五档分档提示。
+                        bg_submit("原位 PDF 翻译（第 %d 页）" % _p3,
+                                  lambda progress, _pg=_p3, _g=_current_glossary():
+                                      _w_inplace_pdf(ctx, path, _pg, _g, progress),
+                                  kind=_K_INPLACE_PDF)
+                        _toast("⚡ 已转入后台生成，可切换其他页面")
+                if _pdf_run:
+                    st.caption("⏳ 原位 PDF 正在后台生成（实时进度见左侧「任务中心」）——"
+                               "可切换其他页面，完成后下载按钮自动出现在本页。")
 
                 # 结果常驻渲染：来自 session_state，任何交互后都不消失
                 _r = st.session_state.get("inplace_pdf_result")
@@ -1707,34 +2006,37 @@ def render(ctx):
 
                 st.markdown("**✍️ 片段翻译**")
                 frag = st.text_area("选中/粘贴原文片段", height=110, key="hl_frag")
-                if st.button("🌐 翻译该片段", key="hl_tr") and str(frag or "").strip():
+                _tf_run = bg_running(kinds={_K_TR_FRAG})
+                if st.button("🌐 翻译该片段", key="hl_tr", disabled=_tf_run,
+                             help="后台翻译：提交后可切换其他页面，进度见左侧「任务中心」") \
+                        and str(frag or "").strip():
                     if not getattr(getattr(ctx, "llm", None), "available", False):
                         st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
                     else:
-                        # 流式输出：首 token 约 1~2s 即开始显示（实测 glm-4-flash），
-                        # 不用再对着「正在生成」干等 4~10s；公式先占位、流中实时还原
-                        _frag_txt = str(frag).strip()
-                        with st.container(border=True):
-                            st.caption("🌐 译文")
-                            _full = ""
-                            try:
-                                if hasattr(st, "write_stream"):
-                                    _full = st.write_stream(
-                                        stream_translate_to_chinese(ctx, _frag_txt,
-                                                                    glossary=_current_glossary()))
-                                else:   # 旧版 Streamlit 兜底：收完一次性展示
-                                    _full = "".join(list(
-                                        stream_translate_to_chinese(ctx, _frag_txt,
-                                                                    glossary=_current_glossary())))
-                            except Exception as e:
-                                _full = ""
-                                st.warning(f"⚠️ 翻译失败：{type(e).__name__}: {str(e)[:100]}")
-                            if not str(_full or "").strip():
-                                st.warning("⚠️ 翻译失败：模型未返回内容"
-                                           "（网络超时、限流或 Key 失效）。")
-                                st.caption("🛠️ 怎么办：稍后重试或缩短片段。")
-                            elif is_llm_degraded(_full):
-                                # 模型不可用：流式吐出来的是占位串，不是译文
+                        # 后台化改造（Round 19）：旧内联 st.write_stream 流式展示跑主线程。
+                        # 后台任务无人观看增量输出，改用带超时的非流式 _safe_translate；
+                        # 失败/降级话术在交付侧完整保留（见下方 _hl_res 渲染）。
+                        bg_submit("片段翻译",
+                                  lambda progress, _t=str(frag).strip(), _g=_current_glossary():
+                                      _w_translate_frag(ctx, _t, _g, progress),
+                                  kind=_K_TR_FRAG)
+                        _toast("🌐 已转入后台翻译，可切换其他页面")
+                if _tf_run:
+                    st.caption("⏳ 片段翻译正在后台运行（进度见左侧「任务中心」）——可切换其他页面。")
+                # 后台交付的译文：渲染即清（与旧内联行为一致）
+                _hl_res = st.session_state.pop("hl_tr_result", None)
+                if _hl_res is not None:
+                    with st.container(border=True):
+                        st.caption("🌐 译文")
+                        _full = str(_hl_res.get("zh") or "")
+                        if not _full.strip():
+                            st.warning("⚠️ 翻译失败：%s（网络超时、限流或 Key 失效）。"
+                                       % (_hl_res.get("err") or "模型未返回内容"))
+                            st.caption("🛠️ 怎么办：稍后重试或缩短片段。")
+                        else:
+                            st.markdown(_full)
+                            if is_llm_degraded(_full):
+                                # 模型不可用：拿到的是占位串，不是译文
                                 llm_degraded_banner()
             except Exception as e:
                 st.warning(f"⚠️ 划词翻译区异常：{str(e)[:160]}")
@@ -1823,10 +2125,12 @@ def _current_glossary():
         return []
 
 
-def _glossary_editor(doc, page):
+def _glossary_editor(doc, page, path=None):
     """术语表面板（DeepL 术语表式）：编辑 / 从本页抽取候选 / 受控高亮开关。
 
     返回生效术语表 [(en, zh, variants), ...]（未填中文的候选行不生效）。
+    Round 19 后台化：path 供 worker 独立开 doc 读页（句柄不跨线程共享）；
+    术语合并仍在主线程交付侧执行（_consume_glossary）。
     """
     _ensure_state({GLOSSARY_KEY: DEFAULT_GLOSSARY_TEXT, GLOSSARY_TEXT_KEY: DEFAULT_GLOSSARY_TEXT,
                    GLOSSARY_PENDING_KEY: False, GLOSSARY_HL_KEY: True})
@@ -1836,23 +2140,26 @@ def _glossary_editor(doc, page):
                      height=150, key=GLOSSARY_TEXT_KEY)
         c1, c2 = st.columns([1, 1])
         with c1:
-            if st.button("🔍 从本页抽取术语", key="gl_extract"):
-                try:
-                    page_txt = doc[int(page) - 1].get_text() or ""
-                except Exception:
-                    page_txt = ""
-                terms = extract_terms(page_txt) if page_txt else []
-                if not terms:
+            _gl_run = bg_running(kinds={_K_GLOSSARY})
+            if st.button("🔍 从本页抽取术语", key="gl_extract", disabled=_gl_run,
+                         help="后台抽取：提交后可切换其他页面，进度见左侧「任务中心」"):
+                # 后台化改造（Round 19）：worker 用独立 doc 实例读页（句柄不跨线程
+                # 共享）；术语表合并写 session_state，留在主线程交付侧执行。
+                bg_submit("术语抽取（第 %d 页）" % int(page),
+                          lambda progress, _pg=int(page), _p=path:
+                              _w_glossary_terms(_p, _pg, progress),
+                          kind=_K_GLOSSARY)
+                _toast("🔍 已转入后台抽取，可切换其他页面")
+            if _gl_run:
+                st.caption("⏳ 术语抽取正在后台运行（进度见左侧「任务中心」）……")
+            # 后台交付的抽取结果：渲染即清（与旧内联行为一致）
+            _gl_res = st.session_state.pop("gl_extract_result", None)
+            if _gl_res is not None:
+                if _gl_res.get("empty"):
                     st.caption("ℹ️ 本页未抽取到候选术语（文本层缺失或术语重复度不足）。")
                 else:
-                    n_new = _merge_terms_into_glossary(terms)
-                    st.success(f"✅ 已并入 {n_new} 个新候选术语"
+                    st.success(f"✅ 已并入 {_gl_res.get('n_new', 0)} 个新候选术语"
                                f"（中文列留空待填，填好后才生效）。")
-                    if n_new:
-                        try:
-                            st.rerun()      # 立即同步进编辑框，不用等下一次交互
-                        except Exception:
-                            pass
         with c2:
             st.checkbox("译文受控术语高亮", key=GLOSSARY_HL_KEY)
         gl = _current_glossary()

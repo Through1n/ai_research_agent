@@ -935,12 +935,23 @@ def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
             used = tasks_mod.elapsed_str((t["ended"] or 0) - (t["started"] or 0))
             icon = "✅" if t["state"] == "done" else "❌"
             label = f"{icon} {t['name']} — {t['stage']}" + (f"（用时 {used}）" if used else "")
+            tid = t["id"]
+            fresh = not t.get("consumed")
+            # 板块 1-6（非 agent）任务：完成/失败都触发一次整页重绘，让提交页的
+            # bg_consume 当场交付结果——否则用户提交后没有其他交互，页面主体会
+            # 一直停在旧状态，只有侧边栏进度在跳。每任务仅一次（tid 先进 seen），
+            # RerunException 继承 BaseException，不会被 render_task_panel 外层的
+            # except Exception 吞掉（2026-10-22 实证 MRO）。
+            if t.get("kind") != "agent" and fresh and tid not in _task_id_set(_SEEN_TASKS_KEY):
+                _task_id_set(_SEEN_TASKS_KEY).add(tid)
+                try:
+                    st.rerun(scope="app")
+                except Exception:
+                    pass
             if t["state"] == "error":
                 with st.expander(label):
                     st.caption("失败原因：" + str(t.get("error", ""))[:200])
                 continue
-            tid = t["id"]
-            fresh = not t.get("consumed")
             mine = _task_id_set(_MINE_TASKS_KEY)
             if on_finish is not None and fresh and tid not in _task_id_set(_SEEN_TASKS_KEY):
                 # 每个 session 只尝试交付一次：回调返回 False（结果为空 / 写入失败）
@@ -962,6 +973,11 @@ def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
             with st.expander(label, expanded=fresh):
                 if tid in mine:
                     st.caption("结果已转入页面内容（历史记录 / 下载区）。")
+                elif t.get("kind") != "agent":
+                    # 非 agent 任务的结果由提交页按 kind 认领（见下方 bg_consume），
+                    # 不经 on_finish/mine 通道。不套用"上一个会话"兜底话术，
+                    # 也不倾倒原始结果——那可能是含全文/raw 字节的大 dict。
+                    st.caption("结果由对应功能页拾取；若该页未见更新，切换到提交任务的那个页即可。")
                 else:
                     # Round 12 场景 12 实测：刷新后新 session 的 agent_runs=0，
                     # 历史记录区还是新手引导，旧文案「结果已转入页面内容」指向一个
@@ -976,3 +992,105 @@ def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
         _panel()
     except Exception:
         pass
+
+
+# ==================== 后台任务提交 / 消费（板块 1-6 长任务后台化） ====================
+# 背景（用户 2026-10-22 要求）："0 到 6 的板块中的任务任何一项都是可以同时运行的，
+# 而不只是 0 板块"。services/tasks.py 的线程池（MAX_PARALLEL=2 + 排队 + 进度回调）
+# 本就支持并发，缺的只是各功能页的接入。公共件三件：
+#   bg_submit()   点击处提交长任务，tid 登记进 session_state 待办队列
+#   bg_consume()  页面渲染顶部按 kind 认领交付（一次性 + 触发重绘让 flash 生效）
+#   bg_running()  提交按钮防重复闸门（只数本页 kind，不拦其他板块的并发）
+#
+# 硬约束（services/tasks.py 模块 docstring）：后台线程内禁止任何 st.* 调用——
+# 页面传入的 fn 只允许写 progress 回调与返回值。
+#
+# 两个设计坑（都踩过/规避过）：
+# 1) 交付必须按 kind 路由：待办队列是全会话共享的，若每页都无脑消费，
+#    A 页提交的任务可能在 B 页被吞掉（结果丢失）。bg_consume 只认领
+#    handlers map 里有的 kind，其余留给所属页。
+# 2) 交付后必须重绘：flash 由 app.py 在页面渲染前重放，本页刚写入的提示
+#    不重绘就要等下一次用户交互才可见。RerunException 继承 BaseException
+#    （2026-10-22 实证 MRO），不会被 except Exception 误吞。
+_BG_TASK_IDS_KEY = "_bg_task_ids"
+
+
+def bg_submit(name, fn, kind="generic", goal=""):
+    """提交后台任务并登记 tid 到待办队列；返回 tid。"""
+    from services import tasks as _tasks
+    tid = _tasks.submit(name, fn, kind=kind, goal=goal)
+    try:
+        st.session_state.setdefault(_BG_TASK_IDS_KEY, []).append(tid)
+    except Exception:
+        pass
+    return tid
+
+
+def bg_running(kinds=None):
+    """是否有未完成后台任务；``kinds`` 限定只数某些 kind（页面防重复提交用）。
+
+    不传 kinds = 数全部。跨板块并发是特性，只有"本页同一类任务已在跑"
+    才禁用按钮——避免同一任务被重复提交把并发队列打爆。
+    """
+    from services import tasks as _tasks
+    try:
+        ids = st.session_state.get(_BG_TASK_IDS_KEY) or []
+    except Exception:
+        return False
+    for tid in ids:
+        try:
+            t = _tasks.get(tid)
+        except Exception:
+            t = None
+        if t is None or t["state"] not in ("pending", "running"):
+            continue
+        if kinds is None or t.get("kind") in kinds:
+            return True
+    return False
+
+
+def bg_consume(handlers):
+    """页面渲染顶部调用：按 kind 把已完成的后台任务交付给本页处理器。
+
+    handlers: ``{kind: fn(kind, task_dict)}``。只认领 map 里有的 kind，
+    其余任务留在队列等所属页来取（用户在 A 页提交、切到 B 页，任务完成时
+    B 页不得吞掉它）。每个任务一次性交付（无论成败），交付后触发一次整页
+    重绘让 flash 生效。
+    fn 内部自行区分 done / error 两态（``task["state"]`` / ``task["result"]`` /
+    ``task["error"]``）；同类多任务同一轮完成时 flash 只保留最后一条
+    （单槽位），重要结论请同时写入页面状态而非只依赖 flash。
+    """
+    from services import tasks as _tasks
+    try:
+        ids = st.session_state.setdefault(_BG_TASK_IDS_KEY, [])
+    except Exception:
+        return
+    delivered = False
+    for tid in list(ids):
+        try:
+            t = _tasks.get(tid)
+        except Exception:
+            t = None
+        if t is None or t["state"] in ("pending", "running"):
+            continue
+        fn = handlers.get(t.get("kind"))
+        if fn is None:
+            continue                          # 不是本页认领的 kind，留给所属页
+        try:
+            ids.remove(tid)
+        except ValueError:
+            continue
+        delivered = True
+        try:
+            fn(t.get("kind"), t)
+        except Exception as e:                # RerunException 走 BaseException，不会被这里捕获
+            try:
+                from ui.sidebar import set_flash
+                set_flash("error", "⚠️ 后台任务结果处理失败：%s" % str(e)[:120])
+            except Exception:
+                pass
+    if delivered:
+        try:
+            st.rerun()
+        except Exception:
+            pass

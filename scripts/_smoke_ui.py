@@ -6,6 +6,9 @@
 
 说明：
 - 只验证「渲染不抛异常」（演示路径零崩溃），不校验视觉样式；
+- 第 [4] 阶段故障注入验证降级提示：Round 19 后台化后，长任务按钮点击只是提交，
+  必须轮询任务终态并手动 at.run() 驱动 bg_consume 交付，降级提示才会出现——
+  不驱动 = 断言永真（假绿），见 _click_bg_and_deliver 注释；
 - 网络相关按钮（arXiv/PubMed/DuckDuckGo）不在冒烟范围内，避免演示机断网时长时间阻塞；
 - 用 streamlit.testing.v1.AppTest 捕获异常，异常会被 ui/common.py safe_render 兜底，
   因此 at.exception 为空 = 页面级错误边界生效。
@@ -128,6 +131,95 @@ def _miss(problems, tag, msg):
     problems.append((tag, msg))
 
 
+def _drain_tasks(timeout=30):
+    """等进程级任务池排空（各 case 共用 services/tasks.py 线程池，MAX_PARALLEL=2）。
+
+    上一 case 的后台任务若仍在跑，会占住并发槽位并让下一 case 的提交去排队，
+    闸门断言（按钮禁用）就会出现与时序相关的假失败。
+    """
+    from services import tasks as _tasks
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            if _tasks.active_count() == 0:
+                return True
+        except Exception:
+            return False
+        time.sleep(0.3)
+    return False
+
+
+def _collect(at):
+    """收集当轮渲染的异常与友好提示（error/warning）。"""
+    errs = [str(e.value)[:200] for e in at.exception]
+    friend = [w.value[:70] for w in at.error] + [w.value[:70] for w in at.warning]
+    return errs, friend
+
+
+def _click_bg_and_deliver(at, btn, problems, timeout=60):
+    """点击按钮并（若提交了后台任务）驱动到终态 + 交付，返回 (errs, friend)。
+
+    Round 19 后台化后，多数长任务按钮点击只是**提交**：worker 在线程里跑，
+    降级提示要等任务终态、下一轮渲染被 bg_consume 交付才出现。单轮 at.run()
+    看不到任何提示——若不驱动交付，「验证降级提示」会退化成永真（假绿：
+    打印「✗ 未降级」却因 friend 为空而不记账，总结仍是 ✅）。
+
+    两个时序陷阱（都实测踩过，动这段代码前先读）：
+    1. **内联路径不能补 at.run()**：点击那一轮就已渲染结果，再跑一轮会把瞬态的
+       st.error/st.warning 冲掉（case 7「版本差异」因此从「友好提示=有」翻成「无」）。
+       提交检测也不靠额外 run——bg_submit 在点击回调内同步落 _TASKS。
+    2. **后台交付要逐轮取并集**：flash 是「渲染即 pop」，第一轮驱动 run 交付时
+       出现，第二轮就被 render_flash 清空（探针实证）。只在最后一轮收集会两手空空。
+
+    返回 (None, None) 表示按钮根本没找到（调用方记 _miss）。
+    """
+    from services import tasks as _tasks
+    if not any(b.label.strip() == btn.strip() for b in at.button):
+        return None, None
+    try:
+        before = {t["id"] for t in _tasks.snapshot(limit=100)}
+    except Exception:
+        before = set()
+    try:
+        _click(at, btn)
+    except Exception as e:
+        problems.append((btn, "点击失败：%s" % str(e)[:150]))
+        return [str(e)[:150]], []
+    try:
+        new = [t for t in _tasks.snapshot(limit=100) if t["id"] not in before]
+    except Exception:
+        new = []
+    if not new:
+        return _collect(at)          # 内联路径：点击轮即结果，禁止补 run
+    tid = new[-1]["id"]
+    t0 = time.time()
+    final = None
+    while time.time() - t0 < timeout:
+        try:
+            final = _tasks.get(tid)
+        except Exception:
+            final = None
+        if final and final.get("state") in ("done", "error"):
+            break
+        time.sleep(0.3)
+    if not final or final.get("state") not in ("done", "error"):
+        problems.append((btn, "后台任务 %ss 未进入终态：%s" % (timeout, (final or {}).get("state"))))
+        return ["后台任务未终态"], []
+    errs_all, friend_all = [], []
+    for _ in range(3):
+        at.run()                     # 驱动渲染回合：bg_consume 交付（flash 在此出现）
+        e, f = _collect(at)
+        for x in e:
+            if x not in errs_all:
+                errs_all.append(x)
+        for x in f:
+            if x not in friend_all:
+                friend_all.append(x)
+        if friend_all or errs_all:
+            break
+    return errs_all, friend_all
+
+
 def _inject():
     """故障注入：把外部依赖替换成必崩函数，验证页面是否给出友好提示而非 Traceback。"""
     def boom(msg):
@@ -197,27 +289,31 @@ def phase_fault(problems):
             _miss(problems, route, "路由键 %s 无对应菜单项" % route)
             continue
         try:
+            if not _drain_tasks():
+                problems.append((btn, "上一 case 的后台任务 30s 未排空，闸门断言可能假失败"))
             at, _ = _new()
             _click(at, "🚀 一键加载演示数据（v1/v7/BERT）")
             if not _goto(at, page, problems):
                 continue
             _seed_inputs(at, input_seed)
             t0 = time.time()
-            hit = _click(at, btn)
-            if not hit:
+            errs, friend = _click_bg_and_deliver(at, btn, problems)
+            if errs is None:
                 _miss(problems, btn, "按钮未找到（断言未执行）：%s @ %s" % (btn, page))
                 continue
             dt = time.time() - t0
-            errs = [str(e.value)[:200] for e in at.exception]
-            friend = [w.value[:70] for w in at.error] + [w.value[:70] for w in at.warning]
             ok = (not errs) and bool(friend)
             print(f"  [{i+1}/{len(cases)}] {btn[:24]:<26} {dt:5.1f}s  exception={len(errs)} "
                   f"友好提示={'有' if friend else '无'}  {'OK' if ok else '✗ 未降级'}")
             for e in errs[:3]:
                 print(f"      ✗ {e}")
                 problems.append((btn, e))
-            if not ok and friend:
-                problems.append((btn, "未给出友好提示"))
+            # 记账条件修正（Round 19 假绿事故）：此前写的是 `if not ok and friend`，
+            # 导致「无异常也无友好提示」——恰恰是降级失效最典型的形态——反而不记账，
+            # 打印「✗ 未降级」的同时总结仍输出 ✅。现在只要未通过就记。
+            if not ok:
+                problems.append((btn, "未给出友好提示（降级验证未通过）"
+                                       if not friend else "降级验证未通过（有提示但有异常）"))
         except Exception as e:
             print(f"  [{btn}] 注入阶段异常：{str(e)[:200]}")
             problems.append((btn, str(e)))

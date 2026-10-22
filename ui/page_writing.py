@@ -12,6 +12,15 @@
 
 所有 session_state key 均在 ``_init_state`` 中先初始化再读；所有外部调用均 try/except，
 失败给中文友好提示。
+
+Round 19 后台化改造（用户需求：「0 到 6 的板块中的任务任何一项都是可以同时运行的」）：
+本页 4 类 LLM 长任务共 6 个按钮（论文框架 ×2 / Figure Caption 自动+自定义 /
+拓扑图代码 / 学术翻译）全部改为 services/tasks.py 后台执行 + bg_consume 交付，
+主线程只留输入校验、缓存命中判定与结果渲染。框架生成的缓存命中仍在主线程
+即时返回（无 LLM 调用，不占后台并发队列）；流式增量展示让位于任务中心进度
+（后台无人观看增量输出）。TikZ / Graphviz 本地编译保持内联（渲染路径 + 结果
+缓存，见 _render_tikz 注释）。worker 硬约束：禁止任何 st.* 调用（线程内没有
+ScriptRunContext）。
 """
 import copy
 import os
@@ -20,12 +29,21 @@ import time
 
 import streamlit as st
 from ui.common import (embed_html, page_header, show_error, _esc, empty_state, pretty_table,
-                       is_llm_degraded, llm_degraded_banner)
+                       is_llm_degraded, llm_degraded_banner,
+                       bg_submit, bg_consume, bg_running)
+from ui.sidebar import set_flash
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
 from services import writing
+
+# ---------------- 后台任务 kind（Round 19 后台化：本页提交/认领的唯一标识） ----------------
+_K_OUTLINE = "writing_outline"           # 无幻觉论文框架生成
+_K_CAPTION_AUTO = "writing_caption_auto"    # 自动推荐图 Figure Caption
+_K_CAPTION_CUSTOM = "writing_caption_custom"  # 自定义图 Figure Caption
+_K_DIAGRAM = "writing_diagram"           # 拓扑图代码生成
+_K_TRANSLATE = "writing_translate"       # 学术翻译
 
 # 所有本页用到的 session_state key 的默认值（先初始化再读，避免 KeyError）
 _SS_DEFAULTS = {
@@ -54,6 +72,171 @@ def _init_state():
     for k, v in _SS_DEFAULTS.items():
         if k not in st.session_state:
             st.session_state[k] = copy.deepcopy(v)
+
+
+# ============================ Round 19 后台化：worker / 交付处理器 ============================
+# worker 硬约束：运行在 services/tasks.py 的 worker 线程里，禁止任何 st.* 调用。
+
+def _toast(msg):
+    try:
+        st.toast(msg, icon="🚀")
+    except Exception:
+        pass
+
+
+def _w_outline(ctx, idea, preferred, strict, progress):
+    """后台线程生成无幻觉论文框架（Round 19）。
+
+    与旧内联 _gen 的差异：白名单抽取 / 正文生成 / 后处理全在线程内；流式通道
+    （outline_body_stream）在后台聚合——无人观看增量输出，进度改经 progress
+    上报；异常不调 show_error，随结果返回 error 字段由交付侧提示。
+    """
+    progress("🔍 抽取 References 白名单…", 0.1)
+    try:
+        refs_text, refs_list, source = writing.reference_whitelist(ctx, preferred)
+    except Exception as e:
+        return {"res": {"error": "抽取 References 白名单失败：%s" % str(e)[:160]},
+                "idea": str(idea), "preferred": preferred, "strict": bool(strict)}
+    if not refs_list:
+        return {"res": {"empty_library": True, "text": writing.EMPTY_LIBRARY_HINT,
+                        "refs": [], "source": source},
+                "idea": str(idea), "preferred": preferred, "strict": bool(strict)}
+    progress("✍️ 正在生成大纲正文…", 0.3)
+    prompt = writing._outline_prompt(idea, refs_text, len(refs_list), strict=strict)
+    t0 = time.time()
+    chunks = []
+    try:
+        for ch in writing.outline_body_stream(ctx, prompt, 0.4):
+            if ch:
+                chunks.append(str(ch))
+    except Exception as e:      # 流式通道整体异常：与旧内联一致的中断提示
+        chunks.append(f"\n\n⚠️ 流式输出中断：{type(e).__name__}: {str(e)[:120]}")
+    raw = "".join(chunks)
+    progress("🧹 后处理与白名单校验…", 0.85)
+    try:
+        res = writing.finalize_outline(raw, refs_list, source, elapsed_sec=time.time() - t0)
+    except Exception as e:
+        return {"res": {"error": "处理大纲失败：%s" % str(e)[:160]},
+                "idea": str(idea), "preferred": preferred, "strict": bool(strict)}
+    return {"res": res, "idea": str(idea), "preferred": preferred, "strict": bool(strict)}
+
+
+def _w_caption(ctx, df, chart_desc, x, y, idx, progress):
+    """后台线程生成 Figure Caption（Round 19）。idx 回显供交付侧写回对应图表位。"""
+    progress("🤖 正在生成 Figure Caption…", None)
+    cap = ""
+    try:
+        cap = writing.figure_caption(ctx, df, chart_desc, x=x, y=y) or ""
+    except Exception as e:
+        return {"idx": idx, "error": str(e)[:160]}
+    return {"idx": idx, "cap": cap}
+
+
+def _w_diagram(ctx, kind, topic, progress):
+    """后台线程生成拓扑图代码（Round 19）。"""
+    progress("🎨 正在生成拓扑图代码…", None)
+    try:
+        return {"kind": kind, "code": writing.diagram(ctx, kind, topic)}
+    except Exception as e:
+        return {"kind": kind, "error": str(e)[:160]}
+
+
+def _w_translate(ctx, text, to_english, progress):
+    """后台线程执行学术翻译（Round 19）。"""
+    progress("🌐 正在翻译…", None)
+    try:
+        if to_english:
+            return {"text": writing.translate_to_english(ctx, text) or ""}
+        return {"text": writing.translate_to_chinese(ctx, text) or ""}
+    except Exception as e:
+        return {"error": str(e)[:160]}
+
+
+def _consume_outline(kind, t):
+    """论文框架交付（Round 19）：写回 outline / outline_meta，缓存与空库语义同旧内联。"""
+    if kind != _K_OUTLINE:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 生成框架失败：%s" % str(t.get("error") or "")[:150])
+        return
+    payload = t.get("result") or {}
+    res = payload.get("res") or {}
+    if res.get("error"):
+        set_flash("error", "⚠️ " + str(res.get("error"))[:200])
+        return
+    st.session_state.outline = res.get("text", "") or ""
+    st.session_state.outline_meta = res
+    if res.get("text") and not res.get("empty_library"):
+        # 缓存写入（与旧内联一致：仅成功且非空库时缓存）
+        cache = st.session_state.get("outline_cache") or {}
+        key = (payload.get("idea") or "", str(payload.get("preferred")),
+               bool(payload.get("strict")))
+        cache[key] = res
+        st.session_state.outline_cache = cache
+    if res.get("empty_library"):
+        set_flash("warning", "⚠️ 文献库中没有可抽取的 References，已中止生成"
+                             "（不输出任何占位/编造引用）。")
+    else:
+        set_flash("success", "✅ 框架已生成（References 为确定性拼接，已做白名单校验）")
+
+
+def _consume_caption_auto(kind, t):
+    """自动推荐图 Caption 交付（Round 19）：按回显的图表位写回 auto_captions。"""
+    if kind != _K_CAPTION_AUTO:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ Figure Caption 生成失败：%s" % str(t.get("error") or "")[:150])
+        return
+    r = t.get("result") or {}
+    if r.get("error"):
+        set_flash("error", "⚠️ Figure Caption 生成失败：%s" % str(r.get("error"))[:150])
+        return
+    idx = r.get("idx")
+    caps = dict(st.session_state.get("auto_captions") or {})
+    caps[idx] = r.get("cap") or ""
+    st.session_state.auto_captions = caps
+
+
+def _consume_caption_custom(kind, t):
+    """自定义图 Caption 交付（Round 19）：写回 caption（降级态由既有渲染路径展示）。"""
+    if kind != _K_CAPTION_CUSTOM:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ Figure Caption 生成失败：%s" % str(t.get("error") or "")[:150])
+        return
+    r = t.get("result") or {}
+    if r.get("error"):
+        set_flash("error", "⚠️ Figure Caption 生成失败：%s" % str(r.get("error"))[:150])
+        return
+    st.session_state.caption = r.get("cap") or ""
+
+
+def _consume_diagram(kind, t):
+    """拓扑图代码交付（Round 19）：写回 (kind, code) 二元组（落点与旧内联一致）。"""
+    if kind != _K_DIAGRAM:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 生成拓扑图代码失败：%s" % str(t.get("error") or "")[:150])
+        return
+    r = t.get("result") or {}
+    if r.get("error"):
+        set_flash("error", "⚠️ 生成拓扑图代码失败：%s" % str(r.get("error"))[:150])
+        return
+    st.session_state.diagram = (r.get("kind"), r.get("code") or "")
+
+
+def _consume_translate(kind, t):
+    """学术翻译交付（Round 19）：写回 trres（降级横幅由既有渲染路径展示）。"""
+    if kind != _K_TRANSLATE:
+        return
+    if t["state"] == "error":
+        set_flash("error", "⚠️ 翻译失败：%s" % str(t.get("error") or "")[:150])
+        return
+    r = t.get("result") or {}
+    if r.get("error"):
+        set_flash("error", "⚠️ 翻译失败：%s" % str(r.get("error"))[:150])
+        return
+    st.session_state.trres = r.get("text") or ""
 
 
 # ---------------------------------------------------------------- CSV 自动出图（T4）
@@ -147,14 +330,23 @@ def _csv_section(ctx):
             _render_plan_chart(df, p)
             st.caption("🧭 **推荐依据：** " + str(p.get("reason", "")))
             btn_key = f"auto_cap_{i}"
-            if st.button("🤖 生成该图 Figure Caption", key=btn_key):
+            _cap_run = bg_running(kinds={_K_CAPTION_AUTO})
+            if st.button("🤖 生成该图 Figure Caption", key=btn_key, disabled=_cap_run,
+                         help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
                 if not writing.llm_available(ctx):
                     st.warning("未配置 API Key，无法生成 Figure Caption。")
                 else:
-                    with st.spinner("🤖 正在生成 Figure Caption…"):
-                        cap = writing.figure_caption(ctx, df, p.get("title", ""),
-                                                     x=p.get("x"), y=p.get("y"))
-                    st.session_state.auto_captions[i] = cap or ""
+                    # 后台化改造（Round 19）：原内联 spinner 跑主线程，生成期间整个 UI 冻结。
+                    # df 用默认参数快照（闭包直捕会在 worker 执行时读到上传新表后的对象）。
+                    bg_submit("Figure Caption（图 %d）" % (i + 1),
+                              lambda progress, _df=df, _i=i, _p=p:
+                                  _w_caption(ctx, _df, _p.get("title", ""),
+                                             _p.get("x"), _p.get("y"), _i, progress),
+                              kind=_K_CAPTION_AUTO)
+                    _toast("🤖 已转入后台生成，可切换其他页面")
+            if _cap_run:
+                st.caption("⏳ Figure Caption 正在后台生成（进度见左侧「任务中心」）——"
+                           "可切换其他页面。")
             cap_text = (st.session_state.get("auto_captions") or {}).get(i, "")
             if cap_text:
                 st.info("**Figure Caption:** " + cap_text)
@@ -207,12 +399,23 @@ def _csv_section(ctx):
                                     width="stretch")
         except Exception as e:
             show_error("渲染自定义图表", e)
-        if st.button("🤖 自动提炼 Figure Caption（自定义图）"):
+        _capc_run = bg_running(kinds={_K_CAPTION_CUSTOM})
+        if st.button("🤖 自动提炼 Figure Caption（自定义图）", disabled=_capc_run,
+                     help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
             if not writing.llm_available(ctx):
                 st.warning("未配置 API Key，无法生成 Figure Caption。")
             else:
-                with st.spinner("🤖 正在生成 Figure Caption…"):
-                    st.session_state.caption = writing.figure_caption(ctx, df, ct, x=x, y=y) or ""
+                # Round 19 后台化：原内联 spinner 跑主线程，生成期间整个 UI 冻结。
+                # ct/x/y/df 用默认参数快照（闭包直捕会在 worker 执行时读到用户改选后的值）。
+                bg_submit("Figure Caption（自定义图）",
+                          lambda progress, _df=df, _ct=ct, _x=x, _y=y:
+                              _w_caption(ctx, _df, _ct, x=_x, y=_y, idx=None,
+                                         progress=progress),
+                          kind=_K_CAPTION_CUSTOM)
+                _toast("🤖 已转入后台生成，可切换其他页面")
+        if _capc_run:
+            st.caption("⏳ Figure Caption 正在后台生成（进度见左侧「任务中心」）——"
+                       "可切换其他页面。")
         if st.session_state.get("caption"):
             st.info("**Figure Caption:** " + str(st.session_state["caption"]))
 
@@ -275,59 +478,33 @@ def _outline_section(ctx):
     idea = st.text_area("输入 Idea", key="idea")
     preferred = None if str(src).startswith("自动") else str(src)
 
-    def _gen(strict):
-        cache = st.session_state.get("outline_cache") or {}
-        key = (str(idea), str(preferred), bool(strict))
-        cached = cache.get(key)
-        if cached is not None and not strict:
-            st.session_state.outline = cached.get("text", "") or ""
-            st.session_state.outline_meta = cached
-            st.caption("⚡ 相同 Idea + 相同文献来源命中缓存，直接复用上次结果（未重新调用大模型）。")
-            return
-        # 1) 白名单（本地 PyMuPDF 抽取，秒级）——失败/为空时明确告知，不进流式
-        with st.spinner("🔍 正在从 PDF 正文末尾抽取真实 References 白名单…"):
-            try:
-                refs_text, refs_list, source = writing.reference_whitelist(ctx, preferred)
-            except Exception as e:
-                show_error("抽取 References 白名单", e)
-                return
-        if not refs_list:
-            st.session_state.outline = writing.EMPTY_LIBRARY_HINT
-            st.session_state.outline_meta = {"text": writing.EMPTY_LIBRARY_HINT,
-                                             "empty_library": True, "refs": [], "source": source}
-            return
-        # 2) 流式正文：首 chunk 实测 <1s，用户先看到内容，不必等整篇生成完
-        prompt = writing._outline_prompt(idea, refs_text, len(refs_list), strict=strict)
-        box = st.empty()
-
-        def _stream():
-            try:
-                for ch in writing.outline_body_stream(ctx, prompt, 0.4):
-                    yield ch
-            except Exception as e:      # 流式通道整体异常：给出明确中断提示
-                yield f"\n\n⚠️ 流式输出中断：{type(e).__name__}: {str(e)[:120]}"
-
-        t0 = time.time()
-        raw = box.write_stream(_stream())
-        # 3) 共用后处理（剔模型 References → 清洗占位 → 确定性拼接 → 白名单校验）
-        try:
-            res = writing.finalize_outline(raw, refs_list, source, elapsed_sec=time.time() - t0)
-        except Exception as e:
-            show_error("处理大纲", e)
-            return
-        st.session_state.outline = res.get("text", "") or ""
-        st.session_state.outline_meta = res
-        if res.get("text") and not res.get("empty_library"):
-            cache[key] = res
-            st.session_state.outline_cache = cache
-
-    if st.button("🧱 生成框架（引用真实文献）"):
+    _outline_run = bg_running(kinds={_K_OUTLINE})
+    if st.button("🧱 生成框架（引用真实文献）", disabled=_outline_run,
+                 help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
         if not idea:
             st.warning("请先输入 Idea。")
         elif not writing.llm_available(ctx):
             st.warning("未配置 API Key，无法调用大模型。")
         else:
-            _gen(False)
+            # 缓存命中在主线程即时完成（无 LLM 调用，不占后台并发队列）；
+            # 未命中才提交后台 worker（Round 19：原内联流式生成冻结整个 UI，
+            # 且后台无人观看增量输出，进度改经任务中心上报）。
+            cache = st.session_state.get("outline_cache") or {}
+            key = (str(idea), str(preferred), False)
+            cached = cache.get(key)
+            if cached is not None:
+                st.session_state.outline = cached.get("text", "") or ""
+                st.session_state.outline_meta = cached
+                st.caption("⚡ 相同 Idea + 相同文献来源命中缓存，直接复用上次结果（未重新调用大模型）。")
+            else:
+                # idea/preferred 默认参数快照，防 worker 执行时读到改选后的值
+                bg_submit("论文框架：" + str(idea)[:30],
+                          lambda progress, _idea=idea, _pre=preferred:
+                              _w_outline(ctx, _idea, _pre, False, progress),
+                          kind=_K_OUTLINE)
+                _toast("🧱 已转入后台生成，可切换其他页面")
+    if _outline_run:
+        st.caption("⏳ 论文框架正在后台生成（进度见左侧「任务中心」）——可切换其他页面。")
 
     meta = st.session_state.get("outline_meta") or {}
     text = st.session_state.get("outline") or ""
@@ -387,11 +564,20 @@ def _outline_section(ctx):
     if v.get("n_allowed"):
         st.caption(f"参考：本次真实文献白名单共 {v.get('n_allowed')} 条，"
                    f"允许的引用角标范围是 [1..{v.get('n_allowed')}]。")
-    if st.button("🔁 重新生成（强化约束）"):
+    _outline_strict_run = bg_running(kinds={_K_OUTLINE})
+    if st.button("🔁 重新生成（强化约束）", disabled=_outline_strict_run,
+                 help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
         if not writing.llm_available(ctx):
             st.warning("未配置 API Key，无法调用大模型。")
         else:
-            _gen(True)
+            # strict=True 不走缓存（与旧内联 _gen(True) 一致，worker 内同样不读缓存）
+            bg_submit("论文框架（强化）：" + str(idea)[:30],
+                      lambda progress, _idea=idea, _pre=preferred:
+                          _w_outline(ctx, _idea, _pre, True, progress),
+                      kind=_K_OUTLINE)
+            _toast("🧱 已转入后台重新生成，可切换其他页面")
+    if _outline_strict_run:
+        st.caption("⏳ 论文框架正在后台重新生成（进度见左侧「任务中心」）——可切换其他页面。")
 
 
 # ---------------------------------------------------------------- 拓扑图渲染（T2/T3）
@@ -465,17 +651,23 @@ def _diagram_section(ctx):
     c1, c2 = st.columns(2)
     kind = c1.selectbox("类型", ["mermaid", "tikz", "graphviz", "matplotlib"], key="dg_kind")
     topic = c2.text_input("主题", key="topic")
-    if st.button("🎨 生成代码"):
+    _dg_run = bg_running(kinds={_K_DIAGRAM})
+    if st.button("🎨 生成代码", disabled=_dg_run,
+                 help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
         if not topic:
             st.warning("请先填写主题。")
         elif not writing.llm_available(ctx):
             st.warning("未配置 API Key，无法调用大模型。")
         else:
-            try:
-                with st.spinner("🎨 正在生成拓扑图代码…"):
-                    st.session_state.diagram = (kind, writing.diagram(ctx, kind, topic))
-            except Exception as e:
-                show_error("生成综述", e)
+            # Round 19 后台化：原内联 spinner 冻结整个 UI；kind/topic 默认参数快照，
+            # 防 worker 执行时读到用户改选后的值。
+            bg_submit("拓扑图代码（%s）：%s" % (kind, str(topic)[:24]),
+                      lambda progress, _kind=kind, _topic=topic:
+                          _w_diagram(ctx, _kind, _topic, progress),
+                      kind=_K_DIAGRAM)
+            _toast("🎨 已转入后台生成，可切换其他页面")
+    if _dg_run:
+        st.caption("⏳ 拓扑图代码正在后台生成（进度见左侧「任务中心」）——可切换其他页面。")
     dia = st.session_state.get("diagram")
     if not dia:
         return
@@ -517,20 +709,22 @@ def _translate_section(ctx):
     st.caption("💡 粘贴待翻译文本，选择中英方向，一键获得学术风格译文（需配置 API Key）。")
     direction = st.radio("方向", ["中→英", "英→中"], horizontal=True, key="trdir")
     text = st.text_area("粘贴文本", key="trtext", height=160)
-    if st.button("🔁 一键翻译"):
+    _tr_run = bg_running(kinds={_K_TRANSLATE})
+    if st.button("🔁 一键翻译", disabled=_tr_run,
+                 help="后台翻译：提交后可切换其他页面，进度见左侧「任务中心」"):
         if not text:
             st.warning("请先粘贴待翻译文本。")
         elif not writing.llm_available(ctx):
             st.warning("未配置 API Key，无法调用大模型。")
         else:
-            try:
-                with st.spinner("🌐 正在翻译…"):
-                    if direction == "中→英":
-                        st.session_state.trres = writing.translate_to_english(ctx, text) or ""
-                    else:
-                        st.session_state.trres = writing.translate_to_chinese(ctx, text) or ""
-            except Exception as e:
-                show_error("翻译正文", e)
+            # Round 19 后台化：原内联 spinner 冻结整个 UI；direction/text 默认参数快照。
+            bg_submit("学术翻译（%s）" % direction,
+                      lambda progress, _text=text, _to_en=(direction == "中→英"):
+                          _w_translate(ctx, _text, _to_en, progress),
+                      kind=_K_TRANSLATE)
+            _toast("🌐 已转入后台翻译，可切换其他页面")
+    if _tr_run:
+        st.caption("⏳ 翻译正在后台进行（进度见左侧「任务中心」）——可切换其他页面。")
     _tr = st.session_state.get("trres") or ""
     if _tr:
         # 离线占位不能当译文展示（Round 12 ②残留）：模型不可用时
@@ -542,6 +736,14 @@ def _translate_section(ctx):
 
 def render(ctx):
     _init_state()
+    # Round 19 后台化交付：5 类 LLM 长任务完成（含失败）时按 kind 认领写回状态。
+    # 必须置于各 section 渲染之前——交付处理器写 session_state 后，bg_consume
+    # 内部会触发整页重绘，本轮后续 section 读到的直接就是新结果。
+    bg_consume({_K_OUTLINE: _consume_outline,
+                _K_CAPTION_AUTO: _consume_caption_auto,
+                _K_CAPTION_CUSTOM: _consume_caption_custom,
+                _K_DIAGRAM: _consume_diagram,
+                _K_TRANSLATE: _consume_translate})
     page_header("✍️ 学术写作与可视化",
                 "CSV→自动出图+Figure Caption、无幻觉论文框架（白名单校验）、拓扑图真实渲染、中英学术翻译。")
     with st.container(border=True):

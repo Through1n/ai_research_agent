@@ -29,6 +29,8 @@ QA_LABEL = MENU[2] if "问答" in MENU[2] else next(m for m in MENU if "问答" 
 GRAPH_LABEL = next(m for m in MENU if "图谱" in m)
 AGENT_LABEL = MENU[0]
 LIB_LABEL = next(m for m in MENU if "文献库" in m)
+SEARCH_LABEL = next(m for m in MENU if "检索" in m)
+WRITING_LABEL = next(m for m in MENU if "写作" in m)
 
 problems = []
 
@@ -266,12 +268,388 @@ def case_library_metrics():
         _ok("KPI 概览", "点击「文献库」页签后 4 个指标均已渲染")
 
 
+# ----------------------------------------------------------------  case 6
+def case_library_bg_parse():
+    """文献库页「解析并查重」后台化端到端（2026-10 R19 后台化参考实现）。
+
+    链路：选文件 → 按钮渲染 → 挂受控慢任务验闸门（禁用+运行中提示）→
+    真实点击提交 → tid 登记 → 后台线程完成 → 页面渲染时 bg_consume 交付 →
+    自动入库（成功 flash）→ 闸门恢复 → 清理测试产物。
+    断言的是后台任务中心真的接进了页面（提交/闸门/交付三态），而非"渲染不崩"。
+    AppTest 无浏览器定时器，侧边栏 fragment 的"完成即重绘"不会自动发生，
+    由本测试轮询到终态后手动 at.run() 驱动（等价于用户一次交互）。
+    """
+    print("\n[6] 文献库页解析并查重：后台提交 → 闸门 → 自动交付")
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(fitz.Rect(72, 72, 500, 700),
+                        "Background parse probe paper for task center wiring. " * 60,
+                        fontsize=11)
+    pdf_bytes = doc.write()
+    doc.close()
+
+    from services import tasks as _tasks
+    from services import library as _lib
+
+    at = _new()
+    if not _goto(at, LIB_LABEL):
+        _fail("导航", "找不到文献库页菜单项")
+        return
+    try:
+        at.file_uploader[0].set_value(
+            (("bg_probe.pdf", pdf_bytes, "application/pdf"),)).run()
+    except Exception as e:
+        _fail("选文件", "file_uploader.set_value 失败：%s" % str(e)[:150])
+        return
+    at.run()
+    if "🔍 解析并查重" not in [b.label for b in at.button]:
+        _fail("按钮渲染", "选文件后未出现「解析并查重」按钮")
+        return
+    _ok("按钮渲染", "选文件后「解析并查重」出现")
+
+    # --- 闸门：挂一个受控慢任务（同类 kind），按钮应禁用 + 运行中提示可见 ---
+    def _slow(progress):
+        progress("受控慢任务（闸门测试）", 0.5)
+        time.sleep(5)
+        return "ok"
+    slow_tid = _tasks.submit("受控慢任务（闸门测试）", _slow, kind="library_parse")
+    at.session_state["_bg_task_ids"] = [slow_tid]
+    at.run()
+    cap = "\n".join(str(c.value) for c in at.caption)
+    if "⏳ 解析任务正在后台运行" not in cap:
+        _fail("闸门提示", "同类任务在跑时未显示运行中提示")
+    else:
+        _ok("闸门提示", "运行中提示可见")
+    btn = next((b for b in at.button if "解析并查重" in b.label), None)
+    if btn is not None and not btn.disabled:
+        _fail("闸门禁用", "同类任务在跑时按钮未禁用")
+    else:
+        _ok("闸门禁用", "按钮已禁用（防重复提交）")
+    _t0 = time.time()
+    while time.time() - _t0 < 30:            # 等慢任务终态再走真实提交，避免排队
+        if (_tasks.get(slow_tid) or {}).get("state") in ("done", "error"):
+            break
+        time.sleep(0.3)
+    at.session_state["_bg_task_ids"] = []
+    at.run()
+    # AppTest 特化行为：侧边栏 fragment 内 st.rerun(scope="app")（慢任务完成时触发）
+    # 会重置 AppTest 的 widget 状态，上传值丢失、按钮不再渲染。真实浏览器中
+    # st.rerun 保留 widget 状态（现有 agent 完成链路同款，线上无此问题），
+    # 故这里补一次 set_value 还原"文件仍选中"的真实状态，再走真实提交。
+    at.file_uploader[0].set_value(
+        (("bg_probe.pdf", pdf_bytes, "application/pdf"),)).run()
+    at.run()
+
+    # --- 真实提交（从任务中心按名字找 tid，兼容"已秒完成并被消费"的竞态） ---
+    if not _click(at, "🔍 解析并查重"):
+        _fail("提交", "点击「解析并查重」失败")
+        return
+    at.run()
+    mine = [t for t in _tasks.snapshot(limit=10)
+            if str(t.get("name", "")).startswith("解析并查重：bg_probe.pdf")]
+    if not mine:
+        _fail("提交登记", "任务中心找不到「解析并查重：bg_probe.pdf」")
+        return
+    tid = mine[-1]["id"]
+    _ok("提交登记", "tid=%s 已入后台任务中心" % tid[:8])
+
+    final = None
+    _t0 = time.time()
+    while time.time() - _t0 < 90:
+        final = _tasks.get(tid)
+        if final and final["state"] in ("done", "error"):
+            break
+        time.sleep(0.4)
+    if not final or final["state"] not in ("done", "error"):
+        _fail("后台执行", "90s 未进入终态：%s" % ((final or {}).get("state"),))
+        return
+    _ok("后台执行", "终态=%s（%s）" % (final["state"], str(final.get("stage"))[:40]))
+    at.run()                                  # 驱动渲染回合：bg_consume 交付
+    at.run()                                  # 结算回合（_commit 内部 st.rerun）
+
+    errs = _exceptions(at)
+    if errs:
+        _fail("交付渲染", "交付后未捕获异常：%s" % errs[:2])
+        return
+    # 主证据用持久副作用而非 flash：flash 是"渲染即 pop"的瞬态，交付若发生在
+    # 带内部 rerun 的那一轮，断言时它已被消费掉（AppTest 会跟随 fragment 内
+    # 的 st.rerun）。文献库状态才是"真的入库了"的硬证据。
+    try:
+        ctx = at.session_state["container"]
+        papers = list(getattr(ctx, "papers", {}).keys())
+    except Exception as e:
+        _fail("状态读取", "读不到容器状态：%s" % str(e)[:120])
+        return
+    if "bg_probe.pdf" in papers:
+        _ok("自动入库", "bg_probe.pdf 已在文献库（持久副作用实证）")
+    elif _ss_get(at, "pending"):
+        _ok("版本决策", "查重命中，pending 决策 UI 已渲染")
+    else:
+        err_text = "\n".join(str(e.value) for e in at.error)
+        _fail("结果落点", "文献库无 bg_probe.pdf 也无 pending；error 区：%s" % err_text[:150])
+        return
+    succ = "\n".join(str(s.value) for s in at.success)
+    if "已入库" in succ:
+        _ok("成功提示", "flash 成功提示可见（瞬态证据兜头彩）")
+    btn = next((b for b in at.button if "解析并查重" in b.label), None)
+    cap = "\n".join(str(c.value) for c in at.caption)
+    if btn is not None and btn.disabled:
+        _fail("闸门恢复", "任务完成但按钮仍禁用")
+    elif "⏳ 解析任务正在后台运行" in cap:
+        _fail("闸门恢复", "任务完成但运行中提示仍在")
+    else:
+        _ok("闸门恢复", "按钮与提示均已恢复")
+    try:
+        _lib.remove_paper(ctx, "bg_probe.pdf")
+        _ok("测试清理", "bg_probe.pdf 已从文献库移除")
+    except Exception as e:
+        _fail("测试清理", "移除 bg_probe.pdf 失败：%s" % str(e)[:120])
+
+
+# ----------------------------------------------------------------  case 7
+def case_search_background():
+    """板块4 检索页后台化：arXiv 检索提交 → 闸门 → 后台执行 → 自动交付 → 闸门恢复。
+
+    与 case 6 同款断言三态（提交登记 / 闸门两态 / 交付落点），差异：
+    用 **事件闸门打桩** search_arxiv（worker 阻塞在 Event.wait 上，由测试放行），
+    把"后台正在跑"变成确定性状态——不像 sleep 打桩那样与时序赛跑
+    （sleep 方案在慢机器上会让闸门断言假失败）。恢复在 finally 里做。
+    """
+    print("\n[7] 检索页 arXiv 检索：后台提交 → 闸门 → 自动交付")
+    import threading
+    import services.extern as _extern
+    from services import tasks as _tasks
+
+    _release = threading.Event()
+
+    def _stub(q, n=5):
+        _release.wait(timeout=60)            # 测试放行前一直"正在检索"
+        return [
+            {"title": "打桩论文甲：Attention Is All You Need", "arxiv_id": "1706.03762v7",
+             "published": "2023-08", "id": "1706.03762v7", "github": [],
+             "summary": "Stub summary for AppTest wiring verification. " * 5},
+            {"title": "打桩论文乙：BERT Pre-training of Deep Bidirectional Transformers",
+             "arxiv_id": "1810.04805v2", "published": "2019-05", "id": "1810.04805v2",
+             "github": [], "summary": "Another stub summary. " * 5},
+        ]
+
+    orig = _extern.search_arxiv
+    _extern.search_arxiv = _stub
+    try:
+        at = _new()
+        if not _goto(at, SEARCH_LABEL):
+            _fail("导航", "找不到检索页菜单项")
+            return
+        ti = next((t for t in at.text_input if getattr(t, "key", "") == "aq"), None)
+        if ti is None:
+            _fail("输入框", "找不到 arXiv 检索输入框（key=aq）")
+            return
+        ti.set_value("attention is all you need").run()
+        at.run()
+        if not _click(at, "🔍 搜索 arXiv"):
+            _fail("提交", "点击「🔍 搜索 arXiv」失败")
+            return
+        at.run()
+        ids = _ss_get(at, "_bg_task_ids") or []
+        tid = ids[-1] if ids else None
+        if tid is None:
+            mine = [t for t in _tasks.snapshot(limit=10)
+                    if str(t.get("name", "")).startswith("arXiv 检索：")]
+            tid = mine[-1]["id"] if mine else None
+        if tid is None:
+            _fail("提交登记", "任务中心找不到 arXiv 检索任务")
+            return
+        _ok("提交登记", "tid=%s 已入后台任务中心" % tid[:8])
+
+        # --- 闸门：worker 阻塞在 Event 上，"正在跑"是确定性状态 ---
+        st_info = _tasks.get(tid) or {}
+        if st_info.get("state") not in ("pending", "running"):
+            _fail("闸门前提", "点击后任务不在运行态：%s" % st_info.get("state"))
+            return
+        btn = next((b for b in at.button if "搜索 arXiv" in b.label), None)
+        if btn is None:
+            _fail("按钮渲染", "提交后「搜索 arXiv」按钮消失")
+            return
+        if not btn.disabled:
+            _fail("闸门禁用", "同类任务在跑时按钮未禁用")
+        else:
+            _ok("闸门禁用", "按钮已禁用（防重复提交）")
+        cap = "\n".join(str(c.value) for c in at.caption)
+        if "⏳ arXiv 检索正在后台运行" not in cap:
+            _fail("闸门提示", "未显示运行中提示：%r" % cap[:120])
+        else:
+            _ok("闸门提示", "运行中提示可见")
+
+        # --- 放行 worker → 等终态 → 驱动交付 ---
+        _release.set()
+        final = None
+        _t0 = time.time()
+        while time.time() - _t0 < 60:
+            final = _tasks.get(tid)
+            if final and final["state"] in ("done", "error"):
+                break
+            time.sleep(0.3)
+        if not final or final["state"] not in ("done", "error"):
+            _fail("后台执行", "放行后 60s 未进入终态：%s" % ((final or {}).get("state"),))
+            return
+        _ok("后台执行", "终态=%s（%s）" % (final["state"], str(final.get("stage"))[:40]))
+        at.run()                              # 驱动渲染回合：bg_consume 交付
+        at.run()                              # 结算回合（consume 内 st.rerun）
+
+        errs = _exceptions(at)
+        if errs:
+            _fail("交付渲染", "交付后未捕获异常：%s" % errs[:2])
+            return
+        # 主证据用持久副作用：结果落 session_state.arxiv_res 并真实渲染
+        md = _md_text(at)
+        if "打桩论文甲" in md and "打桩论文乙" in md:
+            _ok("结果渲染", "两篇打桩论文均已渲染（持久副作用实证）")
+        else:
+            _fail("结果渲染", "markdown 中找不到打桩论文：%r" % md[:150])
+            return
+        succ = "\n".join(str(s.value) for s in at.success)
+        if "检索到 2 篇论文" in succ:
+            _ok("成功提示", "flash 成功提示可见（瞬态证据兜头彩）")
+        btn2 = next((b for b in at.button if "搜索 arXiv" in b.label), None)
+        cap2 = "\n".join(str(c.value) for c in at.caption)
+        if btn2 is not None and btn2.disabled:
+            _fail("闸门恢复", "任务完成但按钮仍禁用")
+        elif "⏳ arXiv 检索正在后台运行" in cap2:
+            _fail("闸门恢复", "任务完成但运行中提示仍在")
+        else:
+            _ok("闸门恢复", "按钮与提示均已恢复")
+    finally:
+        _extern.search_arxiv = orig
+        _release.set()                        # 兜底放行，防止worker线程悬挂
+
+
+def case_writing_background():
+    """板块6 写作页后台化：Figure Caption 提交 → 闸门 → 后台执行 → 自动交付 → 闸门恢复。
+
+    为什么单测这一个是必要的：Round 19 半迁移态曾把该按钮改成 bg_submit 却漏接
+    bg_consume（_consume_caption_auto 成死代码）——用户点了没反应，而渲染冒烟
+    从不点这个按钮、单元测试不触 UI 交付链，缺陷直接漏到线上。本用例钉死三态：
+    提交登记 / 闸门两态 / 交付落点（auto_captions[0] 持久副作用）。
+
+    与 case 7 同款事件闸门打桩：worker 阻塞在 Event.wait 上由测试放行，
+    "正在跑"是确定性状态，不与时序赛跑。llm_available 打桩为 True——
+    测的是接线，不是 API Key（无 Key 环境下按钮守卫会直接拦下提交）。
+    """
+    print("\n[8] 写作页 Figure Caption：后台提交 → 闸门 → 自动交付")
+    import threading
+    from services import writing as _writing
+    from services import tasks as _tasks
+
+    _release = threading.Event()
+    _STUB_CAP = "Stub caption: the trend rises by 42% across 12 months."
+
+    def _stub_caption(ctx, df, chart_desc="", x=None, y=None):
+        _release.wait(timeout=60)
+        return _STUB_CAP
+
+    orig_cap, orig_avail = _writing.figure_caption, _writing.llm_available
+    _writing.figure_caption = _stub_caption
+    _writing.llm_available = lambda ctx: True
+    try:
+        at = _new()
+        if not _goto(at, WRITING_LABEL):
+            _fail("导航", "找不到写作页菜单项")
+            return
+        if not _click(at, "📂 载入示例数据"):
+            _fail("示例数据", "找不到「📂 载入示例数据」按钮")
+            return
+        at.run()
+        at.run()                          # 结算回合：chart_plan 推断 + 按钮渲染
+        if not any("生成该图 Figure Caption" in b.label for b in at.button):
+            _fail("按钮渲染", "载入示例数据后未出现「生成该图 Figure Caption」按钮"
+                             "（infer_chart_plan 可能返回空）")
+            return
+        _ok("按钮渲染", "自动推荐图表 + Caption 按钮已渲染")
+
+        if not _click(at, "🤖 生成该图 Figure Caption"):
+            _fail("提交", "点击「🤖 生成该图 Figure Caption」失败")
+            return
+        at.run()
+        ids = _ss_get(at, "_bg_task_ids") or []
+        tid = ids[-1] if ids else None
+        if tid is None:
+            mine = [t for t in _tasks.snapshot(limit=10)
+                    if str(t.get("name", "")).startswith("Figure Caption（图 1）")]
+            tid = mine[-1]["id"] if mine else None
+        if tid is None:
+            _fail("提交登记", "任务中心找不到 Figure Caption 任务")
+            return
+        _ok("提交登记", "tid=%s 已入后台任务中心" % tid[:8])
+
+        # --- 闸门：worker 阻塞在 Event 上，"正在跑"是确定性状态 ---
+        st_info = _tasks.get(tid) or {}
+        if st_info.get("state") not in ("pending", "running"):
+            _fail("闸门前提", "点击后任务不在运行态：%s" % st_info.get("state"))
+            return
+        btn = next((b for b in at.button if "生成该图 Figure Caption" in b.label), None)
+        if btn is None or not btn.disabled:
+            _fail("闸门禁用", "同类任务在跑时按钮未禁用")
+        else:
+            _ok("闸门禁用", "按钮已禁用（防重复提交）")
+        cap = "\n".join(str(c.value) for c in at.caption)
+        if "⏳ Figure Caption 正在后台生成" not in cap:
+            _fail("闸门提示", "未显示运行中提示：%r" % cap[:120])
+        else:
+            _ok("闸门提示", "运行中提示可见")
+
+        # --- 放行 worker → 等终态 → 驱动交付 ---
+        _release.set()
+        final = None
+        _t0 = time.time()
+        while time.time() - _t0 < 60:
+            final = _tasks.get(tid)
+            if final and final["state"] in ("done", "error"):
+                break
+            time.sleep(0.3)
+        if not final or final["state"] not in ("done", "error"):
+            _fail("后台执行", "放行后 60s 未进入终态：%s" % ((final or {}).get("state"),))
+            return
+        _ok("后台执行", "终态=%s" % final["state"])
+        at.run()                              # 驱动渲染回合：bg_consume 交付
+        at.run()                              # 结算回合（bg_consume 内 st.rerun）
+
+        errs = _exceptions(at)
+        if errs:
+            _fail("交付渲染", "交付后未捕获异常：%s" % errs[:2])
+            return
+        # 主证据用持久副作用：auto_captions[0] 被交付处理器写回（Round 19 断链bug
+        # 的直接 Regression：断链时此键永远缺失，而渲染冒烟根本点不到这个按钮）。
+        caps = _ss_get(at, "auto_captions") or {}
+        if caps.get(0) == _STUB_CAP:
+            _ok("结果落点", "auto_captions[0] 已写回打桩 caption（持久副作用实证）")
+        else:
+            _fail("结果落点", "auto_captions 未写回：%r" % (dict(caps),))
+            return
+        info = "\n".join(str(i.value) for i in at.info)
+        if _STUB_CAP in info:
+            _ok("结果渲染", "caption 已随页面渲染（st.info 可见）")
+        btn2 = next((b for b in at.button if "生成该图 Figure Caption" in b.label), None)
+        cap2 = "\n".join(str(c.value) for c in at.caption)
+        if btn2 is not None and btn2.disabled:
+            _fail("闸门恢复", "任务完成但按钮仍禁用")
+        elif "⏳ Figure Caption 正在后台生成" in cap2:
+            _fail("闸门恢复", "任务完成但运行中提示仍在")
+        else:
+            _ok("闸门恢复", "按钮与提示均已恢复")
+    finally:
+        _writing.figure_caption = orig_cap
+        _writing.llm_available = orig_avail
+        _release.set()                        # 兜底放行，防止 worker 线程悬挂
+
+
 def main():
     print("=" * 72)
     print("P7 UI/UX 交互点击验证（AppTest）")
     print("=" * 72)
     for fn in (case_jump_bar, case_jump_clear, case_empty_cards,
-               case_graph_metrics, case_library_metrics):
+               case_graph_metrics, case_library_metrics, case_library_bg_parse,
+               case_search_background, case_writing_background):
         try:
             fn()
         except Exception as e:            # 单场景崩溃不带走其余场景的证据
@@ -284,7 +662,7 @@ def main():
         for tag, msg in problems:
             print("   - %s: %s" % (tag, msg[:160]))
         return 1
-    print("🎉 交互验证全部通过（跳转落点 / 清除语义 / 空状态卡片 / KPI 指标条）")
+    print("🎉 交互验证全部通过（跳转落点 / 清除语义 / 空状态卡片 / KPI 指标条 / 解析后台化）")
     return 0
 
 

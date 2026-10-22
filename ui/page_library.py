@@ -10,8 +10,11 @@ from config import UPLOAD_DIR, MAX_UPLOAD_MB
 from services import library, parsing
 from ui.common import (ensure_state, page_header, pretty_table, resolve_pdf, friendly_error,
                        empty_state, llm_guard, long_block, step_text, metric_strip,
-                       LONG_TEXT_LIMIT)
+                       bg_submit, bg_consume, bg_running, LONG_TEXT_LIMIT)
 from ui.sidebar import set_flash
+
+# 后台任务 kind：本页"解析并查重"提交/认领的唯一标识（bg_consume 按它路由）
+_LIB_PARSE_KIND = "library_parse"
 
 # 文件级拒收（prepare_pdf 返回带 error 的 dict）的分档话术，键 = prepared["reason"]。
 # 取值来源 services/library.py：_validate_prepared(:501-530) 写 empty / scanned_no_ocr /
@@ -44,6 +47,7 @@ def _init():
         "meta_view": None,
         "formula_view": None,
         "ref_view": None,
+        "_parse_warnings": None,
     })
 
 
@@ -91,6 +95,81 @@ def _show_prepare_warnings(prepared):
             st.warning(f"🧾 检测为扫描件；OCR 存在失败：{str(prepared['ocr_error'])[:120]}")
         else:
             st.info("🧾 检测为扫描件，已通过多模态 OCR 提取文本。")
+
+
+def _parse_worker(ctx, data, filename, progress):
+    """后台线程执行 PDF 解析（2026-10 R19 后台化改造）。
+
+    硬约束：本函数运行在 services/tasks.py 的 worker 线程里，**禁止任何 st.\*
+    调用**（会报 missing ScriptRunContext）。进度只能经 progress 回调上报，
+    由侧边栏任务中心渲染。
+    """
+    def pcb(done, total, msg=None):
+        try:
+            pct = (float(done) / float(total)) if total else None
+        except Exception:
+            pct = None
+        progress(msg or ("已处理 %s/%s 页" % (done, total)), pct)
+
+    return library.prepare_pdf(ctx, data=data, filename=filename, progress_cb=pcb)
+
+
+def _prepare_warning_text(prepared):
+    """把解析告警压成一段文案（后台交付没有内联展开区，改用 session_state 单通道展示）。"""
+    parts = []
+    failed = prepared.get("failed_pages") or []
+    if failed:
+        pages = "、".join(f"p{fp.get('page')}" for fp in failed[:8])
+        parts.append(f"⚠️ 有 {len(failed)} 页解析失败（其余页正常入库）：{pages}"
+                     + ("…" if len(failed) > 8 else ""))
+    if prepared.get("truncated"):
+        parts.append(f"⚠️ PDF 疑似不完整：声称 {prepared.get('expected_pages', '?')} 页，"
+                     f"成功提取 {prepared.get('extracted_pages', '?')} 页；已按可提取部分入库，"
+                     f"建议核对原文件是否完整。")
+    if prepared.get("scanned"):
+        if prepared.get("ocr_error"):
+            parts.append(f"🧾 检测为扫描件；OCR 存在失败：{str(prepared['ocr_error'])[:120]}")
+        else:
+            parts.append("🧾 检测为扫描件，已通过多模态 OCR 提取文本。")
+    return "\n\n".join(parts)
+
+
+def _consume_parse(ctx, kind, t):
+    """后台解析完成交付：与旧内联流程逐分支等价（错误分档 / 版本决策 / 直接入库）。
+
+    注意 flash 是单槽位：告警走 _parse_warnings 独立通道，避免被 _commit 的
+    成功提示覆盖（2026-10 R19：后台化时发现的槽位冲突）。
+    """
+    if kind != _LIB_PARSE_KIND:
+        return
+    name = str(t.get("name") or "").replace("解析并查重：", "") or "PDF"
+    if t["state"] == "error":
+        set_flash("error", f"⚠️ 《{name}》解析失败：{str(t.get('error') or '')[:150]}"
+                           "\n\n🩺 可能原因：PDF 文件损坏 / 加密 / 超大导致超时；"
+                           "向量库写入失败或磁盘空间不足"
+                           "\n\n🛠️ 怎么办：重试一次；换一个体积更小的 PDF")
+        return
+    prepared = t.get("result")
+    if not isinstance(prepared, dict):
+        set_flash("error", f"⚠️ 《{name}》解析返回数据异常，未入库。请重试或换一个 PDF。")
+        return
+    if prepared.get("error"):
+        # 文件级拒收**不是异常**：按 reason 分档给原因/动作（与旧内联分支同一套话术）
+        _rs, _as_ = _PDF_ERR_TIPS.get(str(prepared.get("reason") or ""), _PDF_ERR_TIPS["_"])
+        set_flash("error", "⚠️ " + str(prepared.get("error"))
+                  + "\n\n🩺 可能原因：" + "；".join(_rs)
+                  + "\n\n🛠️ 怎么办：" + "；".join(_as_))
+        return
+    warn = _prepare_warning_text(prepared)
+    if warn:
+        st.session_state["_parse_warnings"] = warn
+    if prepared.get("dup_name"):
+        st.session_state.pending = prepared
+        msg = (f"⚠️ 语义查重命中：库中已有《{prepared.get('dup_name')}》，"
+               f"内容相似度 {float(prepared.get('dup_sim') or 0):.1%}。请在下方选择版本决策。")
+        set_flash("warning", msg)
+        return
+    _commit(ctx, prepared)      # 内部 set_flash(success) + st.rerun()
 
 
 def _render_library_health(ctx):
@@ -209,6 +288,10 @@ def _run_rebuild(ctx):
 
 def render(ctx):
     _init()
+    # 后台解析交付：任务完成（含失败）时按 kind 认领，等价旧内联流程的各分支。
+    # 必须放在页面顶部——flash 由 app.py 在页面渲染前重放，交付里写入的提示
+    # 依赖 bg_consume 内部的重绘才能在当轮可见。
+    bg_consume({_LIB_PARSE_KIND: lambda k, t: _consume_parse(ctx, k, t)})
     page_header("📁 文献库管理",
                 "基于内容 embedding 的语义去重（识别 arXiv v1/v7）、版本管理、细粒度多模态解析。",
                 icon="📁")
@@ -232,14 +315,22 @@ def render(ctx):
 
         # ---------------- 上传 & 语义查重 ----------------
         _section("⬆️ 上传 PDF", "自动解析并语义查重；命中已有论文会提示版本决策，扫描件走 OCR。")
+        # 上一轮后台解析的告警（失败页/截断/OCR 状态）在这里展示后即清——
+        # 独立于 flash 单槽位，避免被入库成功提示覆盖（R9 T4 的如实展示不能丢）。
+        _w = st.session_state.get("_parse_warnings")
+        if _w:
+            st.session_state["_parse_warnings"] = None
+            st.warning(str(_w))
         f = st.file_uploader("选择 PDF", type=["pdf"], key="lib_up")
-        if f and st.button("🔍 解析并查重"):
+        _parsing = bg_running(kinds={_LIB_PARSE_KIND})
+        if f and st.button("🔍 解析并查重", disabled=_parsing,
+                           help="后台解析：提交后可切换其他页面，实时进度见左侧任务中心"):
             if not f.name:
                 st.warning("⚠️ 未取得文件名，请重新选择文件。")
             else:
                 data = f.read()
-                # 应用层体积闸门（Round 12 场景 9）：超限在**解析之前**友好拒绝，
-                # 避免超大 PDF 一路走到解析/入库，页面长时间无反馈。
+                # 应用层体积闸门（Round 12 场景 9）：超限在**提交之前**友好拒绝，
+                # 避免超大 PDF 进了后台队列才报错、用户还不知道发生了什么。
                 try:
                     _mb = len(data) / 1048576.0
                 except Exception:
@@ -250,54 +341,19 @@ def render(ctx):
                     st.caption("🛠️ 怎么办：换一个更小的 PDF（建议 "
                                f"≤ {MAX_UPLOAD_MB} MB）；或先点击左侧"
                                "「🚀 一键加载演示数据」继续演示，其余功能不受影响。")
-                    st.stop()
-                bar = st.progress(0.0)
-                note = st.empty()
-
-                def cb(r, page):
+                else:
+                    bg_submit("解析并查重：" + f.name,
+                              lambda progress, _d=data, _n=f.name:
+                                  _parse_worker(ctx, _d, _n, progress),
+                              kind=_LIB_PARSE_KIND)
                     try:
-                        bar.progress(min(max(float(r), 0.0), 1.0))
-                        note.caption(step_text(f"📄 OCR/解析第 {page} 页"))
+                        st.toast("📄 已转入后台解析，进度见左侧任务中心，可随时切换其他页面",
+                                 icon="🚀")
                     except Exception:
                         pass
-
-                try:
-                    prepared = library.prepare_pdf(ctx, data=data, filename=f.name, progress_cb=cb)
-                    try:
-                        bar.empty()
-                        note.empty()
-                    except Exception:
-                        pass
-                    if not isinstance(prepared, dict):
-                        st.warning("⚠️ 解析返回数据异常，未入库。请重试或换一个 PDF。")
-                    elif prepared.get("error"):
-                        # 文件级拒收**不是异常**：真因直接上红框标题，按 prepared["reason"]
-                        # 分档给原因/动作。不走 friendly_error —— 这条路径的真因文案
-                        # （"打开 PDF 失败：…" / "PDF 没有任何可读页面（0 页）"）不含任何
-                        # 网络/HTTP 关键字，走通用话术只会被吞成"发生内部错误"。
-                        _rs, _as_ = _PDF_ERR_TIPS.get(str(prepared.get("reason") or ""),
-                                                      _PDF_ERR_TIPS["_"])
-                        st.error("⚠️ " + str(prepared.get("error")))
-                        st.caption("🩺 可能原因：" + "；".join(_rs))
-                        st.caption("🛠️ 怎么办：" + "；".join(_as_))
-                    else:
-                        # 失败页 / 截断 / 扫描件 OCR 状态如实展示后再决定入库（R9 T4）
-                        _show_prepare_warnings(prepared)
-                        if prepared.get("dup_name"):
-                            st.session_state.pending = prepared
-                        else:
-                            _commit(ctx, prepared)
-                except Exception as e:
-                    try:
-                        bar.empty()
-                        note.empty()
-                    except Exception:
-                        pass
-                    friendly_error("PDF 解析", e,
-                                   reasons=["PDF 文件损坏 / 加密 / 超大导致超时",
-                                            "向量库写入失败或磁盘空间不足"],
-                                   actions=["重试一次", "换一个体积更小的 PDF",
-                                            "或点击左侧「🚀 一键加载演示数据」继续演示"])
+        if _parsing:
+            st.caption("⏳ 解析任务正在后台运行（实时进度见左侧「任务中心」）——"
+                       "可切换其他页面，完成后结果自动出现在本页。")
 
         pend = st.session_state.get("pending")
         if pend and isinstance(pend, dict):

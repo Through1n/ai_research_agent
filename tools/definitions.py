@@ -238,9 +238,17 @@ def t_download(ctx, title):
     return _ingest_arxiv_paper(ctx, p)
 
 
-def t_batch_download(ctx, titles):
+def t_batch_download(ctx, titles, progress_cb=None):
+    """批量抓取入库。``progress_cb(i, n, line)`` 可选：供 UI 后台任务上报逐条进度
+    （2026-10 R19 后台化改造新增，Agent 工具调用不传即行为不变）。"""
     statuses = []
-    for line in [x.strip() for x in titles.split("\n") if x.strip()]:
+    lines = [x.strip() for x in titles.split("\n") if x.strip()]
+    for i, line in enumerate(lines, 1):
+        if progress_cb:
+            try:
+                progress_cb(i, len(lines), line)
+            except Exception:
+                pass
         p, err = extern.match_arxiv_title(line)
         if err:
             statuses.append({"query": line, "ok": False, "error": err}); continue
