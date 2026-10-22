@@ -506,7 +506,10 @@ border-left:1px dashed #dbe3ee;border-right:1px dashed #dbe3ee;}}
 .blk{{position:absolute;font-family:'Times New Roman',Times,serif;color:#1a1a1a;
 white-space:normal;overflow-wrap:break-word;word-break:break-word;user-select:text;}}
 .ln{{white-space:pre-wrap;}}
-.blk:hover{{background:#fff3b0;}}
+/* 悬停高亮：半透明底 + 细描边。块 bbox 可能远大于文字本身（通栏块/长换行块），
+   早期用不透明 #fff3b0 会把页面图片与相邻文本整片糊住（2026-10-22 用户实测
+   「鼠标放置遮挡图片」）；半透明化后既保留「当前在哪一块」的提示，又不遮内容。 */
+.blk:hover{{background:rgba(255,243,176,.42);box-shadow:inset 0 0 0 1px rgba(240,173,46,.5);}}
 .blk span{{user-select:text;}}
 /* T2：标题树点击后，命中的标题文字高亮（3 秒后由 JS 淡出） */
 .mk{{background:#ffe08a;border-radius:2px;box-shadow:inset 0 -2px 0 #f0ad2e;}}

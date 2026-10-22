@@ -90,6 +90,8 @@ def _init_state():
         st.session_state["qa_compare_papers"] = []
     if "qa_use_rerank" not in st.session_state:
         st.session_state["qa_use_rerank"] = False
+    if "qa_input" not in st.session_state:
+        st.session_state["qa_input"] = ""
     if "qa_run_seq" not in st.session_state:
         st.session_state["qa_run_seq"] = 0
 
@@ -229,9 +231,13 @@ def render(ctx):
     # ⚠️ 这里有两个坑（都是本项目踩过的）：
     #   ① widget 实例化后**禁止**回填它自己的 key（StreamlitWidgetAlreadyInstantiatedError），
     #      所以不能写 st.session_state["qa_ex_pills"] = None 来复位；
-    #   ② 但也不能什么都不做——pills 的选中态会保留，rerun 后 _sel 仍为真 → 无限 rerun。
-    # 解法沿用导航那套「独立影子键」：只在选项值**发生变化**时填入输入框并 rerun 一次，
-    # 影子键不是 widget 的 key，写入安全。
+    #   ② 也不能用「中段 st.rerun()」把问题刷进输入框——rerun 会让排在它后面的
+    #      multiselect 等 widget 本轮根本不实例化，Streamlit 据此把这些 widget 的
+    #      状态裁剪重置（2026-10-22 实测：用户选好的对比论文被清成 []，
+    #      反馈「我没法在此勾选论文比对」）。点击 pill 本身就会触发一次自动重跑，
+    #      同一轮里写输入框的显式 key 即可带入，无需二次 rerun。
+    # 解法：影子键 _qa_ex_prev 只在选项值**发生变化**时写入 qa_input（输入框的显式
+    # key，实例化前写入即默认值），不变化就不写——防止用户手改输入框后被选中态覆盖。
     # 说明：点击仅「填入」输入框（与改造前示例按钮语义一致），需用户再点「🔎 提问」才真正
     # 发起检索——避免误触就直接打真实模型。
     _sel = st.pills("💡 试试这些问题（点击填入下方输入框，再点「🔎 提问」）",
@@ -240,8 +246,8 @@ def render(ctx):
         _val = _sel if isinstance(_sel, str) else (_sel[0] if _sel else "")
         if _val and _val != st.session_state.get("_qa_ex_prev"):
             st.session_state["qa_q"] = _val
+            st.session_state["qa_input"] = _val   # 输入框显式 key：实例化前写入即默认值
             st.session_state["_qa_ex_prev"] = _val   # 影子键：非 widget key，可安全写
-            st.rerun()
 
     # ---------- 范围选择（单篇锁定 / 多篇对比） ----------
     scope = st.radio("检索范围", ["全部文献", "单篇"], horizontal=True, key="qa_scope_mode")
@@ -270,7 +276,7 @@ def render(ctx):
     use_rerank = st.checkbox("启用 LLM 重排（更精准，耗额度）", key="qa_use_rerank")
 
     with st.form("qa_form", clear_on_submit=True):
-        q = st.text_input("请输入问题", value=st.session_state.get("qa_q", ""),
+        q = st.text_input("请输入问题", key="qa_input",
                           placeholder="例如：这篇论文提出了什么模型？（支持中文提问，自动做中英检索扩展）")
         go = st.form_submit_button("🔎 提问")
 
@@ -356,6 +362,7 @@ def render(ctx):
                 })
                 st.session_state["qa_run_seq"] += 1
                 st.session_state["qa_q"] = ""
+                st.session_state["qa_input"] = ""   # 与 clear_on_submit 对齐：提交后清空输入框
                 st.rerun()
 
     # ---------- 历史问答渲染（答案优先，证据/调试默认折叠，保持界面整洁） ----------

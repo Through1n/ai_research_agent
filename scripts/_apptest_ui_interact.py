@@ -8,6 +8,11 @@
   3) 三个教学式空状态卡片真实渲染（问答无历史 / Agent 无记录 / 图谱未构建）；
   4) 图谱页「🎭 演示模式示意图谱」点击后 KPI 指标条渲染真实数值；
   5) 文献库页「文献库」页签 KPI 概览指标条渲染。
+  6-8) 板块 1/4/6 长任务后台化三态（提交登记 / 闸门两态 / 交付落点，事件闸门打桩）；
+  9) 问答页「多篇对比」选中不被 pill 重跑抹掉（2026-10-22 用户缺陷回归：
+     中段 st.rerun 曾把后面 widget 的状态裁剪重置）；
+  10) 文献库页元数据抽取后台化三态（LLM 打桩，板块冻结缺陷回归）。
+  11) 文献库页细粒度结构解析后台化三态（最重 worker：三解析调用 + 插图落盘）。
 
 用法：python scripts/_apptest_ui_interact.py
 退出码：0 = 全部通过；1 = 有失败项（明细打印到 stdout）。
@@ -31,6 +36,7 @@ AGENT_LABEL = MENU[0]
 LIB_LABEL = next(m for m in MENU if "文献库" in m)
 SEARCH_LABEL = next(m for m in MENU if "检索" in m)
 WRITING_LABEL = next(m for m in MENU if "写作" in m)
+QA_EX0 = "这篇论文提出了什么模型？"   # 与 ui/page_qa.py 的 EX[0] 一致（示例问题首个）
 
 problems = []
 
@@ -643,13 +649,303 @@ def case_writing_background():
         _release.set()                        # 兜底放行，防止 worker 线程悬挂
 
 
+# ----------------------------------------------------------------  case 9
+def case_qa_compare_survives_pill():
+    """问答页「多篇对比」选中不被 pill 重跑抹掉（2026-10-22 用户缺陷回归）。
+
+    根因：pills 处理器曾在脚本中段 st.rerun()，导致其后实例化的 multiselect 等
+    widget 本轮不注册、状态被裁剪重置——用户选好的对比论文被清成 []，
+    反馈「我没法在此勾选论文比对」。修复：去掉中段 rerun，改写入输入框显式 key。
+    本用例钉死三件事：① 选中可累积；② 点 pill 后选中不丢；③ 输入框被填入且
+    不被选中态覆盖手改。
+    """
+    print("\n[9] 问答页多篇对比：选论文 → 点 pill → 选中不丢 / 输入框填入")
+    at = _new()
+    if not _goto(at, QA_LABEL):
+        _fail("导航", "找不到问答页菜单项")
+        return
+    ms = next((m for m in at.multiselect if "多篇对比" in str(m.label)), None)
+    if ms is None:
+        _fail("控件渲染", "找不到多篇对比 multiselect")
+        return
+    opts = list(ms.options)
+    if len(opts) < 2:
+        _fail("前置", "库内论文不足 2 篇，无法验证多选：%r" % (opts[:5],))
+        return
+    _ok("选项就绪", "可选 %d 篇（取前两篇验证）" % len(opts))
+
+    ms.select(opts[0]).run()
+    at.run()
+    picked = _ss_get(at, "qa_compare_papers")
+    if picked == [opts[0]]:
+        _ok("单选生效", "session_state 已登记 %r" % picked)
+    else:
+        _fail("单选生效", "qa_compare_papers=%r" % (picked,))
+        return
+
+    pills = next((p for p in at.pills if "试试这些问题" in str(p.label)), None)
+    if pills is None:
+        _fail("控件渲染", "找不到示例问题 pills")
+        return
+    pills.set_value(QA_EX0).run()
+    at.run()                                  # 结算回合（点击与清理之间还有一次渲染）
+    after = _ss_get(at, "qa_compare_papers")
+    if after == [opts[0]]:
+        _ok("选中保持", "点 pill 后对比选中未被抹掉：%r" % (after,))
+    else:
+        _fail("选中保持", "点 pill 后 qa_compare_papers=%r（中段 rerun 抹选回归！）" % (after,))
+        return
+    if _ss_get(at, "qa_input") == QA_EX0:
+        _ok("输入框填入", "qa_input 已被填入示例问题")
+    else:
+        _fail("输入框填入", "qa_input=%r" % (_ss_get(at, "qa_input"),))
+    ti = next((t for t in at.text_input if "请输入问题" in str(t.label)), None)
+    if ti is not None and ti.value == QA_EX0:
+        _ok("输入框渲染", "输入框可见值为示例问题")
+    else:
+        _fail("输入框渲染", "输入框值=%r" % (getattr(ti, "value", None),))
+
+    # 手改输入框 → 勾重排（普通 rerun）→ 不应被仍选中的 pill 覆盖
+    ti.set_value("手改的问题").run()
+    at.run()
+    cb = next((c for c in at.checkbox if "重排" in str(c.label)), None)
+    if cb is not None:
+        cb.set_value(True).run()
+        at.run()
+        if _ss_get(at, "qa_input") == "手改的问题":
+            _ok("手改不被覆盖", "影子键逻辑仍生效")
+        else:
+            _fail("手改不被覆盖", "qa_input=%r" % (_ss_get(at, "qa_input"),))
+    errs = _exceptions(at)
+    if errs:
+        _fail("渲染异常", "流程后未捕获异常：%s" % errs[:2])
+    else:
+        _ok("渲染异常", "全流程 0 异常")
+
+
+# ----------------------------------------------------------------  case 10
+def case_library_meta_background():
+    """文献库页元数据抽取后台化全链路（2026-10-22 用户缺陷：板块冻结回归）。
+
+    与 case 6/7/8 同款断言三态（提交登记 / 闸门两态 / 交付落点），差异：
+    worker 里的 ctx.llm.json_chat 用事件闸门打桩（真实 open_doc 照跑），
+    LLM 不可用也能确定性地验证「后台抽取 → 自动交付 → meta_view 落点」。
+    """
+    print("\n[10] 文献库页元数据抽取：后台提交 → 闸门 → 自动交付 → 落点")
+    import threading
+    from services import tasks as _tasks
+    from ui.common import resolve_pdf as _resolve_pdf
+
+    _release = threading.Event()
+    _STUB_META = {"title": "Attention Is All You Need", "authors": ["Ashish Vaswani"],
+                  "institution": "Google Brain", "abstract": "Stub abstract for wiring."}
+
+    class _StubLLM:
+        available = True
+
+        def json_chat(self, msgs, **kw):
+            _release.wait(timeout=60)
+            return dict(_STUB_META)
+
+    at = _new()
+    if not _goto(at, LIB_LABEL):
+        _fail("导航", "找不到文献库页菜单项")
+        return
+    ctx = at.session_state["container"]
+    target = next((f for f in getattr(ctx, "files", []) if _resolve_pdf(f)), None)
+    if target is None:
+        _fail("前置", "库内没有带原始 PDF 的论文，无法跑通抽取")
+        return
+    _ok("目标论文", "%s（resolve_pdf 可达原始文件）" % target)
+    sb = next((s for s in at.selectbox if getattr(s, "key", "") == "meta_sel"), None)
+    if sb is None:
+        _fail("控件渲染", "找不到元数据板块「选择论文」下拉框")
+        return
+    sb.set_value(target).run()
+    at.run()
+
+    orig_llm = ctx.llm
+    ctx.llm = _StubLLM()
+    try:
+        if not _click(at, "🤖 抽取标题/作者/机构/摘要 + 判断排版"):
+            _fail("提交", "点击元数据抽取按钮失败")
+            return
+        at.run()
+        ids = _ss_get(at, "_bg_task_ids") or []
+        tid = ids[-1] if ids else None
+        if tid is None:
+            mine = [t for t in _tasks.snapshot(limit=10)
+                    if str(t.get("name", "")).startswith("元数据抽取：")]
+            tid = mine[-1]["id"] if mine else None
+        if tid is None:
+            _fail("提交登记", "任务中心找不到元数据抽取任务")
+            return
+        _ok("提交登记", "tid=%s 已入后台任务中心" % tid[:8])
+
+        # --- 闸门：worker 阻塞在 Event 上，"正在跑"是确定性状态 ---
+        st_info = _tasks.get(tid) or {}
+        if st_info.get("state") not in ("pending", "running"):
+            _fail("闸门前提", "点击后任务不在运行态：%s" % st_info.get("state"))
+            return
+        btn = next((b for b in at.button if "抽取标题/作者/机构/摘要" in b.label), None)
+        if btn is None or not btn.disabled:
+            _fail("闸门禁用", "同类任务在跑时按钮未禁用")
+        else:
+            _ok("闸门禁用", "按钮已禁用（防重复提交）")
+        cap = "\n".join(str(c.value) for c in at.caption)
+        if "⏳ 元数据抽取正在后台运行" not in cap:
+            _fail("闸门提示", "未显示运行中提示：%r" % cap[:120])
+        else:
+            _ok("闸门提示", "运行中提示可见（板块其他控件不再冻结）")
+
+        # --- 放行 worker → 等终态 → 驱动交付 ---
+        _release.set()
+        final = None
+        _t0 = time.time()
+        while time.time() - _t0 < 60:
+            final = _tasks.get(tid)
+            if final and final["state"] in ("done", "error"):
+                break
+            time.sleep(0.3)
+        if not final or final["state"] not in ("done", "error"):
+            _fail("后台执行", "放行后 60s 未进入终态：%s" % ((final or {}).get("state"),))
+            return
+        _ok("后台执行", "终态=%s" % final["state"])
+        at.run()                              # 驱动渲染回合：bg_consume 交付
+        at.run()                              # 结算回合（bg_consume 内 st.rerun）
+
+        errs = _exceptions(at)
+        if errs:
+            _fail("交付渲染", "交付后未捕获异常：%s" % errs[:2])
+            return
+        # 主证据用持久副作用：meta_view 被交付处理器写回（半迁移态下此键永远缺失）
+        view = _ss_get(at, "meta_view")
+        if view == _STUB_META:
+            _ok("结果落点", "meta_view 已写回打桩元数据（持久副作用实证）")
+        else:
+            _fail("结果落点", "meta_view=%r" % (view,))
+            return
+        succ = "\n".join(str(s.value) for s in at.success)
+        if "元数据抽取完成" in succ:
+            _ok("成功提示", "flash 成功提示可见")
+        btn2 = next((b for b in at.button if "抽取标题/作者/机构/摘要" in b.label), None)
+        cap2 = "\n".join(str(c.value) for c in at.caption)
+        if btn2 is not None and btn2.disabled:
+            _fail("闸门恢复", "任务完成但按钮仍禁用")
+        elif "⏳ 元数据抽取正在后台运行" in cap2:
+            _fail("闸门恢复", "任务完成但运行中提示仍在")
+        else:
+            _ok("闸门恢复", "按钮与提示均已恢复")
+    finally:
+        ctx.llm = orig_llm
+        _release.set()                        # 兜底放行，防止 worker 线程悬挂
+
+
+# ----------------------------------------------------------------  case 11
+def case_library_struct_background():
+    """文献库页细粒度结构解析后台化（2026-10-22 板块冻结回归，最重 worker）。
+
+    worker 内含 open_doc + extract_toc/tables/figures 三个解析调用与插图落盘，
+    是本轮后台化里逻辑最重的一个；视觉路径保持关闭（默认复选框态），
+    用真实 PDF 跑通「后台解析 → 自动交付 → struct 落点 → 闸门恢复」。
+    """
+    print("\n[11] 文献库页结构解析：后台提交 → 闸门 → 自动交付 → 落点")
+    import threading
+    from services import tasks as _tasks
+    from ui.common import resolve_pdf as _resolve_pdf
+
+    _release = threading.Event()
+
+    class _StubLLM:
+        available = True
+
+        def json_chat(self, msgs, **kw):
+            return {"stub": True}
+
+    at = _new()
+    if not _goto(at, LIB_LABEL):
+        _fail("导航", "找不到文献库页菜单项")
+        return
+    ctx = at.session_state["container"]
+    target = next((f for f in getattr(ctx, "files", []) if _resolve_pdf(f)), None)
+    if target is None:
+        _fail("前置", "库内没有带原始 PDF 的论文，无法跑通解析")
+        return
+    _ok("目标论文", "%s" % target)
+    sb = next((s for s in at.selectbox if getattr(s, "key", "") == "struct_sel"), None)
+    if sb is None:
+        _fail("控件渲染", "找不到结构解析板块「选择论文」下拉框")
+        return
+    sb.set_value(target).run()
+    at.run()
+
+    orig_llm = ctx.llm
+    ctx.llm = _StubLLM()
+    try:
+        if not _click(at, "🧩 全方位解析（标题树/表格/图表）"):
+            _fail("提交", "点击全方位解析按钮失败")
+            return
+        at.run()
+        ids = _ss_get(at, "_bg_task_ids") or []
+        tid = ids[-1] if ids else None
+        if tid is None:
+            mine = [t for t in _tasks.snapshot(limit=10)
+                    if str(t.get("name", "")).startswith("结构解析：")]
+            tid = mine[-1]["id"] if mine else None
+        if tid is None:
+            _fail("提交登记", "任务中心找不到结构解析任务")
+            return
+        _ok("提交登记", "tid=%s 已入后台任务中心" % tid[:8])
+
+        final = None
+        _t0 = time.time()
+        while time.time() - _t0 < 120:
+            final = _tasks.get(tid)
+            if final and final["state"] in ("done", "error"):
+                break
+            time.sleep(0.5)
+        if not final or final["state"] not in ("done", "error"):
+            _fail("后台执行", "120s 未进入终态：%s" % ((final or {}).get("state"),))
+            return
+        _ok("后台执行", "终态=%s%s" % (final["state"],
+                                        "（%s）" % str(final.get("error"))[:80] if final["state"] == "error" else ""))
+        at.run()                              # 驱动渲染回合：bg_consume 交付
+        at.run()                              # 结算回合（bg_consume 内 st.rerun）
+
+        errs = _exceptions(at)
+        if errs:
+            _fail("交付渲染", "交付后未捕获异常：%s" % errs[:2])
+            return
+        stobj = _ss_get(at, "struct")
+        if isinstance(stobj, dict) and stobj.get("file") == target:
+            _ok("结果落点", "struct 已写回（toc %d 项 / 表 %d 个 / 图 %d 张）"
+                % (len(stobj.get("toc") or []), len(stobj.get("tables") or []),
+                   len(stobj.get("figs") or [])))
+        else:
+            _fail("结果落点", "struct=%r" % (stobj,))
+            return
+        btn2 = next((b for b in at.button if "全方位解析" in b.label), None)
+        cap2 = "\n".join(str(c.value) for c in at.caption)
+        if btn2 is not None and btn2.disabled:
+            _fail("闸门恢复", "任务完成但按钮仍禁用")
+        elif "⏳ 结构解析正在后台运行" in cap2:
+            _fail("闸门恢复", "任务完成但运行中提示仍在")
+        else:
+            _ok("闸门恢复", "按钮与提示均已恢复")
+    finally:
+        ctx.llm = orig_llm
+        _release.set()
+
+
 def main():
     print("=" * 72)
     print("P7 UI/UX 交互点击验证（AppTest）")
     print("=" * 72)
     for fn in (case_jump_bar, case_jump_clear, case_empty_cards,
                case_graph_metrics, case_library_metrics, case_library_bg_parse,
-               case_search_background, case_writing_background):
+               case_search_background, case_writing_background,
+               case_qa_compare_survives_pill, case_library_meta_background,
+               case_library_struct_background):
         try:
             fn()
         except Exception as e:            # 单场景崩溃不带走其余场景的证据

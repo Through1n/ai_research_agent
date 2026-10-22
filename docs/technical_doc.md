@@ -601,7 +601,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![问答与溯源页](shots/p2.png)
 
-问答页把第 4.6 节的四道防线完整暴露给用户：每条答案带【n】角标；溯源卡片（`anchor_card@ui/page_qa.py:101`）含可点击页码徽章（页内锚点）、相关度分数、页内段号、可折叠原文片段（前 200 字），以及"📖 打开阅读页"跨页跳转（session_state `qa_jump_page` + query_params 双通道，消费端 `_consume_qa_jump@ui/page_reading.py:867`）；调试区展示查询变体、dense/sparse 分量、修复次数。多篇对比勾选 2–5 篇后按【Pn-m】分组角标输出分论文陈述 + 对比表。
+问答页把第 4.6 节的四道防线完整暴露给用户：每条答案带【n】角标；溯源卡片（`anchor_card@ui/page_qa.py:103`）含可点击页码徽章（页内锚点）、相关度分数、页内段号、可折叠原文片段（前 200 字），以及"📖 打开阅读页"跨页跳转（session_state `qa_jump_page` + query_params 双通道，消费端 `_consume_qa_jump@ui/page_reading.py:867`）；调试区展示查询变体、dense/sparse 分量、修复次数。多篇对比勾选 2–5 篇后按【Pn-m】分组角标输出分论文陈述 + 对比表。
 
 **Round 7/8 真实 API 实测：赛题原文点名的三类细粒度问题**（素材 `pdf/1706.03762v7.pdf`，期望值全部取自论文正文真值）：
 
@@ -621,7 +621,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![版式阅读与翻译页](shots/p3.png)
 
-原生版式渲染（`native_page_html@services/translate.py:430`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:525`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:768`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:694`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
+原生版式渲染（`native_page_html@services/translate.py:430`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:528`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:771`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:697`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
 
 ## 5.4 论文检索、追踪与推荐（模块③主体）
 
@@ -813,7 +813,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 - **代码**：39 个 Python 模块文件（core 10 / services 14 / tools 3 / ui 12）加 `app.py` 与 `config.py`；9 个交互页面；严格自上而下的四层依赖（`ui → services → core`、`tools → services`）。运行时数据集中在 `storage/`（路径由 `config.py` 定义为 `STORAGE_DIR` 并启动时自动建子目录）；另有 3 处直连落盘：`core/llm.py`（失败日志）、`services/citation_quality.py`（引用质量缓存）、`services/library.py`（上传目录与重建前备份）。
 - **能力面**：6 个专家、5 家可切换 Provider、7 张真实截图（`docs/shots/p0–p6`，一图一模块）。
-- **测试**：单元测试 181/181；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 61/61；其余复跑脚本（官方四用例、图谱压测、截图重定向、桌面版校验）全部留在 `scripts/`（附录 A）。
+- **测试**：单元测试 190/190；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 61/61；其余复跑脚本（官方四用例、图谱压测、截图重定向、桌面版校验）全部留在 `scripts/`（附录 A）。
 - **过程留痕**：`docs/review/` 下 Round 1–11 累计 **45 份**历史过程报告（含 `FINAL_SUMMARY.md`），Round 12 审计与部署报告 **13 份**，Round 13 **6 份**，均另列于附录 B。每份都交代了"改了哪些文件、实测数字是什么、哪些没修"。
 - **交付物**：技术文档（本文档）、README、演示视频脚本、在线演示部署指南、桌面版指南、团队信息与 Docker/桌面两条部署链路；另有答辩问答手册、录制工程化脚本、提交历史分析、一键复现包（`start.bat`/`start.sh`/`Dockerfile.quick`）与评委 FAQ。
 
@@ -919,7 +919,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 ## 9.4 AI 使用边界与诚实声明
 
 - **可追溯性**：本节每条经验都对应一次真实运行，证据落在 Round 7/8 各修复报告（路径见附录 B）。
-- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 181/181、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
+- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 190/190、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
 - **AI 未参与**：真实 API Key 的获取与管理、演示视频录制、`docs/团队信息.md` 署名内容。
 - **尚未做到**：AI 目前主要覆盖"修复已知缺陷"与"撰写文档"，**不足以独立判断哪些功能该做**（如是否自建 ≥20 篇图谱 fixture），优先级决策仍由人工承担。
 
@@ -1001,7 +1001,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 ```bash
 PY=C:/Users/Administrator/anaconda3/envs/ai_research/python.exe
 $PY -m compileall -q core services tools ui app.py config.py   # ① 字节码
-$PY -m unittest discover -s tests                                 # ② 期望 181 OK
+$PY -m unittest discover -s tests                                 # ② 期望 190 OK
 $PY scripts/_smoke_ui.py                                          # ③ 9 页面 0 异常
 $PY scripts/_smoke_read.py                                        # ④ 阅读页专项（勿与③并行）
 $PY scripts/_check_doc_refs.py                                    # ⑤ 引用校验 0 疑似

@@ -13,8 +13,17 @@ from ui.common import (ensure_state, page_header, pretty_table, resolve_pdf, fri
                        bg_submit, bg_consume, bg_running, LONG_TEXT_LIMIT)
 from ui.sidebar import set_flash
 
-# 后台任务 kind：本页"解析并查重"提交/认领的唯一标识（bg_consume 按它路由）
+# 后台任务 kind：本页各长任务提交/认领的唯一标识（bg_consume 按它路由）。
+# R19 只后台化了「解析并查重」；元数据抽取 / 全方位解析 / 公式 / 参考文献四个按钮
+# 仍是内联 spinner——用户实测「运行其中一个，同板块其他项目全部无法操作」
+# （内联 LLM 调用占住主线程，整个页面冻结）。2026-10-22 按同一模式补齐全。
+# ⚠️ 半迁移态比不迁移更危险：只接 submit 漏接 consume = 结果永久丢失且零测试覆盖
+# （writing 页踩过），四个 kind 的 submit/consume 必须成对接线。
 _LIB_PARSE_KIND = "library_parse"
+_LIB_META_KIND = "library_meta"
+_LIB_STRUCT_KIND = "library_struct"
+_LIB_FORMULA_KIND = "library_formula"
+_LIB_REF_KIND = "library_ref"
 
 # 文件级拒收（prepare_pdf 返回带 error 的 dict）的分档话术，键 = prepared["reason"]。
 # 取值来源 services/library.py：_validate_prepared(:501-530) 写 empty / scanned_no_ocr /
@@ -69,13 +78,6 @@ def _section(title, desc=""):
     st.markdown(block, unsafe_allow_html=True)
 
 
-def _struct_error_hint(what, e):
-    """结构性解析失败统一话术。"""
-    friendly_error(what, e,
-                   reasons=["PDF 文件损坏或加密", "该论文是演示语料，无原始 PDF 文件"],
-                   actions=["重新上传完整 PDF", "或改用「📁 文献库管理」中已有纸质元数据进行演示"])
-
-
 def _show_prepare_warnings(prepared):
     """入库前如实展示解析告警：失败页清单、截断警示、扫描件 OCR 状态（R9 T4）。"""
     failed = prepared.get("failed_pages") or []
@@ -112,6 +114,99 @@ def _parse_worker(ctx, data, filename, progress):
         progress(msg or ("已处理 %s/%s 页" % (done, total)), pct)
 
     return library.prepare_pdf(ctx, data=data, filename=filename, progress_cb=pcb)
+
+
+def _meta_worker(ctx, pdf_path, progress):
+    """后台线程执行元数据抽取（2026-10-22 后台化补全，消除板块冻结）。
+
+    与旧内联流程逐步骤等价：open_doc → 首页文本/尺寸/分栏判定 → LLM JSON。
+    硬约束：worker 线程内禁止任何 st.* 调用。
+    """
+    progress("打开 PDF 并读取首页", 0.15)
+    doc = parsing.open_doc(str(pdf_path))
+    try:
+        first = doc[0].get_text()[:3000]
+        pw, ph = doc[0].rect.width, doc[0].rect.height
+        blocks = doc[0].get_text("blocks")
+        lb = sum(1 for b in blocks if b[0] < pw / 2)
+        rb = sum(1 for b in blocks if b[0] > pw / 2)
+        layout = "双栏" if lb and rb else "单栏"
+        prompt = (f"从首页抽取 标题/作者/机构/摘要，输出纯净 JSON。"
+                  f"页面 {pw:.0f}×{ph:.0f}，{layout}。\n文本：{first}")
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+    progress("调用大模型抽取元数据", 0.6)
+    result = ctx.llm.json_chat([{"role": "user", "content": prompt}])
+    progress("抽取完成", 1.0)
+    return result
+
+
+def _struct_worker(ctx, pdf_path, filename, with_vision, progress):
+    """后台线程执行细粒度结构解析（标题树/表格/插图 + 可选多模态读图）。
+
+    与旧内联流程逐步骤等价；vision 未可用的告警不抛异常，随结果带回交付。
+    硬约束：worker 线程内禁止任何 st.* 调用。
+    """
+    progress("打开 PDF", 0.1)
+    doc = parsing.open_doc(str(pdf_path))
+    try:
+        progress("解析标题树", 0.3)
+        toc = parsing.extract_toc(doc)
+        progress("解析表格", 0.5)
+        tables = parsing.extract_tables(doc)
+        progress("提取插图", 0.75)
+        fig_dir = os.path.join(str(UPLOAD_DIR), "figs", str(filename).replace(".pdf", ""))
+        figs = parsing.extract_figures(doc, fig_dir)
+        vision_note = ""
+        if with_vision and figs:
+            if getattr(getattr(ctx, "llm", None), "available", False):
+                def _vcb(r):
+                    try:
+                        ratio = min(max(float(r), 0.0), 1.0)
+                        progress("多模态逐图理解 %.0f%%" % (ratio * 100), 0.75 + 0.25 * ratio)
+                    except Exception:
+                        pass
+                parsing.describe_figures(figs, ctx.llm, _vcb)
+            else:
+                vision_note = "⚠️ 未检测到可用多模态模型，已跳过图片理解（不影响其余结构解析）。"
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+    return {"file": filename, "toc": toc or [], "tables": tables or [],
+            "figs": figs or [], "vision_note": vision_note}
+
+
+def _formula_worker(ctx, filename, progress):
+    """后台线程执行 LaTeX 公式抽取（正文文本来自已入库 chunks）。"""
+    progress("收集正文片段", 0.2)
+    text = "\n".join(c["text"] for c in ctx.chunks if c.get("source") == filename)[:6000]
+    if not text.strip():
+        return {"items": None, "note": "该论文暂无可分析的正文文本，换一篇论文试试。"}
+    progress("调用大模型抽取公式", 0.7)
+    items = ctx.llm.json_chat([{"role": "user",
+                                "content": f"提取数学公式，输出JSON数组，每条 {{name,latex(不含$)}}。\n{text}"}])
+    return {"items": items, "note": ""}
+
+
+def _ref_worker(ctx, pdf_path, progress):
+    """后台线程执行参考文献结构化（读 PDF 尾部参考文献区 → LLM JSON）。"""
+    progress("打开 PDF 并读取参考文献区", 0.3)
+    doc = parsing.open_doc(str(pdf_path))
+    try:
+        raw = parsing.extract_references_raw(doc)[:8000]
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+    progress("调用大模型结构化", 0.8)
+    return ctx.llm.json_chat([{"role": "user",
+                               "content": "提取参考文献，输出JSON数组，每条 {id,authors,title,year,venue}；无法识别填'未识别'。\n" + raw}])
 
 
 def _prepare_warning_text(prepared):
@@ -170,6 +265,89 @@ def _consume_parse(ctx, kind, t):
         set_flash("warning", msg)
         return
     _commit(ctx, prepared)      # 内部 set_flash(success) + st.rerun()
+
+
+def _consume_meta(ctx, kind, t):
+    """元数据抽取完成交付：写 meta_view + flash 提示。"""
+    if kind != _LIB_META_KIND:
+        return
+    name = str(t.get("name") or "").replace("元数据抽取：", "") or "论文"
+    if t["state"] == "error":
+        set_flash("error", f"⚠️ 《{name}》元数据抽取失败：{str(t.get('error') or '')[:150]}"
+                           "\n\n🩺 可能原因：大模型返回非 JSON / 超时 / 网络受限；PDF 损坏或加密"
+                           "\n\n🛠️ 怎么办：重试一次；或到「文献库」页签查看入库时自动生成的元数据")
+        return
+    result = t.get("result")
+    if not result:
+        set_flash("warning", f"⚠️ 《{name}》元数据抽取未返回内容，请重试。")
+        return
+    st.session_state.meta_view = result
+    set_flash("success", f"✅ 《{name}》元数据抽取完成，见下方「🪪 元数据 JSON」。")
+
+
+def _consume_struct(ctx, kind, t):
+    """细粒度结构解析完成交付：写 struct + flash（空结果不刷 flash，由渲染区说明）。"""
+    if kind != _LIB_STRUCT_KIND:
+        return
+    name = str(t.get("name") or "").replace("结构解析：", "") or "论文"
+    if t["state"] == "error":
+        set_flash("error", f"⚠️ 《{name}》细粒度结构解析失败：{str(t.get('error') or '')[:150]}"
+                           "\n\n🩺 可能原因：PDF 损坏或加密 / 解析超时 / 磁盘写入失败"
+                           "\n\n🛠️ 怎么办：重试一次；换一个 PDF")
+        return
+    result = t.get("result")
+    if not isinstance(result, dict):
+        set_flash("error", f"⚠️ 《{name}》结构解析返回数据异常，请重试。")
+        return
+    st.session_state.struct = {k: result.get(k) for k in ("file", "toc", "tables", "figs")}
+    note = str(result.get("vision_note") or "")
+    if any(result.get(k) for k in ("toc", "tables", "figs")):
+        msg = (f"✅ 《{result.get('file') or name}》解析完成："
+               f"标题树 {len(result.get('toc') or [])} 项 · "
+               f"表格 {len(result.get('tables') or [])} 个 · "
+               f"插图 {len(result.get('figs') or [])} 张")
+        if note:
+            msg += "\n\n" + note
+        set_flash("success", msg)
+
+
+def _consume_formula(ctx, kind, t):
+    """LaTeX 公式抽取完成交付：写 formula_view + flash。"""
+    if kind != _LIB_FORMULA_KIND:
+        return
+    name = str(t.get("name") or "").replace("公式抽取：", "") or "论文"
+    if t["state"] == "error":
+        set_flash("error", f"⚠️ 《{name}》公式抽取失败：{str(t.get('error') or '')[:150]}"
+                           "\n\n🩺 可能原因：大模型返回非 JSON / 超时 / 网络受限"
+                           "\n\n🛠️ 怎么办：重试一次；或换一篇论文")
+        return
+    result = t.get("result") if isinstance(t.get("result"), dict) else {}
+    items = result.get("items")
+    note = str(result.get("note") or "")
+    if items is None:
+        set_flash("info", f"📭 《{name}》：{note or '该论文暂无可分析的正文文本。'}")
+        return
+    st.session_state.formula_view = items
+    n = len(items) if isinstance(items, (list, tuple)) else "若干"
+    set_flash("success", f"✅ 《{name}》公式抽取完成，共 {n} 条，见下方「🧮 公式」。")
+
+
+def _consume_ref(ctx, kind, t):
+    """参考文献结构化完成交付：写 ref_view + flash。"""
+    if kind != _LIB_REF_KIND:
+        return
+    name = str(t.get("name") or "").replace("参考文献结构化：", "") or "论文"
+    if t["state"] == "error":
+        set_flash("error", f"⚠️ 《{name}》参考文献结构化失败：{str(t.get('error') or '')[:150]}"
+                           "\n\n🩺 可能原因：PDF 损坏或加密 / 大模型返回非 JSON / 超时"
+                           "\n\n🛠️ 怎么办：重试一次；或换一个 PDF")
+        return
+    items = t.get("result")
+    if not items:
+        set_flash("warning", f"⚠️ 《{name}》参考文献结构化未返回内容，请重试。")
+        return
+    st.session_state.ref_view = items
+    set_flash("success", f"✅ 《{name}》参考文献结构化完成，见下方「📚 参考文献」。")
 
 
 def _render_library_health(ctx):
@@ -291,7 +469,11 @@ def render(ctx):
     # 后台解析交付：任务完成（含失败）时按 kind 认领，等价旧内联流程的各分支。
     # 必须放在页面顶部——flash 由 app.py 在页面渲染前重放，交付里写入的提示
     # 依赖 bg_consume 内部的重绘才能在当轮可见。
-    bg_consume({_LIB_PARSE_KIND: lambda k, t: _consume_parse(ctx, k, t)})
+    bg_consume({_LIB_PARSE_KIND: lambda k, t: _consume_parse(ctx, k, t),
+                _LIB_META_KIND: lambda k, t: _consume_meta(ctx, k, t),
+                _LIB_STRUCT_KIND: lambda k, t: _consume_struct(ctx, k, t),
+                _LIB_FORMULA_KIND: lambda k, t: _consume_formula(ctx, k, t),
+                _LIB_REF_KIND: lambda k, t: _consume_ref(ctx, k, t)})
     page_header("📁 文献库管理",
                 "基于内容 embedding 的语义去重（识别 arXiv v1/v7）、版本管理、细粒度多模态解析。",
                 icon="📁")
@@ -390,7 +572,10 @@ def render(ctx):
                         hints=["在上方上传 PDF", "或点击左侧「🚀 一键加载演示数据」"])
         else:
             mf = st.selectbox("选择论文", ctx.files, key="meta_sel")
-            if st.button("🤖 抽取标题/作者/机构/摘要 + 判断排版"):
+            _meta_bg = bg_running(kinds={_LIB_META_KIND})
+            if st.button("🤖 抽取标题/作者/机构/摘要 + 判断排版",
+                         disabled=_meta_bg,
+                         help="后台抽取：提交后可切换其他页面，实时进度见左侧「任务中心」"):
                 if not llm_guard(ctx, "元数据智能抽取"):
                     st.info("📭 演示语料的元数据已在入库时自动生成，见「文献库」页签。")
                 else:
@@ -398,27 +583,17 @@ def render(ctx):
                     if not _p or not os.path.exists(str(_p)):
                         st.info("📭 该论文为内置演示语料（无原始 PDF），元数据已在入库时抽取完成，见「文献库」页签。")
                     else:
+                        bg_submit("元数据抽取：" + str(mf),
+                                  lambda progress, _p=_p: _meta_worker(ctx, _p, progress),
+                                  kind=_LIB_META_KIND)
                         try:
-                            with st.spinner(step_text("🤖 正在抽取元数据")):
-                                doc = parsing.open_doc(_p)
-                                try:
-                                    first = doc[0].get_text()[:3000]
-                                    pw, ph = doc[0].rect.width, doc[0].rect.height
-                                    blocks = doc[0].get_text("blocks")
-                                    lb = sum(1 for b in blocks if b[0] < pw / 2)
-                                    rb = sum(1 for b in blocks if b[0] > pw / 2)
-                                    layout = "双栏" if lb and rb else "单栏"
-                                    prompt = (f"从首页抽取 标题/作者/机构/摘要，输出纯净 JSON。"
-                                              f"页面 {pw:.0f}×{ph:.0f}，{layout}。\n文本：{first}")
-                                    st.session_state.meta_view = ctx.llm.json_chat(
-                                        [{"role": "user", "content": prompt}])
-                                finally:
-                                    try:
-                                        doc.close()
-                                    except Exception:
-                                        pass
-                        except Exception as e:
-                            _struct_error_hint("元数据抽取", e)
+                            st.toast("📄 已转入后台抽取，进度见左侧任务中心，可随时切换其他页面",
+                                     icon="🚀")
+                        except Exception:
+                            pass
+            if _meta_bg:
+                st.caption("⏳ 元数据抽取正在后台运行（实时进度见左侧「任务中心」）——"
+                           "可切换其他页面，完成后结果自动出现在本页。")
             if st.session_state.get("meta_view"):
                 with st.expander("🪪 元数据 JSON（点击展开 / 收起）", expanded=True):
                     st.json(st.session_state.meta_view)
@@ -431,62 +606,26 @@ def render(ctx):
         else:
             sf = st.selectbox("选择论文", ctx.files, key="struct_sel")
             with_vision = st.checkbox("🖼️ 用多模态模型逐图理解（较慢 / 消耗额度）")
-            if st.button("🧩 全方位解析（标题树/表格/图表）"):
+            _struct_bg = bg_running(kinds={_LIB_STRUCT_KIND})
+            if st.button("🧩 全方位解析（标题树/表格/图表）",
+                         disabled=_struct_bg,
+                         help="后台解析：提交后可切换其他页面，实时进度见左侧「任务中心」"):
                 _p = resolve_pdf(sf)
                 if not _p or not os.path.exists(str(_p)):
                     st.info("📭 该论文为内置演示语料（无原始 PDF），版式级解析不适用；问答与图谱功能不受影响。")
                 else:
+                    bg_submit("结构解析：" + str(sf),
+                              lambda progress, _p=_p, _s=sf, _v=with_vision:
+                                  _struct_worker(ctx, _p, _s, _v, progress),
+                              kind=_LIB_STRUCT_KIND)
                     try:
-                        bar = st.progress(0.0)
-                        note = st.empty()
-                        try:
-                            note.caption(step_text("🧩 打开 PDF"))
-                            doc = parsing.open_doc(_p)
-                            bar.progress(0.2)
-                            note.caption(step_text("🧩 解析标题树", 1, 3))
-                            toc = parsing.extract_toc(doc)
-                            bar.progress(0.45)
-                            note.caption(step_text("🧩 解析表格", 2, 3))
-                            tables = parsing.extract_tables(doc)
-                            bar.progress(0.7)
-                            note.caption(step_text("🧩 提取插图", 3, 3))
-                            fig_dir = os.path.join(str(UPLOAD_DIR), "figs", str(sf).replace(".pdf", ""))
-                            figs = parsing.extract_figures(doc, fig_dir)
-                            bar.progress(1.0)
-                            if with_vision and figs:
-                                if getattr(getattr(ctx, "llm", None), "available", False):
-                                    pb = st.progress(0.0)
-                                    parsing.describe_figures(figs, ctx.llm, lambda r: pb.progress(min(r, 1.0)))
-                                    try:
-                                        pb.empty()
-                                    except Exception:
-                                        pass
-                                else:
-                                    st.warning("⚠️ 未检测到可用多模态模型，已跳过图片理解（不影响其余结构解析）。")
-                            try:
-                                doc.close()
-                            except Exception:
-                                pass
-                            bar.empty()
-                            note.empty()
-                            st.session_state.struct = {"file": sf, "toc": toc or [],
-                                                       "tables": tables or [], "figs": figs or []}
-                            if toc or tables or figs:
-                                st.success(f"✅ 解析完成：标题树 {len(toc or [])} 项 · "
-                                           f"表格 {len(tables or [])} 个 · 插图 {len(figs or [])} 张")
-                        except Exception as e:
-                            try:
-                                doc.close()
-                            except Exception:
-                                pass
-                            raise e
-                    except Exception as e:
-                        try:
-                            bar.empty()
-                            note.empty()
-                        except Exception:
-                            pass
-                        _struct_error_hint("细粒度结构解析", e)
+                        st.toast("📄 已转入后台解析，进度见左侧任务中心，可随时切换其他页面",
+                                 icon="🚀")
+                    except Exception:
+                        pass
+            if _struct_bg:
+                st.caption("⏳ 结构解析正在后台运行（实时进度见左侧「任务中心」）——"
+                           "可切换其他页面，完成后结果自动出现在本页。")
 
             stobj = st.session_state.get("struct")
             if stobj and isinstance(stobj, dict):
@@ -534,39 +673,36 @@ def render(ctx):
                         st.caption(f"共 {len(figs)} 张插图，已展示前 {MAX_FIG_SHOW} 张，其余见 storage/uploads/figs。")
 
             c1, c2 = st.columns([1, 1])
-            if c1.button("🧮 提取 LaTeX 公式"):
+            _formula_bg = bg_running(kinds={_LIB_FORMULA_KIND})
+            if c1.button("🧮 提取 LaTeX 公式", disabled=_formula_bg,
+                         help="后台抽取：提交后可切换其他页面，进度见左侧「任务中心」"):
                 if llm_guard(ctx, "LaTeX 公式抽取"):
+                    bg_submit("公式抽取：" + str(sf),
+                              lambda progress, _s=sf: _formula_worker(ctx, _s, progress),
+                              kind=_LIB_FORMULA_KIND)
                     try:
-                        text = "\n".join(c["text"] for c in ctx.chunks if c.get("source") == sf)[:6000]
-                        if not text.strip():
-                            empty_state("该论文暂无可分析的正文文本。", hints=["换一篇论文试试"])
-                        else:
-                            with st.spinner(step_text("🧮 正在抽取公式")):
-                                st.session_state.formula_view = ctx.llm.json_chat([{"role": "user",
-                                    "content": f"提取数学公式，输出JSON数组，每条 {{name,latex(不含$)}}。\n{text}"}])
-                    except Exception as e:
-                        friendly_error("公式抽取", e, reasons=["大模型返回非 JSON / 超时"],
-                                       actions=["重试一次", "或换个问题继续演示"])
-            if c2.button("📚 结构化参考文献"):
+                        st.toast("📄 已转入后台抽取，进度见左侧任务中心", icon="🚀")
+                    except Exception:
+                        pass
+            if _formula_bg:
+                c1.caption("⏳ 公式抽取正在后台运行（进度见左侧「任务中心」）…")
+            _ref_bg = bg_running(kinds={_LIB_REF_KIND})
+            if c2.button("📚 结构化参考文献", disabled=_ref_bg,
+                         help="后台抽取：提交后可切换其他页面，进度见左侧「任务中心」"):
                 if llm_guard(ctx, "参考文献结构化"):
                     _p = resolve_pdf(sf)
                     if not _p or not os.path.exists(str(_p)):
                         st.info("📭 该论文为内置演示语料（无原始 PDF），无版式级参考文献区。")
                     else:
+                        bg_submit("参考文献结构化：" + str(sf),
+                                  lambda progress, _p=_p: _ref_worker(ctx, _p, progress),
+                                  kind=_LIB_REF_KIND)
                         try:
-                            with st.spinner(step_text("📚 正在结构化参考文献")):
-                                doc = parsing.open_doc(_p)
-                                try:
-                                    raw = parsing.extract_references_raw(doc)[:8000]
-                                finally:
-                                    try:
-                                        doc.close()
-                                    except Exception:
-                                        pass
-                                st.session_state.ref_view = ctx.llm.json_chat([{"role": "user",
-                                    "content": "提取参考文献，输出JSON数组，每条 {id,authors,title,year,venue}；无法识别填'未识别'。\n"+raw}])
-                        except Exception as e:
-                            _struct_error_hint("参考文献结构化", e)
+                            st.toast("📄 已转入后台抽取，进度见左侧任务中心", icon="🚀")
+                        except Exception:
+                            pass
+            if _ref_bg:
+                c2.caption("⏳ 参考文献结构化正在后台运行（进度见左侧「任务中心」）…")
             if st.session_state.get("formula_view"):
                 with st.expander(f"🧮 公式（{len(st.session_state.formula_view)} 条）", expanded=False):
                     for fml in st.session_state.formula_view:
