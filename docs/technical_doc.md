@@ -49,7 +49,7 @@
 ## 1.2 目标用户与使用场景
 
 - **研究生 / 科研人员**：需要快速读懂一批英文论文、跨文献对比方法与结果、追踪方向最新进展、起草开题或论文框架。系统的「跨文献问答」「图谱综述」「写作 Copilot」直接服务这一主线。
-- **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:79` 演示图谱兜底）。
+- **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:108` 演示图谱兜底）。
 - **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑；单元测试 18 项（`tests/test_core.py`）。
 
 ## 1.3 赛题定位
@@ -76,7 +76,7 @@
 
 ## 1.5 当前状态一句话总结
 
-Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有真跑才会暴露"的缺陷后：9 页面 UI 冒烟 0 未捕获异常、181/181 单元测试、阅读页专项 61/61、**AI 链路端到端 21/21 PASS**；541 页官方教材 537 页提取 / 0 失败页 / 25.32s；双栏误判 0%；抗幻觉四道防线**全部在真实 LLM 下实测生效**（OCR 首次实测通过、细粒度三问全命中真值、References 40/40 逐字一致）。
+Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有真跑才会暴露"的缺陷后：9 页面 UI 冒烟 0 未捕获异常、190/190 单元测试、阅读页专项 61/61、**AI 链路端到端 21/21 PASS**；541 页官方教材 537 页提取 / 0 失败页 / 25.32s；双栏误判 0%；抗幻觉四道防线**全部在真实 LLM 下实测生效**（OCR 首次实测通过、细粒度三问全命中真值、References 40/40 逐字一致）。
 
 在此之上仍有三条诚实声明（详见 8.2 / 9.4）：①本地 `pdf/` 语料共 5 个文件，经版本合并后为 **3 个独立文档**，其中**检出引用边并进入图节点的是 2 个**（教材章节未检出引用关系），赛题"批量文献（如 20 篇）"规模**未在本次实测中覆盖**；②OpenAlex / Semantic Scholar 在实测期间处于 IP 级 429 限流，被引数链路验证的是"诚实降级"而非真值获取；③"纯中文句的引用一致性校验盲区"与"沙箱为软隔离"仍是我们认知到的两项最重要的能力边界。
 
@@ -85,7 +85,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 | 指标 | 实测值 | 来源 |
 |---|---|---|
 | 代码规模 | 39 个 Python 模块文件（core 10 / services 14 / tools 3 / ui 12）+ `app.py` + `config.py`，9 个交互页面 | 仓库现状（`ls core/*.py services/*.py tools/*.py ui/*.py` = 39） |
-| 注册工具数 | 21 个 Function Schema，全部接入 6 专家白名单（无孤岛） | `tools/definitions.py:371 build_registry` |
+| 注册工具数 | 21 个 Function Schema，全部接入 6 专家白名单（无孤岛） | `tools/definitions.py:379 build_registry` |
 | 541 页长文档入库 | 537 页提取 / **1305 chunks** / 25.32s（46.8ms/页）/ 峰值 RSS **893.1MB** / **0 失败页** / 进度回调 11 次 | Round 4 官方用例实测（`round4_worker9_official.md` §3） |
 | 内容级语义去重 | v1↔v7 相似度 **0.963228**（阈值 0.90）；完全改名后仍命中 **1.000000** | Round 4 官方用例 C 实测 |
 | 双栏判定准确率 | 单栏语料 1111 页误判 0%；真双栏 BERT 正文页 10/10 识别 | Round 3 修复实测 |
@@ -105,7 +105,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 | # | 赛题痛点 | 由此产生的需求 | 本系统的对应答案 |
 |---|---|---|---|
-| P1 | 双栏 PDF 串读，上下文断裂 | 解析层需感知版面而非盲取文本流 | `_detect_two_columns@services/parsing.py:172`：横跨否决 + 空白带采样 + 栏宽平衡 + 两侧块数 4 条必要条件，不满足即回退单栏 |
+| P1 | 双栏 PDF 串读，上下文断裂 | 解析层需感知版面而非盲取文本流 | `_detect_two_columns@services/parsing.py:196`：横跨否决 + 空白带采样 + 栏宽平衡 + 两侧块数 4 条必要条件，不满足即回退单栏 |
 | P2 | 答案不给出处 / 给假出处 | 每条结论必须可定位到原文页码 | 上下文编号 `[n] 来源：《X》 第N页` → LLM 强制带【n】角标 → UI 渲染可点击页码徽章 |
 | P3 | 模型编造参考文献 | 生成内容必须对照真实文献白名单 | PDF References 段真实抽取 → 白名单校验 → 越界剔除 |
 | P4 | 检索工具与问答割裂 | Agent 能自主调用检索/追踪/解析工具 | 21 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 |
@@ -116,7 +116,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.2 功能需求（按五大类逐条）
 
-**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1222 group_versions`、`services/library.py:1222 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:56 detect_scanned`、`services/parsing.py:56 ocr_page_text`）；标题树（书签优先 `services/parsing.py:627 extract_toc`，无书签走 `services/parsing.py:627 infer_headings_from_text`）；表格抽取（`services/parsing.py:645 extract_tables`）；插图↔图注关联（`services/parsing.py:733 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:702 _nearest_caption`）；公式识别与 LaTeX 转换；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
+**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1228 group_versions`、`services/library.py:1312 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:80 detect_scanned`、`services/parsing.py:383 ocr_page_text`）；标题树（书签优先 `services/parsing.py:659 extract_toc`，无书签走 `services/parsing.py:597 infer_headings_from_text`）；表格抽取（`services/parsing.py:677 extract_tables`）；插图↔图注关联（`services/parsing.py:765 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:734 _nearest_caption`）；公式识别与 LaTeX 转换；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
 
 **② 抗幻觉 RAG**：单篇问答（超参数/硬件/BLEU 类细粒度问题）；多篇跨文献对比（2–5 篇，`MAX_COMPARE_PAPERS=5`）；单篇范围锁定；查询扩展（中文问英文文献）；内联【n】溯源与可点击页码锚点；引用一致性逐句校验；拒答与自动修复。
 
@@ -128,7 +128,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.3 用户故事（端到端走查）
 
-**故事 A：版本去重（演示路径 2，离线可复现）。** `1706.03762v7.pdf` 与改名的 `1706.03762v1.pdf` 先后入库。系统对每篇算"前 4000 字向量 + 5 段指纹"（`services/library.py:100 _paper_fingerprints`），上传 v1 时查重命中 **0.963228**（阈值 0.90，取"分段指纹 top3 均值"；整篇相似度仅 0.891292 单独看会漏判），界面给出"⚠️ 语义查重命中"与三个决策按钮，选"保留两版"后可对比差异（`services/library.py:1306 version_diff`）。全程不依赖文件名。
+**故事 A：版本去重（演示路径 2，离线可复现）。** `1706.03762v7.pdf` 与改名的 `1706.03762v1.pdf` 先后入库。系统对每篇算"前 4000 字向量 + 5 段指纹"（`services/library.py:100 _paper_fingerprints`），上传 v1 时查重命中 **0.963228**（阈值 0.90，取"分段指纹 top3 均值"；整篇相似度仅 0.891292 单独看会漏判），界面给出"⚠️ 语义查重命中"与三个决策按钮，选"保留两版"后可对比差异（`services/library.py:1312 version_diff`）。全程不依赖文件名。
 
 **故事 B：抗幻觉问答（演示路径 3）。** 问"训练用了什么 GPU？数量和型号？"→ 查询扩展出英文变体 → Dense+Sparse 双路召回 → RRF 融合 6 条 → 上下文以 `[1] 来源：《1706.03762v7.pdf》 第8页第3段` 注入 → LLM 生成带【1】角标的答案 → 逐句校验通过 → 点溯源卡片"第 8 页"徽章页内跳转，或"📖 打开阅读页"直达原版式页面。若改问"量子纠缠"（库内无关），拒答闸门在**调用 LLM 之前**直接回复"未在文献库中找到可靠依据，为避免幻觉我不作答"。
 
@@ -247,10 +247,10 @@ flowchart TD
 
 | 项 | 结论 |
 |---|---|
-| 选了什么 | 扫描页渲染为 PNG（zoom=2.0）→ base64 → 视觉模型，prompt 要求"按阅读顺序输出、公式转 LaTeX、表格转 Markdown"（`services/parsing.py:351 ocr_page_text`） |
+| 选了什么 | 扫描页渲染为 PNG（zoom=2.0）→ base64 → 视觉模型，prompt 要求"按阅读顺序输出、公式转 LaTeX、表格转 Markdown"（`services/parsing.py:383 ocr_page_text`） |
 | 为什么选 | ①**零额外依赖**：避开 PaddleOCR / Tesseract 的本机安装、语言包与 Windows 环境变量配置；②**理解优于识别**：同一条链路同时还原版面、表格结构与数学公式，产出可直接入 RAG 的结构化文本；③成本：按页计费，长篇扫描件可只跑需要的页 |
 | 放弃了什么 / 代价 |  离线 / 无 Key 环境下没有本地兜底 OCR；单页受 90s 调用超时与 token 成本约束 ；代价： 无可用 Key 时扫描件不能被识别  |
-| 如何对冲 | `services/parsing.py:336 ocr_supported` 在调用前判定"是否有视觉模型 + Key 长度 ≥20 + 可 ASCII 编码"，不可用即直跳；同时 `services/parsing.py:87 is_ocr_error_text` 把 OCR 占位符文本判定为失败页，禁止空扫描件冒充正文入库。**实测**：15 页扫描件从"逐页重试网络 140.06s 且把占位符当正文"变为"0.63s 直接判定 + `commit` 抛 ValueError 拒绝入库" |
+| 如何对冲 | `services/parsing.py:368 ocr_supported` 在调用前判定"是否有视觉模型 + Key 长度 ≥20 + 可 ASCII 编码"，不可用即直跳；同时 `services/parsing.py:111 is_ocr_error_text` 把 OCR 占位符文本判定为失败页，禁止空扫描件冒充正文入库。**实测**：15 页扫描件从"逐页重试网络 140.06s 且把占位符当正文"变为"0.63s 直接判定 + `commit` 抛 ValueError 拒绝入库" |
 
 **Round 7/8 首次真实 API 实测（官方测试用例 A，此前从未实测通过）**
 
@@ -312,7 +312,7 @@ flowchart TD
 
 ### 4.2.2 工具注册与执行（`tools/registry.py` + `tools/definitions.py`）
 
-`Registry.register(name, description, JSON Schema, func)` → `openai_schema()`（`tools/registry.py:11-19`）生成 OpenAI 规范 `tools` 数组 → `execute(name, args, ctx)`（`:39-49`）统一把 `TypeError` 与其余 `Exception` 转成 `{"error": ...}` 字符串回灌，**不让工具异常打断 Agent 主循环**。当前由 `tools/definitions.py:371 build_registry` 注册 **21 个工具**（注册语句集中在 `:373-445`）。
+`Registry.register(name, description, JSON Schema, func)` → `openai_schema()`（`tools/registry.py:11-19`）生成 OpenAI 规范 `tools` 数组 → `execute(name, args, ctx)`（`:39-49`）统一把 `TypeError` 与其余 `Exception` 转成 `{"error": ...}` 字符串回灌，**不让工具异常打断 Agent 主循环**。当前由 `tools/definitions.py:379 build_registry` 注册 **21 个工具**（注册语句集中在 `:381-457`）。
 
 ### 4.2.3 Function Calling 闭环（Agent）
 
@@ -332,7 +332,7 @@ flowchart TD
 
 ### 4.2.5 Python 沙箱集成（`core/sandbox.py` + `tools/definitions.py`）
 
-`tools/definitions.py:318 t_run_python` → 先过 `core/sandbox.py:27 validate_code` 的 **AST 静态白名单**（14 个模块：numpy / pandas / scipy / sklearn / matplotlib / plotly / seaborn + 标准安全库；拦截 `eval/exec/open/compile/__import__` 与 `system/popen/socket` 等逃逸调用）→ 通过后写入临时文件 → `subprocess.run(timeout=25, encoding="utf-8", errors="replace")`（`tools/definitions.py:336`）→ stdout/stderr 安全截尾（`tools/definitions.py:305 _tail_text`）后返回。即"静态检查先于执行，违规不进子进程"。
+`tools/definitions.py:326 t_run_python` → 先过 `core/sandbox.py:27 validate_code` 的 **AST 静态白名单**（14 个模块：numpy / pandas / scipy / sklearn / matplotlib / plotly / seaborn + 标准安全库；拦截 `eval/exec/open/compile/__import__` 与 `system/popen/socket` 等逃逸调用）→ 通过后写入临时文件 → `subprocess.run(timeout=25, encoding="utf-8", errors="replace")`（`tools/definitions.py:344`）→ stdout/stderr 安全截尾（`tools/definitions.py:313 _tail_text`）后返回。即"静态检查先于执行，违规不进子进程"。
 
 ### 4.2.6 检索集成（`services/state.py` + `services/rag.py`）
 
@@ -374,7 +374,7 @@ flowchart TD
 
 ### 4.3.4 版面判定优化：双栏误判 19.1% → 0%
 
-朴素"中线二分"会把长正文行横跨中线的单栏论文误判成双栏。优化后的 `_detect_two_columns`（`services/parsing.py:172`）要求 4 条必要条件同时成立，其中**"横跨 split_x 否决"**（`services/parsing.py:239-244`，阈值 `_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18`）对**全部文本块生效，包括已被剔除出候选集的宽块**——旧实现正是漏检这些宽块才误判；另一处是 `_gutter_free_ratio`（`services/parsing.py:151`）沿 y 采样统计中缝空白带占比。
+朴素"中线二分"会把长正文行横跨中线的单栏论文误判成双栏。优化后的 `_detect_two_columns`（`services/parsing.py:196`）要求 4 条必要条件同时成立，其中**"横跨 split_x 否决"**（`services/parsing.py:263-268`，阈值 `_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18`）对**全部文本块生效，包括已被剔除出候选集的宽块**——旧实现正是漏检这些宽块才误判；另一处是 `_gutter_free_ratio`（`services/parsing.py:175`）沿 y 采样统计中缝空白带占比。
 
 **实测**：1111 页单栏语料误判率 **19.1% → 0%**，同时真双栏论文（BERT）正文页 10/10 仍被正确识别（没有用"永远判单栏"换取指标）。
 
@@ -382,14 +382,14 @@ flowchart TD
 
 - **被引数两级缓存**：按归一化标题缓存结果（`services/citation_quality.py:72 _CACHE`）+ 标题归一化结果缓存（`services/citation_quality.py:73 _TITLE_CACHE`），重复评估同一篇文献不再重复打三次 API。
 - **三级降级**：OpenAlex → Semantic Scholar → Crossref（`services/citation_quality.py:689 _LOOKUPS`），任一被限流即切换并显式打 `low_confidence` + 口径说明；选优策略改为"高置信标题匹配内取被引数最大"（`services/citation_quality.py:472 _pick_best`），修复了"同名噪声记录靠年份加成反超正主"——AlexNet 被引数 **760 → 108512**，与真值一致。
-- **OCR 前置判定**：`services/parsing.py:336 ocr_supported` 在无可用视觉 Key 时不再逐页重试网络，15 页扫描件耗时 **140.06s → 0.63s**。
+- **OCR 前置判定**：`services/parsing.py:368 ocr_supported` 在无可用视觉 Key 时不再逐页重试网络，15 页扫描件耗时 **140.06s → 0.63s**。
 - **GitHub 限流降级**：未认证 60 次/小时，限流时返回"因限流不做推测性评级"而非编造星级。
 - **完整降级矩阵见 4.7**——8 类外部依赖全部有确定行为，且每一类都在 UI 上说明"发生了什么 + 可能原因 + 怎么办"。
 
 ### 4.3.6 内存与临时文件控制
 
 - **内存探针**：`scripts/_memory_probe.py` 优先 psutil 采 RSS，缺失降级 tracemalloc 再降级纯计时，任何情况下 `peak_mb()` 返回 0.0 而**绝不抛异常**。541 页实测 50ms 采样 **388 次**，峰值 893.1MB（低于 1.5GB 目标）。
-- **陈旧临时目录清理**：`cleanup_stale_figure_dirs@ui/page_reading.py:259` 清理超过 FIG_TTL（24h）的图片临时目录。
+- **陈旧临时目录清理**：`cleanup_stale_figure_dirs@ui/page_reading.py:256` 清理超过 FIG_TTL（24h）的图片临时目录。
 - **沙箱超时**：子进程 `timeout=25`，避免死循环脚本拖垮服务。
 
 ## 4.4 RAG 检索设计（`services/rag.py` + `services/query_expansion.py`）
@@ -544,11 +544,11 @@ Round 7 首次接真实 Key 时，这一"核心卖点"在实测中当场崩掉�
 
 **为什么旧校验器没拦住占位符**：占位行 `[1-40] (…)` 既不匹配 `^\[(\d{1,4})\]\s*`、也不以项目符号开头，被整行忽略 → 解析出 **0 条** → 相似度循环一次都没进 → `ok=True`。**缺 Detection，不是阈值松。**
 
-反向验证：把 `_llm_text` 打桩成含 `[Placeholder]`/`TODO` 的垃圾输出，管线仍产出干净文本（故障注入，`round8_fixR6_references.md` §4.4），证明修的是管线结构而非运气。UI 侧 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:221`）把 40 条摊平成表格，让"没有编造空间"在界面上可被逐条核对。
+反向验证：把 `_llm_text` 打桩成含 `[Placeholder]`/`TODO` 的垃圾输出，管线仍产出干净文本（故障注入，`round8_fixR6_references.md` §4.4），证明修的是管线结构而非运气。UI 侧 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:424`）把 40 条摊平成表格，让"没有编造空间"在界面上可被逐条核对。
 
 ### 执行侧防护（Agent 工具）
 
-Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（numpy/pandas/sklearn/plotly 等可用，`eval/exec/open/subprocess/socket` 等拦截），独立子进程执行（超时 25s）、stdout/stderr 安全截尾（`tools/definitions.py:305 _tail_text`，修复了原 `[-3000]` 索引必崩缺陷）、UTF-8 编码兜底。输入侧 `check_injection`（`core/guardrails.py:121`）检测提示注入，输出侧 `redact_secrets`（`core/guardrails.py:130`）正则脱敏。
+Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（numpy/pandas/sklearn/plotly 等可用，`eval/exec/open/subprocess/socket` 等拦截），独立子进程执行（超时 25s）、stdout/stderr 安全截尾（`tools/definitions.py:313 _tail_text`，修复了原 `[-3000]` 索引必崩缺陷）、UTF-8 编码兜底。输入侧 `check_injection`（`core/guardrails.py:121`）检测提示注入，输出侧 `redact_secrets`（`core/guardrails.py:130`）正则脱敏。
 
 ### 4.7 依赖降级矩阵（稳定性设计）
 
@@ -589,7 +589,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 本图为「上传与解析」页签（上传即解析：元数据与排版识别结果以 JSON 展开，可直接复核）；语义去重与版本管理见「版本差异」页签，双栏判定实测见 4.3.4。
 
-上传即自动解析入库：分批（20 页/批）解析建块 + 内容级语义去重 + 版本识别。**双栏判定**是本轮重点修复项——`_detect_two_columns@services/parsing.py:172` 现在要求 4 条必要条件同时满足：两侧块数 ≥3、横跨否决（任何块横跨候选分栏线每侧重叠 >5pt 即判单栏，`_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18` 判据落点 `services/parsing.py:18`）、竖直空白带占比 >0.6、栏宽平衡 ≥0.3。实测单栏语料 1111 页误判率从 19.1% 降至 **0%**，真双栏 BERT 正文页 10/10 正确识别。
+上传即自动解析入库：分批（20 页/批）解析建块 + 内容级语义去重 + 版本识别。**双栏判定**是本轮重点修复项——`_detect_two_columns@services/parsing.py:196` 现在要求 4 条必要条件同时满足：两侧块数 ≥3、横跨否决（任何块横跨候选分栏线每侧重叠 >5pt 即判单栏，`_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18` 判据落点 `services/parsing.py:18`）、竖直空白带占比 >0.6、栏宽平衡 ≥0.3。实测单栏语料 1111 页误判率从 19.1% 降至 **0%**，真双栏 BERT 正文页 10/10 正确识别。
 
 **长文档工程化**（`services/library.py:646 prepare_pdf`）：541 页《Understanding Deep Learning》官方实测 **537 页成功提取 / 25.32s（46.8ms/页）/ 0 失败页**；4 个无原生文本层的空白页不计入失败页，`failed_pages = 0`。注入挂死页时单页 30s 超时线程跳过，其余页照常入库。**幽灵文献拦截**（`_validate_prepared :206`）：损坏/加密/0 页/成功页 <70% 的 PDF 一律拒绝入库，commit 双保险（`:888 commit`），24/24 拦截用例通过。
 
@@ -601,7 +601,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![问答与溯源页](shots/p2.png)
 
-问答页把第 4.6 节的四道防线完整暴露给用户：每条答案带【n】角标；溯源卡片（`anchor_card@ui/page_qa.py:101`）含可点击页码徽章（页内锚点）、相关度分数、页内段号、可折叠原文片段（前 200 字），以及"📖 打开阅读页"跨页跳转（session_state `qa_jump_page` + query_params 双通道，消费端 `_consume_qa_jump@ui/page_reading.py:556`）；调试区展示查询变体、dense/sparse 分量、修复次数。多篇对比勾选 2–5 篇后按【Pn-m】分组角标输出分论文陈述 + 对比表。
+问答页把第 4.6 节的四道防线完整暴露给用户：每条答案带【n】角标；溯源卡片（`anchor_card@ui/page_qa.py:101`）含可点击页码徽章（页内锚点）、相关度分数、页内段号、可折叠原文片段（前 200 字），以及"📖 打开阅读页"跨页跳转（session_state `qa_jump_page` + query_params 双通道，消费端 `_consume_qa_jump@ui/page_reading.py:867`）；调试区展示查询变体、dense/sparse 分量、修复次数。多篇对比勾选 2–5 篇后按【Pn-m】分组角标输出分论文陈述 + 对比表。
 
 **Round 7/8 真实 API 实测：赛题原文点名的三类细粒度问题**（素材 `pdf/1706.03762v7.pdf`，期望值全部取自论文正文真值）：
 
@@ -621,7 +621,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![版式阅读与翻译页](shots/p3.png)
 
-原生版式渲染（`native_page_html@services/translate.py:430`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:525`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:768`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:694`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:259`）。
+原生版式渲染（`native_page_html@services/translate.py:430`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:525`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:768`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:694`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
 
 ## 5.4 论文检索、追踪与推荐（模块③主体）
 
@@ -655,13 +655,13 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 > **必须诚实说明的规模限制**：赛题要求的是"针对**批量文献（如 20 篇）**的引用图谱挖掘"，而本地 `pdf/` 语料共 **5 个文件**（`storage/library.json` 的 `paper_order`：`1706.03762v7/v1/v1_img`、`1810.04805v2`、`UnderstandingDeepLearning_02_09_26_C`），经版本合并后为 **3 个独立文档**（Transformer 三版合一、BERT、深度学习教材章节），其中**检出引用边并进入图节点的是 2 个**（教材章节未检出引用关系；节点由 `add_node@services/graph.py:242` 在 `build_graph` 检出引用边时添加，**按引用边而非文献类型**）。在 2 节点 1 边的图上：社区发现只能返回 1 个簇，而综述第二节标题是"主要方向（按主题簇）"；PageRank 是拓扑的必然结果，不构成"基石论文识别"的证据；`bridges`（跨簇边，赛题"分歧点"卖点）**恒为 0**，该分支根本没被执行到。因此本轮图谱三条用例**只证明链路通、输出质量达标，不证明"20 篇规模"能力**；本项目**不宣称已支持 20 篇**，补测已列入 8.3 Roadmap。
 
-演示兜底：无真实引用边时"🎭 演示模式示意图谱"（`_build_demo@ui/page_graph.py:79`）以向量相似度建图并**页面顶部明示非真实引用关系**。
+演示兜底：无真实引用边时"🎭 演示模式示意图谱"（`_build_demo@ui/page_graph.py:108`）以向量相似度建图并**页面顶部明示非真实引用关系**。
 
 ## 5.6 写作与可视化 Copilot（模块⑤）
 
 ![写作辅助页](shots/p5.png)
 
-四大能力：①**无幻觉框架**（4.6 防线四）——Round 8 真实 API 实测：References **40 条与白名单逐字一致 40/40**、占位串 **0 处**、输出 **14364 字**、耗时 **44.6s**（修复前是 4515 字但整章占位符、139.3s）；UI 侧新增 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:221`）把 40 条逐条摊平成表格（作者/标题/年份/出处/来路 PDF），使"无编造空间"可被逐条核对；②**拓扑图**——Mermaid 前端渲染、TikZ 编译（检测 tectonic/pdflatex/xelatex/lualatex，编译产物经 PyMuPDF 转 PNG 展示；无编译器时展示源码 + Overleaf/tikz.dev 链接；**当前部署镜像未装 TeX，实测即走此降级路径**）、Graphviz 三级降级（graphviz 包+dot → matplotlib+networkx → 纯标准库 DOT→SVG 分层布局 `services/wcopilot_dotrender.py`，界面明示"降级渲染（等价拓扑图）"）；③**CSV→图表**——列类型自动分类、最多 3 张推荐图（每张带中文推荐依据）、数值事实（min/max/趋势/Pearson r）注入 Caption prompt 且生成后校验必须含真实数字；④**中英学术互译**。全部模型调用经统一重试入口，伪响应不会被当正文展示。
+四大能力：①**无幻觉框架**（4.6 防线四）——Round 8 真实 API 实测：References **40 条与白名单逐字一致 40/40**、占位串 **0 处**、输出 **14364 字**、耗时 **44.6s**（修复前是 4515 字但整章占位符、139.3s）；UI 侧新增 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:424`）把 40 条逐条摊平成表格（作者/标题/年份/出处/来路 PDF），使"无编造空间"可被逐条核对；②**拓扑图**——Mermaid 前端渲染、TikZ 编译（检测 tectonic/pdflatex/xelatex/lualatex，编译产物经 PyMuPDF 转 PNG 展示；无编译器时展示源码 + Overleaf/tikz.dev 链接；**当前部署镜像未装 TeX，实测即走此降级路径**）、Graphviz 三级降级（graphviz 包+dot → matplotlib+networkx → 纯标准库 DOT→SVG 分层布局 `services/wcopilot_dotrender.py`，界面明示"降级渲染（等价拓扑图）"）；③**CSV→图表**——列类型自动分类、最多 3 张推荐图（每张带中文推荐依据）、数值事实（min/max/趋势/Pearson r）注入 Caption prompt 且生成后校验必须含真实数字；④**中英学术互译**。全部模型调用经统一重试入口，伪响应不会被当正文展示。
 
 ---
 
@@ -671,7 +671,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 | 层 | 命令 | 本轮实测结果 |
 |---|---|---|
-| 单元测试 | `python -m unittest discover -s tests -v` | **181/181 OK** |
+| 单元测试 | `python -m unittest discover -s tests -v` | **190/190 OK** |
 | **AI 链路端到端实测（真实 Key）** | `python -u scripts/_verify_live_api.py` | **21/21 PASS**（严格化后的最新版本，原 19 条；分组：OCR / 细粒度问答 / 抗幻觉闸门 / 跨文献对比 / 写作 / 图谱 / 外部被引）。脚本自带"不污染 `storage/`"（跑在临时目录）与"Key 不可用即记 SKIP 不记 PASS"两条纪律 |
 | 离线端到端自检 | `python scripts/selftest.py` | 全链路冒烟通过（无需 Key） |
 | 官方数据集复跑 + 长文档专项 | `python scripts/_verify_official.py`（= A/B/C/D 四用例） | 扫描件离线降级 PASS；541 页 → **537 页提取 / 1305 chunks / 25.32s（解析 4.02s + 入库 21.30s）/ 峰值 RSS 893.1MB / 0 失败页 / 进度回调 11 次**；v1↔v7 去重 **0.963228**、完全改名仍命中 **1.000000**；3 篇连续入库 chunks 归属隔离（133 条，4.38s） |
@@ -733,7 +733,7 @@ docker compose down         # 停止
 | 5 | `para_idx` 为估算值：跨页 chunk 与 150 字重叠导致段号漂移 | `annotate_paragraphs@services/rag.py:399` | 定位到页级精确、段级近似；根治方案见 Roadmap（chunk 不跨页 + 原生段落 bbox） |
 | 6 | 部分启发式阈值在现有语料调优，异形排版可能保守回退 | 双栏判定/作者块识别 | 全部失败路径可回退且不崩溃 |
 | 7 | `t_run_python` 临时目录无 finally 清理（每次调用泄漏一个 `ai4s_code_*`） | `tools/definitions.py` | 量级小（KB 级/次），修复已列入待办 |
-| 8 | `commit()` 未清洗文件名（含 `/` 时建路径失败） | `services/library.py:888 commit` | 正常文件名不受影响；建议 `os.path.basename()` + 非法字符替换 |
+| 8 | `commit()` 未清洗文件名（含 `/` 时建路径失败） | `services/library.py:894 commit` | 正常文件名不受影响；建议 `os.path.basename()` + 非法字符替换 |
 | 9 | `st.components.v1.html` 已被 Streamlit 标记弃用 | `ui/common.py embed_html` | streamlit 1.63 正常工作；迁移 `st.iframe` 需回归高度自适应 JS |
 
 ## 6.6 质量过程：Round 1–12 评审与修复闭环
@@ -807,7 +807,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 | ③ 自主工具调用 | 21 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 + AST 白名单沙箱 + arXiv/PubMed/Web 检索 + 定时追踪 + GitHub 复现性 | **21/21 工具全部接入专家白名单，无孤岛**；沙箱子进程 `timeout=25`；被引数三级降级与真值一致（AlexNet **108512**） |
 | ④ 图谱挖掘 | 真实引用关系建图 + PageRank/入度/介数/特征向量 + 社区发现（三级降级）+ frontier 五维打分 + 四段式综述 + Future Work 三态判定 | 综述 **1928 字**含真实年份 2017/2018；Future Work **2/2** 有效状态；前沿分 14.3→3.3。**规模诚实声明：实测图谱仅 2 节点 1 边，「20 篇批量」未覆盖** |
 | ⑤ 学术 Copilot | 无幻觉 References 白名单写作、Mermaid/TikZ/Graphviz/Matplotlib 四类图、CSV 自动出图 + 数值事实注入 Caption、中英对照同步阅读、划词翻译、中文原位 PDF 输出 | References **40/40 与白名单逐字一致 / 0 处占位 / 14364 字 / 44.6s**（修复前：4515 字但整章占位符、139.3s）；引用↔参考文献双向跳转 **36/36 锚点、死链 0**；正文引用标记 **58 个**全部可反向回正文 |
-| ⑥ Agent 内核 | 任务规划 / 多专家路由（含关键词离线兜底）/ 长期记忆与画像 / 三层 Guardrails（注入检测·角标校验·密钥脱敏）/ Trace 思考可视化 | 9 页面 UI 冒烟 + 9 项故障注入 **exception=0**；7/7 条演示路径 0 未捕获异常；单测 **181/181**、阅读页专项 **61/61**、AI 链路 **21/21 PASS** |
+| ⑥ Agent 内核 | 任务规划 / 多专家路由（含关键词离线兜底）/ 长期记忆与画像 / 三层 Guardrails（注入检测·角标校验·密钥脱敏）/ Trace 思考可视化 | 9 页面 UI 冒烟 + 9 项故障注入 **exception=0**；7/7 条演示路径 0 未捕获异常；单测 **190/190**、阅读页专项 **61/61**、AI 链路 **21/21 PASS** |
 
 ### 8.1.2 工程规模
 

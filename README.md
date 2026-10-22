@@ -196,7 +196,7 @@ LLM 调用 3 次退避重试（1.5/3.0/4.5s），失败落盘并返回友好伪�
 python scripts/verify_official.py          # 官方 PDF 去重/扫描件/长文档/图谱实测
 python scripts/bench_graph.py              # 20/40 篇图谱规模压测
 python scripts/selftest.py                 # 离线端到端自检（无需 Key）
-python -m unittest discover -s tests -v    # 181 项单元测试
+python -m unittest discover -s tests -v    # 190 项单元测试
 python scripts/apptest_check.py            # Streamlit 全页面渲染检查
 ```
 
@@ -304,7 +304,7 @@ ai_research_agent/
 ├── services/                  # 业务服务：parsing / library / rag / query_expansion / graph / track / writing / translate / extern / citation_quality / state / wcopilot_dotrender
 ├── tools/                     # 注册中心 + 21 个 Function Schema 工具
 ├── ui/                        # 9 个页面 + 公共组件（错误边界 / 空库守卫 / flash / 锚点卡片）
-├── tests/                     # 单元测试（181 项）
+├── tests/                     # 单元测试（190 项）
 ├── scripts/                   # verify_official / bench_graph / selftest / apptest_check / resnap(截图) / watch_daemon
 ├── pdf/ 与 demo_data/         # 赛题测试 PDF 与演示数据
 ├── docs/                      # 技术文档（md/html/pdf）、评审报告、界面截图 docs/shots/
