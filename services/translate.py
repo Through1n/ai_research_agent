@@ -504,7 +504,7 @@ def native_page_html(doc, page_num, highlight=None):
 
     html = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 *{{box-sizing:border-box;}}
-html,body{{margin:0;padding:0;background:var(--c-bg,#fafafa);overflow-wrap:anywhere;}}
+html,body{{margin:0;padding:0;background:var(--c-bg,#fafafa);color:var(--c-text,#18181b);overflow-wrap:anywhere;}}
 img{{max-width:100%;height:auto;}}
 #tip{{position:fixed;top:var(--s-2,8px);left:var(--s-2,8px);right:var(--s-2,8px);z-index:8;
 background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);
