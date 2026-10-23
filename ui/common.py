@@ -1,8 +1,8 @@
 """共享 UI 组件：页面头部、美化表格、空状态、错误边界、执行轨迹时间线、溯源卡片。
 
 UI 一致性规范（话术 3）——本模块是全部页面的公共层，提供：
-  1. page_header()          统一页面顶部（浅色渐变卡片）
-  2. pretty_table()         统一表格渲染（浅蓝/浅紫渐变表头 + 斑马纹）
+  1. page_header()          统一页面顶部（白底卡片 + 左侧强调色竖条）
+  2. pretty_table()         统一表格渲染（柔底表头 + 1px 描边 + 斑马纹）
   3. ensure_state()         session_state 集中初始化，避免 KeyError
   4. empty_state()          空数据友好提示 + 引导操作
   5. friendly_error() / net_error() / llm_guard()   API 调用失败的统一降级话术
@@ -10,10 +10,49 @@ UI 一致性规范（话术 3）——本模块是全部页面的公共层，提
   7. safe_render() / safe_call()  统一异常边界（增强版，保持旧调用签名）
   8. jump_banner()          跨页跳转提示条（消费 page_qa 写入的 qa_jump_page）
 
-对外历史函数（render_styled_table / html_table / source_card / render_trace /
+对外历史函数（render_styled_table / source_card / render_trace /
 memory_mb / require_library / resolve_pdf / embed_html）全部保留，签名不变，
 以免破坏其他页面（page_qa / page_reading / page_writing）的既有调用。
+（死代码 html_table 已于 2026-10-24 删除：全仓 0 调用者，连带 _C_BORDER_CELL2 /
+_C_BG_ZEBRA2 两个只服务它的常量。）
+
+==============================================================================
+全站视觉重做（接令牌）—— 本模块不再持有任何写死的视觉字面量
+==============================================================================
+改动要点：
+  1) 所有颜色 / 圆角 / 间距 / 字号 / 行高改为引用 ui/design.py 的 CSS 变量
+     （var(--...)）。这些 fragment 运行在主文档里，能正常继承页面级变量。
+  2) 每个公共渲染入口（page_header / pretty_table / source_card / empty_state_card /
+     metric_strip / embed_html / long_block …）先调用 design.ensure()；它是会话级
+     幂等的（内部有旗标），多处调用无害——页面渲染顺序不固定，不能假定上游已注入。
+  3) 装饰性阴影（原 _C_SHADOW）全部删除，层级改用 1px solid var(--c-border) 表达；
+     圆角一律收敛到 --r(8px)、间距一律取 8px 倍数、字号取 --fs-* 字阶。
+  4) 旧常量名 _C_* **保留**（外部可能 import），但**值已改成 var 引用**；
+     新代码请直接用 var(--...) 或下面的共用构件类，别再写死字面量。
+
+共用构件类清单（一次性注入 :: _COMPONENT_CSS，后续页面迁移直接调用）
+-------------------------------------------------------------------
+  .ai-card            标准白底卡片：圆角 8 / 1px 描边 / 内边距 --s-4 / 长词可控换行
+  .ai-card-tight      同系列，内边距收紧到 --s-3（列表项、小幅卡片）
+  .ai-section         分区容器：上间距 --s-6 / 下间距 --s-4
+  .ai-section-title   分区标题：--fs-title + 左侧 3px 强调色竖条 + --s-3 左内距
+  .ai-section-sub     分区副文案：--fs-caption / --c-text-2
+  .ai-kpi             KPI 指标卡容器（白底 + 1px 描边 + 圆角 8）
+  .ai-kpi-val         指标数值：--fs-display / 强调色 / tabular-nums 等宽数字
+  .ai-kpi-label       指标名（或口径小字）：--fs-micro / --c-text-2
+  .ai-chip            行内标签：圆角 8 / --c-subtle 底 / --fs-micro / --s-1 --s-3 内距
+  .ai-num             引导动作的序号标记（1. / 2.，用于空状态卡片）
+  .ai-empty           空状态卡片容器（白底 + 1px 描边 + 圆角 8）
+  .ai-empty-title     空状态标题：--fs-title / 加粗 / --c-text
+  .ai-empty-hint      空状态引导行：--fs-caption / --c-text-2
+  .ai-muted           次级文字（--c-text-2）
+  .ai-snippet         等宽代码块：可横向滚动，绝不撑破栅格
+  .ai-think           思考块：左侧 3px 细线表达层级（不用阴影）
+  .ai-table-wrap      表格包裹层：overflow-x:auto，防宽表撑破布局
+  .ai-divider         1px 分隔线
+  .ptab / .ptab-wrap  统一表格（见 _PRETTY_CSS：柔底表头 + 斑马纹 + 悬停态）
 """
+
 import json
 import os
 import socket
@@ -23,6 +62,8 @@ from html import escape as _escape
 
 import pandas as pd
 import streamlit as st
+
+from ui import design as _design
 
 # 长文本折叠阈值：超过该字数或 15 行一律折叠（UI 规范 5）
 LONG_TEXT_LIMIT = 300
@@ -34,38 +75,170 @@ QA_JUMP_KEY = "qa_jump_page"
 READING_MENU_IDX = 3
 
 # ============================ 视觉令牌（设计系统对齐） ============================
-# 对齐 Linear / Vercel 类设计系统的整洁一致性原则：
-#   1) 统一间距尺度（4px 网格：8/12/16/24），padding 对称；
-#   2) 单一强调色（_C_PRIMARY）贯穿全站，减少颜色噪音；
-#   3) 圆角收敛到一套（卡片 10px / 徽章 12px / 小控件 6px），不混用；
-#   4) 浅蓝→浅紫渐变作为全站唯一「卡片渐变」，页头与表头同源。
-# 仅作模块内部常量，不对外暴露，不改变任何导出函数签名与渲染语义。
-_C_PRIMARY      = "#3b6fb6"   # 主强调蓝（左侧竖条 / 徽章 / 链接色）
-_C_PRIMARY_DK   = "#2f5a96"   # 强调蓝深色（渐变终点 / 深表头）
-_C_INK          = "#173a63"   # 标题深蓝灰
-_C_INK_TBL      = "#17325a"   # 表头文字深蓝（与 _C_INK 同源，配合渐变更清晰）
-_C_SUB          = "#4a5a70"   # 副文案
-_C_CELL         = "#26313f"   # 单元格正文
-_C_BORDER       = "#d9e3f2"   # 卡片外边框（浅蓝）
-_C_BORDER_TBL   = "#dde5f0"   # 表格外框
-_C_BORDER_HEAD  = "#bfd2ee"   # 表头底框
-_C_BORDER_CELL  = "#e9eef5"   # 表格单元格分隔线
-_C_BORDER_CELL2 = "#e8edf3"   # 旧表单元格分隔线（html_table）
-_C_BG_BLUE      = "#eef4fc"   # 全站唯一浅蓝渐变起点
-_C_BG_PURPLE    = "#f6f1fd"   # 全站唯一浅紫渐变终点
-_C_BG_SOFT      = "#f7faff"   # 卡片底色（溯源卡）
-_C_BG_ZEBRA     = "#f7fafd"   # 斑马纹
-_C_BG_ZEBRA2    = "#f6f9fd"   # 旧表斑马纹（html_table）
-_C_BG_HOVER     = "#eef4fc"   # 悬停底色
-_C_SOURCE       = "#27518a"   # 溯源标题
-_C_THOUGHT_BG   = "#f4f6fa"   # 思考块底色
-_C_THOUGHT_BD   = "#9aa7bd"   # 思考块竖条
-_C_RADIUS       = "10px"      # 卡片 / 表格圆角
-_C_RADIUS_BADGE = "12px"      # 徽章 / 标签圆角（pill 风格）
-_C_RADIUS_SM    = "6px"       # 小控件圆角（思考块等）
-_C_SHADOW       = "0 1px 3px rgba(23,58,99,.06)"  # 统一轻投影（蓝色调，呼应品牌）
-_C_PAD          = "12px 16px"  # 统一卡片内边距（对称）
-_C_MARGIN       = "2px 0 14px" # 统一卡片外边距
+# ⚠️ 全站视觉重做后本模块**不再持有字面量**：下面每个常量都改写成 ui/design.py 的
+#    CSS 变量引用。常量名保留是为了兼容历史 import（同名-semantic 映射关系见下表），
+#    **新代码请直接用 var(--...) 或 _COMPONENT_CSS 里的共用类，别再写死字面量**。
+# 颜色映射遵循「中性色为主 + 唯一强调色 #1f5fae」：
+#   · 原渐变链 _C_PRIMARY/#3b6fb6、_C_PRIMARY_DK/#2f5a96、_C_SOURCE/#27518a 全部并入
+#     唯一强调色 --c-accent(#1f5fae) / --c-accent-hover(#1a4f92)，原强调蓝被删除；
+#   · 原浅紫 _C_BG_PURPLE/#f6f1fd 是全站唯一的第二种彩色（紫），已删除，并与浅蓝
+#     _C_BG_BLUE 一起并入中性柔和面 --c-subtle(#f4f4f5)；
+#   · 原 _C_INK/#173a63、_C_INK_TBL/#17325a、_C_SUB/#4a5a70、_C_CELL/#26313f 这些深浅
+#     不一的蓝灰，统一并入中性文字三档 --c-text / --c-text-2 / --c-text-3；
+#   · 其余边框 / 底色 / 斑马纹并入 --c-border、--c-border-strong、--c-surface、--c-bg。
+# 圆角：原三档 10 / 12 / 6px 全部收敛到 --r(8px)（_C_RADIUS / _C_RADIUS_BADGE /
+#   _C_RADIUS_SM 三档同时消失）。
+# 阴影：_C_SHADOW 原为装饰性轻投影，已删除（改为 none）；层级一律靠 1px 边框表达。
+# 间距：原 padding `12px 16px` → --s-3 --s-4；原 margin `2px 0 14px` → 0 0 --s-2，
+#   全部落在 8px 网格（S1=4 / S3=12 是设计系统允许的半档）。
+_C_PRIMARY      = "var(--c-accent)"          # 唯一强调色（原 #3b6fb6 被删除，并入主色）
+_C_PRIMARY_DK   = "var(--c-accent-hover)"    # 强调色按压态（原 #2f5a96）
+_C_INK          = "var(--c-text)"            # 标题（原 #173a63 并入中性正文色）
+_C_INK_TBL      = "var(--c-text)"            # 表头文字（原 #17325a 并入中性正文色）
+_C_SUB          = "var(--c-text-2)"          # 副文案（原 #4a5a70）
+_C_CELL         = "var(--c-text)"            # 单元格正文（原 #26313f）
+_C_BORDER       = "var(--c-border)"          # 卡片外边框（原 #d9e3f2 浅蓝，改中性）
+_C_BORDER_TBL   = "var(--c-border)"          # 表格外框（原 #dde5f0）
+_C_BORDER_HEAD  = "var(--c-border-strong)"   # 表头底框（原 #bfd2ee）
+_C_BORDER_CELL  = "var(--c-border)"          # 表格单元格分隔线（原 #e9eef5）
+_C_BG_BLUE      = "var(--c-subtle)"          # 原渐变浅蓝起点（渐变已删，改中性柔和面）
+_C_BG_PURPLE    = "var(--c-subtle)"          # 原渐变浅紫终点（紫色被删，并入 --c-subtle）
+_C_BG_SOFT      = "var(--c-surface)"         # 卡片底色（原 #f7faff）
+_C_BG_ZEBRA     = "var(--c-bg)"              # 斑马纹（原 #f7fafd）
+_C_BG_HOVER     = "var(--c-accent-soft)"     # 悬停底色（唯一保留的色彩强调：8% 主色）
+_C_SOURCE       = "var(--c-text)"            # 溯源标题（原 #27518a 蓝色，改中性正文色）
+_C_THOUGHT_BG   = "var(--c-subtle)"          # 思考块底色（原 #f4f6fa）
+_C_THOUGHT_BD   = "var(--c-border-strong)"   # 思考块竖条（原 #9aa7bd）
+_C_RADIUS       = "var(--r)"                 # 卡片 / 表格圆角（原 10px → 统一 8px）
+_C_RADIUS_BADGE = "var(--r)"                 # 徽章 / 标签圆角（原 pill 12px → 统一 8px）
+_C_RADIUS_SM    = "var(--r)"                 # 小控件圆角（原 6px → 统一 8px）
+_C_SHADOW       = "none"                     # 装饰性阴影已删除；层级一律用 1px 边框
+_C_PAD          = "var(--s-3) var(--s-4)"    # 统一卡片内边距（原 12px 16px → 8px 网格）
+_C_MARGIN       = "0 0 var(--s-2)"           # 统一卡片外边距（原 2px 0 14px → 8px 网格）
+
+
+# ==================== 令牌接入 / 一次性 CSS 注入（会话幂等） ====================
+# 为什么需要它：page_pretty_table 的 _PRETTY_CSS 以前是**每渲染一次表格就整段重灌**
+# 一次 <style>，一张页面有 3 张表就灌 3 遍。这里统一走会话级旗标，只注入一次。
+_CSS_FLAG_COMPONENT = "_ai_common_component_css"   # _COMPONENT_CSS 已注入标记
+_CSS_FLAG_TABLE     = "_ai_common_table_css"       # _PRETTY_CSS 已注入标记
+
+
+def _ensure_tokens() -> None:
+    """确保 ui/design.py 的令牌层已注入本次会话（幂等，design.apply 自带旗标）。
+
+    为什么每个渲染入口都要调：页面之间渲染顺序不固定（用户可能直达任意一页），
+    不能假定上游页面/框架已经注入过令牌。
+    """
+    try:
+        # bare 模式（纯函数单测、离线脚本）没有脚本运行上下文，此时不触碰 st.*：
+        # 既无必要，也会刷 "missing ScriptRunContext" 警告污染测试输出。
+        # suppress_warning=True：取不到上下文是预期情况，不需要日志（streamlit 1.63 签名）。
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx(suppress_warning=True) is None:
+            return
+    except Exception:
+        pass
+    try:
+        _design.ensure()
+    except Exception:
+        pass
+
+
+def _inject_css_once(css_block: str, flag: str) -> bool:
+    """把一段**自带 <style> 包裹**的 CSS 一次性注入会话，返回本次是否真的注入了。
+
+    幂等旗标放在 session_state 而不是模块全局变量：Streamlit 每次 rerun 都是整脚本
+    重跑，模块变量在部分运行模式下不可靠。
+    """
+    _ensure_tokens()
+    try:
+        if st.session_state.get(flag):
+            return False
+        st.markdown(css_block, unsafe_allow_html=True)
+        st.session_state[flag] = True
+        return True
+    except Exception:
+        return False
+
+
+# ==================== 全站共用构件类（供后续各 page_*.py 迁移） ====================
+# 全部引用 var(--...)，因此在任何页面任何位置渲染都自动跟随令牌；只需 _COMPONENT_CSS
+# 注入一次（会话幂等，见 _inject_css_once）。
+_COMPONENT_CSS = """<style>
+/* AI4S 共用构件类（ui/common.py :: _COMPONENT_CSS）—— 新页面优先复用，勿再内联写死样式 */
+.ai-card{                       /* 标准白底卡片：列表项、说明块、溯源卡的通用容器 */
+  background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);
+  padding:var(--s-4);margin:0 0 var(--s-2);min-width:0;overflow-wrap:anywhere;
+}
+.ai-card-tight{                 /* 紧凑卡片：密集列表（如溯源多条、目录项） */
+  background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);
+  padding:var(--s-3);margin:0 0 var(--s-2);min-width:0;overflow-wrap:anywhere;
+}
+.ai-section{                    /* 分区容器：区块之间的垂直节奏由它统一给 */
+  margin-top:var(--s-6);margin-bottom:var(--s-4);min-width:0;
+}
+.ai-section-title{              /* 分区标题：左侧 3px 强调色竖条表达层级，不靠阴影 */
+  font-size:var(--fs-title);line-height:var(--lh-title);font-weight:700;color:var(--c-text);
+  border-left:3px solid var(--c-accent);padding-left:var(--s-3);overflow-wrap:anywhere;
+}
+.ai-section-sub{                /* 分区副文案：紧随标题的一句话口径说明 */
+  font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--c-text-2);
+  margin-top:var(--s-1);overflow-wrap:anywhere;
+}
+.ai-kpi{                        /* KPI 指标卡容器：白底 + 1px 描边 + 圆角 8 */
+  background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);
+  padding:var(--s-4);margin:0 0 var(--s-2);min-width:0;overflow:hidden;
+}
+.ai-kpi-val{                    /* 指标数值：大号等宽数字，保证多列小数点对齐 */
+  margin-top:var(--s-1);font-size:var(--fs-display);line-height:var(--lh-display);
+  font-weight:700;color:var(--c-accent);overflow-wrap:anywhere;
+}
+.ai-kpi-label{                  /* 指标名 / 口径小字：最弱一级文字 */
+  font-size:var(--fs-micro);line-height:var(--lh-micro);color:var(--c-text-2);
+  overflow-wrap:anywhere;
+}
+.ai-chip{                       /* 行内标签：标签云、徽章、状态位 */
+  display:inline-block;max-width:100%;border-radius:var(--r);background:var(--c-subtle);
+  color:var(--c-text-2);font-size:var(--fs-micro);line-height:var(--lh-micro);
+  padding:var(--s-1) var(--s-3);overflow-wrap:anywhere;
+}
+.ai-num{                        /* 引导动作序号（1. / 2.）：比正文深一级，作为视觉锚点 */
+  color:var(--c-accent);font-weight:700;
+}
+.ai-empty{                      /* 空状态卡片容器：整块内容区为空时的首屏教学位 */
+  background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);
+  padding:var(--s-4);margin:0 0 var(--s-2);min-width:0;overflow-wrap:anywhere;
+}
+.ai-empty-title{                /* 空状态标题 */
+  font-size:var(--fs-title);line-height:var(--lh-title);font-weight:700;color:var(--c-text);
+}
+.ai-empty-hint{                 /* 空状态引导行（会出现什么 / 下一步点哪里 / 口径边界） */
+  font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--c-text-2);
+}
+.ai-muted{                      /* 次级文字：解释性、补充说明性内容 */
+  color:var(--c-text-2);
+}
+.ai-snippet{                    /* 等宽代码块：原文片段、工具参数，横向溢出时滚动，不撑破栅格 */
+  background:var(--c-subtle);border:1px solid var(--c-border);border-radius:var(--r);
+  padding:var(--s-2) var(--s-3);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--c-text);
+  max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere;
+}
+.ai-think{                      /* 思考块：左侧细线表达"这是过程不是结论"，取代原灰底 + 阴影 */
+  background:var(--c-subtle);border-left:3px solid var(--c-border-strong);border-radius:var(--r);
+  padding:var(--s-2) var(--s-3);color:var(--c-text-2);
+  font-size:var(--fs-caption);line-height:var(--lh-caption);
+  white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;
+}
+.ai-table-wrap{                 /* 宽表兜底：任何表格都要套一层，防窄屏横向溢出把整页顶宽 */
+  max-width:100%;overflow-x:auto;
+}
+.ai-divider{                    /* 轻量 1px 分隔线 */
+  border-top:1px solid var(--c-border);margin:var(--s-4) 0;
+}
+</style>"""
 
 
 # ============================ 基础工具 ============================
@@ -97,39 +270,77 @@ def at(items, idx, default=None):
 
 # ============================ UI 规范 1：页面顶部 ============================
 def page_header(title: str, subtitle: str = "", icon: str = ""):
-    """统一页面顶部：渐变浅色卡片 + 标题 + 一句话说明。各 page.render 第一行调用。
+    """统一页面顶部：白底卡片 + 标题 + 一句话说明。各 page.render 第一行调用。
+
+    视觉（重做后）：左侧 3px 强调色竖条 + 1px 描边 + 圆角 8，不再有渐变与阴影，
+    字阶走 --fs-title / --fs-caption，间距取 8px 网格。
 
     向后兼容：旧调用 `page_header("📁 文献库管理", "说明")` 仍可用（positional）。
     """
     head = f"{icon} {title}".strip() if icon else str(title or "").strip()
     sub = str(subtitle or "").strip()
+    # 样式全部走 var(--...)：原实现是 f-string 拼 20px/13px/5px/4px 等字面量，
+    # 且带渐变背景 + 阴影，与"中性留白 + 去装饰"的新版式不符。
+    _ensure_tokens()
+    _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
     st.markdown(
-        f"""<div style="background:linear-gradient(90deg,{_C_BG_BLUE} 0%,{_C_BG_PURPLE} 100%);
-border:1px solid {_C_BORDER};border-left:4px solid {_C_PRIMARY};border-radius:{_C_RADIUS};
-padding:{_C_PAD};margin:{_C_MARGIN};box-shadow:{_C_SHADOW};">
-<div style="font-size:20px;font-weight:700;color:{_C_INK};line-height:1.35;">{_esc(head)}</div>
-{"" if not sub else f'<div style="margin-top:5px;font-size:13px;color:{_C_SUB};line-height:1.65;">{_esc(sub)}</div>'}
-</div>""",
+        '<div class="ai-card" style="border-left:3px solid var(--c-accent);">'
+        '<div style="font-size:var(--fs-title);line-height:var(--lh-title);'
+        'font-weight:700;color:var(--c-text);overflow-wrap:anywhere;">%s</div>'
+        '%s</div>' % (
+            _esc(head),
+            "" if not sub else
+            '<div style="margin-top:var(--s-1);font-size:var(--fs-caption);'
+            'line-height:var(--lh-caption);color:var(--c-text-2);'
+            'overflow-wrap:anywhere;">%s</div>' % _esc(sub),
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+# ============================ UI 规范 1.5：统一分区标题 ============================
+def section_header(title: str, desc: str = "", icon: str = ""):
+    """统一分区标题（page_header 的次级形态）：3px 强调色竖条 + 主/副两级文案。
+
+    收编原 page_library._section 与 page_graph._sec_head 两份各自为政的内联实现
+    （曾各带 #3b6fb6 第二强调蓝、蓝色渐变底、6/10px 圆角、20px/10px 脱轨间距，
+    且 page_graph 每次调用整段重灌 CSS）。样式全部走 _COMPONENT_CSS 的
+    .ai-section* 类，自动跟随令牌；垂直节奏由 .ai-section 统一给。
+    """
+    head = f"{icon} {title}".strip() if icon else str(title or "").strip()
+    sub = str(desc or "").strip()
+    _ensure_tokens()
+    _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
+    st.markdown(
+        '<div class="ai-section">'
+        '<div class="ai-section-title">%s</div>'
+        '%s</div>' % (
+            _esc(head),
+            "" if not sub else '<div class="ai-section-sub">%s</div>' % _esc(sub),
+        ),
         unsafe_allow_html=True,
     )
 
 
 # ============================ UI 规范 4：统一表格 ============================
+# 表格样式：全部引用 var(--...)，故**不需要再做 % 格式化**（原实现是 % 模板，含有
+# 必须转义的 `100%%`，一旦漏写就 ValueError）。这里直接是普通字符串，`width:100%`
+# 不会再炸 —— 注意：保持普通字符串的前提是绝不重新启用 % 格式化。
+# 注入方式由「每次 pretty_table 都全量重灌整段」改为**会话级一次性**（见 _inject_css_once）。
+# 渐变表头去掉：改中性柔和底 --c-subtle + 加深 1px 底框表层级，颜色噪音更少。
 _PRETTY_CSS = """<style>
-.ptab-wrap{overflow-x:auto;margin:8px 0 12px;border:1px solid %s;border-radius:%s;}
-table.ptab{border-collapse:collapse;width:100%%;font-size:13px;
-font-family:'Segoe UI','Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;}
-.ptab th{background:linear-gradient(90deg,%s 0%%,%s 100%%);color:%s;
-font-weight:700;padding:9px 12px;text-align:left;border-bottom:1.5px solid %s;white-space:nowrap;}
-.ptab td{padding:8px 12px;border-bottom:1px solid %s;color:%s;
-vertical-align:top;line-height:1.6;}
-.ptab tr:nth-child(even) td{background:%s;}
-.ptab tr:hover td{background:%s;}
-</style>""" % (
-    _C_BORDER_TBL, _C_RADIUS,
-    _C_BG_BLUE, _C_BG_PURPLE, _C_INK_TBL, _C_BORDER_HEAD,
-    _C_BORDER_CELL, _C_CELL, _C_BG_ZEBRA, _C_BG_HOVER,
-)
+.ptab-wrap{overflow-x:auto;max-width:100%;margin:0 0 var(--s-2);
+border:1px solid var(--c-border);border-radius:var(--r);}
+table.ptab{border-collapse:collapse;width:100%;font-family:var(--font-sans);
+font-size:var(--fs-caption);line-height:var(--lh-caption);}
+.ptab th{background:var(--c-subtle);color:var(--c-text);font-weight:600;
+padding:var(--s-2) var(--s-3);text-align:left;
+border-bottom:1px solid var(--c-border-strong);white-space:nowrap;}
+.ptab td{padding:var(--s-2) var(--s-3);border-bottom:1px solid var(--c-border);
+color:var(--c-text);vertical-align:top;line-height:var(--lh-body);overflow-wrap:anywhere;}
+.ptab tr:nth-child(even) td{background:var(--c-bg);}
+.ptab tr:hover td{background:var(--c-accent-soft);}
+</style>"""
 
 
 def _to_frame(df_or_rows, columns=None) -> pd.DataFrame:
@@ -153,10 +364,14 @@ def _to_frame(df_or_rows, columns=None) -> pd.DataFrame:
 
 
 def pretty_table(df_or_rows, columns=None, title: str = "", max_rows: int = 200):
-    """全项目统一表格：浅色渐变表头 + 深色文字 + 细边框 + 斑马纹。
+    """全项目统一表格：柔底表头 + 正文色文字 + 1px 细边框 + 斑马纹。
 
     支持 DataFrame / list[dict] / list[list]。空表自动给出友好提示而非渲染空白。
     """
+    # 令牌 + 表格 CSS 都在这里一次性注入，避免每个表格重复灌同一段 <style>
+    _ensure_tokens()
+    _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
+    _inject_css_once(_PRETTY_CSS, _CSS_FLAG_TABLE)
     if title:
         st.markdown(f"##### {title}")
     try:
@@ -172,7 +387,8 @@ def pretty_table(df_or_rows, columns=None, title: str = "", max_rows: int = 200)
         df = df.head(max_rows)
     try:
         body = df.to_html(index=False, classes="ptab", border=0, escape=True)
-        st.markdown(_PRETTY_CSS + f'<div class="ptab-wrap">{body}</div>', unsafe_allow_html=True)
+        # .ptab-wrap 复用共用类语义（宽表防撑破），表格 CSS 已一次性注入，此处不再拼 CSS
+        st.markdown(f'<div class="ptab-wrap">{body}</div>', unsafe_allow_html=True)
     except Exception as e:
         st.warning(f"⚠️ 表格渲染失败，已降级为原生表格：{str(e)[:120]}")
         st.dataframe(df, use_container_width=True, hide_index=True)
@@ -504,6 +720,7 @@ def show_llm_result(content, success_msg="✅ 完成", title="查看完整内容
 def long_block(text, title: str = "查看完整内容", limit: int = LONG_TEXT_LIMIT,
                expander_label: str = "📄"):
     """超过 ~300 字或 15 行的内容自动折叠；短内容直接展示。"""
+    _ensure_tokens()
     t = "" if text is None else str(text)
     if not t.strip():
         st.info("📭 暂无内容。")
@@ -623,12 +840,29 @@ def jump_banner(show_goto: bool = True):
 
 # ============================ 历史组件（签名保持不变） ============================
 def render_styled_table(df, title: str = ""):
-    """轻量美化表格：title 可选，统一走 pretty_table 的浅色渐变样式。"""
+    """轻量美化表格：title 可选，统一走 pretty_table 的中性柔底样式。"""
     pretty_table(df, title=title)
 
 
-def embed_html(html, height=600, scrolling=True):
-    """HTML 嵌入兼容层：优先 components.html，移除后自动降级 st.iframe。"""
+def embed_html(html: str, height: "int | str" = 600, scrolling: bool = True):
+    """HTML 嵌入兼容层：优先 components.html，失败降级 st.iframe，再失败给友好提示。
+
+    html      —— 传入的 HTML / srcdoc 字符串。内部会先用 design.inject_into_head()
+                 塞一份 iframe 基础令牌：**CSS 变量穿透不进 iframe**（srcdoc 是独立文档，
+                 取父窗口 :root 变量返回空，只会走 fallback，实测依据见 ui/design.py
+                 文件头 §二）。inject_into_head 找不到 </head> 时原样返回，且不删除任何
+                 原有内容 —— 外界依赖 </head> 做 replace 的脚本不受影响。
+    height    —— int：像素高度兜底值 600；str：可传 "content"，走 Streamlit 1.63 的
+                 LayoutConfig 官方 content-height 自动测量（scripts/_smoke_ui.py 第 8 页
+                 架构图与 ui/page_misc.py:168 已在真实 AppTest 上下文实跑 0 异常）。
+                 两者都是合法取值，**不是魔法数字**，改需求时请改调用方而非这里。
+    scrolling —— 是否允许 iframe 内滚动。
+    """
+    _ensure_tokens()
+    try:
+        html = _design.inject_into_head(html)
+    except Exception:
+        pass                       # 令牌注入失败不得阻断渲染：原样用传入的 html
     import streamlit as _st
     try:
         import streamlit.components.v1 as _c
@@ -641,21 +875,6 @@ def embed_html(html, height=600, scrolling=True):
             st.caption("🛠️ 怎么办：刷新页面重试；其余功能不受影响。")
 
 
-def html_table(df):
-    """旧版 HTML 表格（深色表头），保留供历史调用；新代码请统一用 pretty_table。"""
-    css = """<style>.ptable{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0;}
-.ptable th{background:linear-gradient(135deg,%s,%s);color:#fff;padding:9px 12px;text-align:left;}
-.ptable td{padding:8px 12px;border-bottom:1px solid %s;}
-.ptable tr:nth-child(even){background:%s;}.ptable tr:hover{background:%s;}</style>""" % (
-        _C_PRIMARY, _C_PRIMARY_DK, _C_BORDER_CELL2, _C_BG_ZEBRA2, _C_BG_HOVER)
-    try:
-        body = df.to_html(index=False, classes="ptable", border=0, escape=False)
-    except Exception as e:
-        pretty_table(df)
-        return f"<!-- 旧表格降级：{_esc(str(e)[:80])} -->"
-    return css + f'<div style="overflow-x:auto;">{body}</div>'
-
-
 def source_card(source, page, text, n=None, snippet_len=520):
     """溯源卡片：页码徽章可点击跳转阅读页（?p=3&jump_page=N&paper=文件名）。"""
     tag = f"【{n}】 " if n else ""
@@ -663,14 +882,20 @@ def source_card(source, page, text, n=None, snippet_len=520):
     t = _esc(str(text or "")[:snippet_len])
     # 阅读页在 MENU 中的索引为 3（📖 版式阅读与智能翻译）
     safe_src = str(source).replace('"', "%22")
+    # DOM 内 source 保持完整（AppTest 按完整文件名断言）；显示过长由 .ai-ellipsis 截断
+    # 强调色底上的锚点必须显式给白字：design 层有全局 a{color:var(--c-accent)}，
+    # 不覆盖的话会变成「蓝底蓝字」看不见（原实现就是这么写的，此处保留并注明原因）
     badge = (f'<a href="?p={READING_MENU_IDX}&jump_page={page}&paper={safe_src}" target="_self" '
-             f'style="text-decoration:none;color:#fff;display:inline-block;">第 {page} 页</a>')
-    return f"""<div style="background:{_C_BG_SOFT};border-left:4px solid {_C_PRIMARY};border-radius:{_C_RADIUS};
-padding:{_C_PAD};margin:8px 0;box-shadow:{_C_SHADOW};">
-<div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-<strong style="color:{_C_SOURCE};font-size:13.5px;">{tag}📄 {_esc(source)}</strong>
-<span style="background:{_C_PRIMARY};color:#fff;padding:1px 10px;border-radius:{_C_RADIUS_BADGE};font-size:11.5px;">{badge}</span></div>
-<div style="color:#333;font-size:12.5px;line-height:1.75;white-space:pre-wrap;">{t}…</div></div>"""
+             f'style="color:var(--c-on-accent);text-decoration:none;display:inline-block;">第 {page} 页</a>')
+    # 视觉：左侧 3px 强调色竖条取代原来的 4px + 阴影；整卡走 .ai-card / 共用类 + var
+    _ensure_tokens()
+    return f"""<div class="ai-card" style="border-left:3px solid var(--c-accent);">
+<div style="display:flex;flex-wrap:wrap;gap:var(--s-2);justify-content:space-between;
+align-items:baseline;margin-bottom:var(--s-2);min-width:0;">
+<strong class="ai-ellipsis" style="flex:1 1 auto;min-width:0;font-size:var(--fs-body);
+line-height:var(--lh-body);color:var(--c-text);font-weight:600;">{tag}📄 {_esc(source)}</strong>
+<span class="ai-chip" style="background:var(--c-accent);color:var(--c-on-accent);flex:0 0 auto;">{badge}</span></div>
+<div class="ai-snippet">{t}…</div></div>"""
 
 
 _ICON = {
@@ -696,16 +921,21 @@ def render_trace(trace, in_expander=False):
                 if kind == "plan":
                     st.markdown(f"**{icon} {ev.get('title','')}**")
                     for i, s in enumerate((ev.get("data") or {}).get("steps", []), 1):
-                        st.markdown(f"<div style='margin-left:18px;color:#444;font-size:13px;'>{i}. {_esc(s)}</div>",
+                        # 原 margin-left:18px 不是 8px 网格 → --s-4；#444 → 次级文字令牌
+                        st.markdown("<div class='ai-muted' style='margin-left:var(--s-4);"
+                                    "font-size:var(--fs-caption);line-height:var(--lh-caption);'>"
+                                    f"{i}. {_esc(s)}</div>",
                                     unsafe_allow_html=True)
                 elif kind == "route":
                     st.markdown(f"{icon} **{ev.get('title','')}** → `{(ev.get('data') or {}).get('expert','')}`  "
-                                f"<span style='color:#888;font-size:12px;'>{_esc(ev.get('content',''))}</span>",
+                                "<span class='ai-muted' style='font-size:var(--fs-micro);'>"
+                                f"{_esc(ev.get('content',''))}</span>",
                                 unsafe_allow_html=True)
                 elif kind == "thought":
-                    st.markdown(f"<div style='background:{_C_THOUGHT_BG};border-left:3px solid {_C_THOUGHT_BD};padding:8px 12px;"
-                                f"border-radius:{_C_RADIUS_SM};color:#444;font-size:12.5px;white-space:pre-wrap;'>"
-                                f"{icon} {_esc(ev.get('content',''))}</div>", unsafe_allow_html=True)
+                    # 思考块：改共用类 .ai-think（左侧 3px 细线），删掉原来的灰底 + 自定义圆角
+                    st.markdown('<div class="ai-think">'
+                                f"{icon} {_esc(ev.get('content',''))}</div>",
+                                unsafe_allow_html=True)
                 elif kind == "tool":
                     d = ev.get("data") or {}
                     st.markdown(f"{icon} **调用工具 `{d.get('name')}`**")
@@ -768,7 +998,8 @@ def resolve_pdf(filename):
 # 「页面坏了？」而不是「我该点哪」。以下两个组件分别解决「空状态」与「信息层级」：
 #   · empty_state_card()  教学式空状态卡片（说明会出现什么 + 下一步动作 + 口径边界）
 #   · metric_strip()      KPI 指标条（3-5 个 hero 指标先行，明细表格后置）
-# 视觉令牌全部复用本模块顶部的设计系统常量（色板/圆角/间距/阴影），不引入第二套语言。
+# 视觉层一律引用 ui/design.py 的令牌：颜色 / 圆角 / 间距 / 字号都走 var(--...) 或
+# 本模块 _COMPONENT_CSS 的共用类，装饰性阴影已删除，不引入第二套视觉语言。
 def _empty_state_card_html(title: str, desc: str = "", actions=(), icon: str = "🧭",
                            footer: str = "") -> str:
     """教学式空状态卡片的 HTML（纯函数，便于单测；st.* 包装见 empty_state_card）。
@@ -778,26 +1009,33 @@ def _empty_state_card_html(title: str, desc: str = "", actions=(), icon: str = "
     ③ 必须如实说明的口径边界（footer，如演示语料规模、非真实引用）。
     与 empty_state() 的分工：后者是行内轻提示（一行信息 + 一句引导），
     本卡片用于「整块内容区为空」的首屏，视觉与 page_header 同源。
+
+    改造：原来整卡手写背景/边框/圆角/内边距/阴影 + 15px/13px/12px 字号，
+    现全部改为共用类 + var(--...)。两个被单测精确断言的字面量在外部使用者眼里
+    敏感，**逐字保留**：① 序号标记 `<span>N.</span>`；② footer 的虚线分隔
+    `border-top:1px dashed`（只在有 footer 时出现，无 footer 时整段不生成）。
     """
+    _ensure_tokens()
     acts = [str(a) for a in (actions or ()) if str(a).strip()]
     rows = "".join(
-        '<div style="margin-top:6px;font-size:13px;color:%s;line-height:1.7;">'
-        '<span style="color:%s;font-weight:700;">%d.</span> %s</div>'
-        % (_C_CELL, _C_PRIMARY, _i, _esc(_a)) for _i, _a in enumerate(acts, 1))
+        '<div class="ai-empty-hint" style="margin-top:var(--s-1);line-height:1.7;">'
+        '<span class="ai-num">%d.</span> %s</div>'
+        % (_i, _esc(_a)) for _i, _a in enumerate(acts, 1))
     _desc_html = ("" if not str(desc or "").strip() else
-                  '<div style="margin-top:6px;font-size:13px;color:%s;line-height:1.75;">%s</div>'
-                  % (_C_SUB, _esc(desc)))
+                  '<div class="ai-empty-hint" style="margin-top:var(--s-1);line-height:1.75;">%s</div>'
+                  % _esc(desc))
+    # footer 的虚线分隔线必须"有 footer 才出现"，故不进 _COMPONENT_CSS，留在行内
     _foot_html = ("" if not str(footer or "").strip() else
-                  '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed %s;'
-                  'font-size:12px;color:%s;line-height:1.7;">%s</div>'
-                  % (_C_BORDER, _C_SUB, _esc(footer)))
+                  '<div style="margin-top:var(--s-2);padding-top:var(--s-2);'
+                  'border-top:1px dashed var(--c-border);'
+                  'font-size:var(--fs-micro);line-height:var(--lh-micro);'
+                  'color:var(--c-text-2);">%s</div>'
+                  % _esc(footer))
     return (
-        '<div style="background:%s;border:1px solid %s;border-left:4px solid %s;'
-        'border-radius:%s;padding:%s;margin:%s;box-shadow:%s;">'
-        '<div style="font-size:15px;font-weight:700;color:%s;line-height:1.5;">%s %s</div>'
+        '<div class="ai-empty" style="border-left:3px solid var(--c-accent);">'
+        '<div class="ai-empty-title">%s %s</div>'
         '%s%s%s</div>'
-        % (_C_BG_SOFT, _C_BORDER, _C_PRIMARY, _C_RADIUS, _C_PAD, _C_MARGIN, _C_SHADOW,
-           _C_INK, _esc(icon), _esc(title), _desc_html, rows, _foot_html))
+        % (_esc(icon), _esc(title), _desc_html, rows, _foot_html))
 
 
 def empty_state_card(title: str, desc: str = "", actions=(), icon: str = "🧭",
@@ -806,24 +1044,31 @@ def empty_state_card(title: str, desc: str = "", actions=(), icon: str = "🧭",
 
     典型场景：没有执行记录 / 尚未构建图谱 / 文献库为空 / 没有问答历史。
     """
+    _ensure_tokens()
+    _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
     st.markdown(_empty_state_card_html(title, desc=desc, actions=actions,
                                        icon=icon, footer=footer),
                 unsafe_allow_html=True)
 
 
 def _metric_card_html(label: str, value: str, note: str = "") -> str:
-    """单个 KPI 卡片的 HTML（纯函数，便于单测）。"""
+    """单个 KPI 卡片的 HTML（纯函数，便于单测）。
+
+    改造：卡片容器/数值/标签全部改走共用类 .ai-kpi / .ai-kpi-val / .ai-kpi-label。
+    数值必须保持等宽数字（多列对齐），`font-variant-numeric:tabular-nums` 这句被
+    tests/test_ui_components.py:76-82 **按字符串精确断言**，故仍显式写在内联 style 里，
+    不随类上移——这是为了测试契约，不是重复实现（类里也保留了同一条）。
+    """
+    _ensure_tokens()
     _note_html = ("" if not str(note or "").strip() else
-                  '<div style="margin-top:2px;font-size:11.5px;color:%s;line-height:1.5;">%s</div>'
-                  % (_C_SUB, _esc(note)))
+                  '<div class="ai-kpi-label" style="margin-top:var(--s-1);">%s</div>'
+                  % _esc(note))
     return (
-        '<div style="background:%s;border:1px solid %s;border-radius:%s;'
-        'padding:10px 14px;margin:2px 0 10px;box-shadow:%s;">'
-        '<div style="font-size:12px;color:%s;line-height:1.4;">%s</div>'
-        '<div style="margin-top:4px;font-size:22px;font-weight:700;color:%s;'
-        'line-height:1.2;font-variant-numeric:tabular-nums;">%s</div>%s</div>'
-        % (_C_BG_SOFT, _C_BORDER, _C_RADIUS, _C_SHADOW,
-           _C_SUB, _esc(label), _C_PRIMARY, _esc(value), _note_html))
+        '<div class="ai-kpi">'
+        '<div class="ai-kpi-label">%s</div>'
+        '<div class="ai-kpi-val" style="font-variant-numeric:tabular-nums;">%s</div>'
+        '%s</div>'
+        % (_esc(label), _esc(value), _note_html))
 
 
 def _normalize_metrics(items):
@@ -852,6 +1097,8 @@ def metric_strip(items, max_cols: int = 4):
     norm = _normalize_metrics(items)
     if not norm:
         return
+    _ensure_tokens()
+    _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
     for _start in range(0, len(norm), max_cols):
         chunk = norm[_start:_start + max_cols]
         cols = st.columns(len(chunk))

@@ -2,7 +2,6 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
-from html import escape as _esc
 
 from services import graph as g
 from services import library as _lib
@@ -10,22 +9,8 @@ from ui.common import (embed_html, require_library, page_header, pretty_table, e
                        friendly_error, empty_state, empty_state_card, llm_guard, metric_strip,
                        long_block, step_text, at, is_llm_degraded, llm_degraded_banner,
                        is_llm_offline_generated, llm_offline_generated_banner,
-                       bg_submit, bg_consume, bg_running)
+                       bg_submit, bg_consume, bg_running, section_header)
 from ui.sidebar import set_flash
-
-# 分区卡片样式（与 common.page_header 同色系）。图谱可视化区与综述/前沿生成区分区，层级一致。
-_SEC_CSS = """<style>
-.sec{border-radius:10px;margin:0 0 4px;padding:10px 14px;
-border-left:4px solid #3b6fb6;background:#f3f7fc;}
-.sec .t{font-size:16px;font-weight:700;color:#173a63;line-height:1.4;}
-</style>"""
-
-
-def _sec_head(title: str, icon: str = ""):
-    """统一分区标题：一致层级 + 留白，便于图谱可视化区与生成区清晰区分。"""
-    head = f"{icon} {title}".strip() if icon else str(title or "")
-    st.markdown(_SEC_CSS + f"<div class='sec'><span class='t'>{_esc(head)}</span></div>",
-                unsafe_allow_html=True)
 
 # 引用关系列表一次展示的最大条数（其余折叠）
 MAX_EDGE_SHOW = 12
@@ -447,7 +432,7 @@ def render(ctx):
         return
 
     # ===== 区一：引用图谱可视化（构建 / 结果 / 演示，均属图谱范畴） =====
-    _sec_head("引用图谱可视化", "🕸️")
+    section_header("引用图谱可视化", icon="🕸️")
     with st.container(border=True):
         _gr_build = bg_running(kinds={_GRAPH_BUILD_KIND})
         if st.button("🕸️ 构建引用图谱", disabled=_gr_build,
@@ -512,7 +497,7 @@ def render(ctx):
     # ===== 区二：领域综述与前沿方向生成（与图谱可视化明确区分） =====
     # 原先这里有一条 st.markdown("---")：但紧跟其后的 _sec_head 本身已经是分区信号，
     # 横线 + 标题 = 双重视觉打断，删掉横线用留白分区更干净。
-    _sec_head("领域综述与前沿方向生成", "📝")
+    section_header("领域综述与前沿方向生成", icon="📝")
     with st.container(border=True):
         c2, c3 = st.columns([1, 1])
         _gr_review = bg_running(kinds={_GRAPH_REVIEW_KIND})

@@ -49,7 +49,7 @@
 ## 1.2 目标用户与使用场景
 
 - **研究生 / 科研人员**：需要快速读懂一批英文论文、跨文献对比方法与结果、追踪方向最新进展、起草开题或论文框架。系统的「跨文献问答」「图谱综述」「写作 Copilot」直接服务这一主线。
-- **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:108` 演示图谱兜底）。
+- **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:93` 演示图谱兜底）。
 - **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑；单元测试 18 项（`tests/test_core.py`）。
 
 ## 1.3 赛题定位
@@ -137,7 +137,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 ## 2.4 非功能需求
 
 - **可复现**：Streamlit 锁定 1.63.x；检索/切块/去重参数全部环境变量可覆盖（`config.py:134-140`，均走 `_env_int`）。
-- **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:545`）。
+- **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:762`）。
 - **长文档工程化**：20 页一批解析建块（`services/library.py:19 PDF_BATCH_SIZE = 20`）、单页 30s 守护线程超时跳过（`services/library.py:544 _extract_page_with_timeout`）、每 50 页进度回调、psutil 内存探针（`scripts/_memory_probe.py :: peak_mb`）。
 - **安全**：API Key 只经环境变量/会话注入；输出侧密钥正则脱敏（`core/guardrails.py:130 redact_secrets`）；Python 工具经 AST 白名单沙箱（`core/sandbox.py:27 validate_code`）；`.env` 同时被 `.gitignore` 与 `.dockerignore` 排除，不入仓库、不入镜像。
 - **诚实降级**：每个外部依赖（LLM、embedding、外部 API、LaTeX 编译器、Graphviz）都有明确降级路径并向用户说明原因与建议动作，绝不静默失败、绝不编造数据。
@@ -287,7 +287,7 @@ flowchart TD
 | 项 | 结论 |
 |---|---|
 | 选了什么 | `networkx`（`services/graph.py:19 import networkx as nx`）计算 PageRank / 入度 / 介数 / 特征向量中心性与社区结构 |
-| 为什么选 | ①**零部署成本**：不引入 C 扩展或图数据库服务；②**算法齐全且可控**：每类中心性单独包异常回退，社区发现可做 greedy_modularity → louvain → 弱连通分量三级降级（`_communities@services/graph.py:595`）；③可解释性好——"图谱结构明细"直接取自 nx 计算结果而非 LLM 生成 |
+| 为什么选 | ①**零部署成本**：不引入 C 扩展或图数据库服务；②**算法齐全且可控**：每类中心性单独包异常回退，社区发现可做 greedy_modularity → louvain → 弱连通分量三级降级（`_communities@services/graph.py:599`）；③可解释性好——"图谱结构明细"直接取自 nx 计算结果而非 LLM 生成 |
 | 放弃了什么 / 代价 |  igraph / graph-tool 在十万节点级的性能；Neo4j 的图查询语言与持久化 ；代价： 节点规模上万时退化明显  |
 | 如何对冲 | 本场景引用图规模为数十至数百节点（官方数据集最多 3 篇文献 / 133 chunks），完全在 nx 舒适区；未来万级节点可替换内核，`services/graph.py` 的接口不变 |
 
@@ -436,7 +436,7 @@ flowchart LR
 
 - **学术系统提示**（`core/guardrails.py:470 ACADEMIC_SYSTEM`）：约束"只依据资料、每条事实带【n】、资料不足时明说"；
 - **对比模式 prompt**（`services/rag.py:749 compare_messages`）：强制分论文陈述 + Markdown 对比表，且角标必须是【Pn-m】格式，否则校验不过触发修复；
-- **综述 prompt**（`services/graph.py:770 generate_review`）：注入社区簇代表/时间线/骨干边/PageRank Top，硬性约束"只用给出的论文与边、禁止引入库外文献"，并要求固定四个小标题；LLM 不可用时 `_deterministic_review`（`services/graph.py:712`）用图结构数据确定性生成同构 Markdown。**时间线按论文年份排序**（`services/graph.py:712 _deterministic_review`），元数据缺年份时明确输出"文献元数据中无可用年份，时间线维度不可得（**不做推断**）"——不存在"年份跨度粒度"这类阈值控制；
+- **综述 prompt**（`services/graph.py:774 generate_review`）：注入社区簇代表/时间线/骨干边/PageRank Top，硬性约束"只用给出的论文与边、禁止引入库外文献"，并要求固定四个小标题；LLM 不可用时 `_deterministic_review`（`services/graph.py:716`）用图结构数据确定性生成同构 Markdown。**时间线按论文年份排序**（`services/graph.py:716 _deterministic_review`），元数据缺年份时明确输出"文献元数据中无可用年份，时间线维度不可得（**不做推断**）"——不存在"年份跨度粒度"这类阈值控制；
 - **写作强化 prompt**（`services/writing.py:1121 _outline_prompt`）：注入白名单后**明令禁止模型自行输出 References 章节**（强约束版追加"宁可不引也不编造"）。Round 8 教训：只要 References 的产出权还在模型手里，偷懒概率就无法靠措辞消除，最终靠确定性拼接解决（见 4.6 / 第 9 章）。
 - **Caption prompt**（`services/writing.py:1795 figure_caption`）：整段注入"关键数值事实（必须真实引用其中的数字，禁止编造未出现的数字）"。
 
@@ -601,7 +601,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![问答与溯源页](shots/p2.png)
 
-问答页把第 4.6 节的四道防线完整暴露给用户：每条答案带【n】角标；溯源卡片（`anchor_card@ui/page_qa.py:103`）含可点击页码徽章（页内锚点）、相关度分数、页内段号、可折叠原文片段（前 200 字），以及"📖 打开阅读页"跨页跳转（session_state `qa_jump_page` + query_params 双通道，消费端 `_consume_qa_jump@ui/page_reading.py:867`）；调试区展示查询变体、dense/sparse 分量、修复次数。多篇对比勾选 2–5 篇后按【Pn-m】分组角标输出分论文陈述 + 对比表。
+问答页把第 4.6 节的四道防线完整暴露给用户：每条答案带【n】角标；溯源卡片（`anchor_card@ui/page_qa.py:130`）含可点击页码徽章（页内锚点）、相关度分数、页内段号、可折叠原文片段（前 200 字），以及"📖 打开阅读页"跨页跳转（session_state `qa_jump_page` + query_params 双通道，消费端 `_consume_qa_jump@ui/page_reading.py:867`）；调试区展示查询变体、dense/sparse 分量、修复次数。多篇对比勾选 2–5 篇后按【Pn-m】分组角标输出分论文陈述 + 对比表。
 
 **Round 7/8 真实 API 实测：赛题原文点名的三类细粒度问题**（素材 `pdf/1706.03762v7.pdf`，期望值全部取自论文正文真值）：
 
@@ -621,7 +621,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![版式阅读与翻译页](shots/p3.png)
 
-原生版式渲染（`native_page_html@services/translate.py:430`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:528`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:771`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:697`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
+原生版式渲染（`native_page_html@services/translate.py:441`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:545`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:804`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:730`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
 
 ## 5.4 论文检索、追踪与推荐（模块③主体）
 
@@ -645,7 +645,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![引用图谱页](shots/p4.png)
 
-建图（`build_graph@services/graph.py:201`）从 PDF References 段定位真实引用（IDF 稀有度倒排候选 + 向量语义兜底防"缩写标题"丢边）；`analyze`（`analyze@services/graph.py:271`）计算 PageRank/入度/介数/特征向量（逐项异常回退）；基石 = 入度×PageRank 前 30%；**前沿识别** `detect_frontier`（`detect_frontier@services/graph.py:384`）五维打分（本地入度低 0.25 / 时间新近 0.20 / 高出度 0.15 / 跨学科向量距离 0.25 / 外部真实被引 0.15），孤立噪声节点显式排除，缺失维度权重归一化不误杀。**图谱驱动综述**：社区发现聚簇（greedy_modularity → louvain → 弱连通分量三级降级，`services/graph.py:595 _communities`）+ 时间脉络 + 骨干边注入 prompt，四段式输出（研究脉络/主要方向/关键基石/分歧与展望），文末附"图谱结构明细（networkx 计算所得，非 LLM 生成）"供核查。**Future Work 判定**走引用图 1/2 跳可达性 + 关键词命中数 + 时间线（`_future_status@services/graph.py:946`／`explore_future_structured@services/graph.py:986`／`explore_future@services/graph.py:1029`），输出"已解决/存疑/开放"三态与证据。**Round 7/8 真实 API 实测结果**：
+建图（`build_graph@services/graph.py:201`）从 PDF References 段定位真实引用（IDF 稀有度倒排候选 + 向量语义兜底防"缩写标题"丢边）；`analyze`（`analyze@services/graph.py:271`）计算 PageRank/入度/介数/特征向量（逐项异常回退）；基石 = 入度×PageRank 前 30%；**前沿识别** `detect_frontier`（`detect_frontier@services/graph.py:384`）五维打分（本地入度低 0.25 / 时间新近 0.20 / 高出度 0.15 / 跨学科向量距离 0.25 / 外部真实被引 0.15），孤立噪声节点显式排除，缺失维度权重归一化不误杀。**图谱驱动综述**：社区发现聚簇（greedy_modularity → louvain → 弱连通分量三级降级，`services/graph.py:599 _communities`）+ 时间脉络 + 骨干边注入 prompt，四段式输出（研究脉络/主要方向/关键基石/分歧与展望），文末附"图谱结构明细（networkx 计算所得，非 LLM 生成）"供核查。**Future Work 判定**走引用图 1/2 跳可达性 + 关键词命中数 + 时间线（`_future_status@services/graph.py:950`／`explore_future_structured@services/graph.py:990`／`explore_future@services/graph.py:1033`），输出"已解决/存疑/开放"三态与证据。**Round 7/8 真实 API 实测结果**：
 
 | 能力 | 实测结果 |
 |---|---|
@@ -655,7 +655,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 > **必须诚实说明的规模限制**：赛题要求的是"针对**批量文献（如 20 篇）**的引用图谱挖掘"，而本地 `pdf/` 语料共 **5 个文件**（`storage/library.json` 的 `paper_order`：`1706.03762v7/v1/v1_img`、`1810.04805v2`、`UnderstandingDeepLearning_02_09_26_C`），经版本合并后为 **3 个独立文档**（Transformer 三版合一、BERT、深度学习教材章节），其中**检出引用边并进入图节点的是 2 个**（教材章节未检出引用关系；节点由 `add_node@services/graph.py:242` 在 `build_graph` 检出引用边时添加，**按引用边而非文献类型**）。在 2 节点 1 边的图上：社区发现只能返回 1 个簇，而综述第二节标题是"主要方向（按主题簇）"；PageRank 是拓扑的必然结果，不构成"基石论文识别"的证据；`bridges`（跨簇边，赛题"分歧点"卖点）**恒为 0**，该分支根本没被执行到。因此本轮图谱三条用例**只证明链路通、输出质量达标，不证明"20 篇规模"能力**；本项目**不宣称已支持 20 篇**，补测已列入 8.3 Roadmap。
 
-演示兜底：无真实引用边时"🎭 演示模式示意图谱"（`_build_demo@ui/page_graph.py:108`）以向量相似度建图并**页面顶部明示非真实引用关系**。
+演示兜底：无真实引用边时"🎭 演示模式示意图谱"（`_build_demo@ui/page_graph.py:93`）以向量相似度建图并**页面顶部明示非真实引用关系**。
 
 ## 5.6 写作与可视化 Copilot（模块⑤）
 
@@ -895,7 +895,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 **现象**：初版写作 prompt 要求模型在同一份输出里既写正文、又照抄 40 条参考文献（白名单以 9322 字符注入）。模型没有照抄，而是用一行元指令替代整章——`# References` 之后只有 `[1-40] (List all the references according to the given numbers)`。原因不难理解：让它输出 ~9300 字符（≈2.6k tokens）近乎逐字重复的内容，偷懒是最优解。
 
 **调优的三步进退**：①prompt 加"必须逐字照抄、禁止改写、宁可不引也不编造"——无效；②加 Strict 强化约束版——仍可能再犯；③**最终认识到这不是 prompt 技巧问题而是架构问题**：只要这一节的产出权仍在模型手里，偷懒概率就永远 >0。改为 prompt 明确**禁止**输出 References，由 `build_references_section`（`services/writing.py:195 build_references_section`）确定性拼接。
-> 通用结论：prompt 调优只能提升"模型遵循指令的概率"，**不能把概率降到零**。当一个字段不允许出错（参考文献、页码、数值事实）时，正确做法是把它从生成链路里摘出来，而不是把 prompt 写得更狠。这条后来复用到图谱确定性综述（`_deterministic_review@services/graph.py:712`）：离线时用与注入 prompt 完全相同的数据生成同构输出，保证"有无 LLM，事实一致"。
+> 通用结论：prompt 调优只能提升"模型遵循指令的概率"，**不能把概率降到零**。当一个字段不允许出错（参考文献、页码、数值事实）时，正确做法是把它从生成链路里摘出来，而不是把 prompt 写得更狠。这条后来复用到图谱确定性综述（`_deterministic_review@services/graph.py:716`）：离线时用与注入 prompt 完全相同的数据生成同构输出，保证"有无 LLM，事实一致"。
 
 ### 经验二：抗幻觉的关键不在"prompt 里说不要编造"，而在生成后必须有可执行的 Detection
 

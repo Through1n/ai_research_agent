@@ -1,7 +1,6 @@
 """页面 1：文献库管理。语义查重与版本决策、元数据/排版识别、细粒度结构（标题树/表格/图表/公式/参考文献/附录）、首跑自愈。"""
 import os
 import time
-from html import escape as _h
 
 import pandas as pd
 import streamlit as st
@@ -10,7 +9,7 @@ from config import UPLOAD_DIR, MAX_UPLOAD_MB
 from services import library, parsing
 from ui.common import (ensure_state, page_header, pretty_table, resolve_pdf, friendly_error,
                        empty_state, llm_guard, long_block, step_text, metric_strip,
-                       bg_submit, bg_consume, bg_running, LONG_TEXT_LIMIT)
+                       bg_submit, bg_consume, bg_running, LONG_TEXT_LIMIT, section_header)
 from ui.sidebar import set_flash
 
 # 后台任务 kind：本页各长任务提交/认领的唯一标识（bg_consume 按它路由）。
@@ -61,21 +60,13 @@ def _init():
 
 
 def _section(title, desc=""):
-    """分区标题：与 page_header 一致的蓝色左侧强调条风格，统一层级、留白舒适。
+    """分区标题：收编到 common.section_header（3px 强调色竖条 + 全令牌化样式）。
 
-    借鉴 Zotero 三栏分区 + Paperpile 按逻辑分组的原则：每个功能区用一致的标题卡片，
-    替代原先零散的 st.subheader，避免视觉噪音、提升扫描可读性。
+    原实现自带 #3b6fb6 第二强调蓝、蓝色渐变底、6px 圆角与 20px/10px 脱轨间距，
+    2026-10-24 西式简洁重构删除，改为全站统一分区标题（.ai-section* 构件类），
+    与 page_header / page_graph 分区头完全同一形态。
     """
-    block = (f'<div style="margin:20px 0 12px;padding:4px 0 4px 12px;'
-             f'border-left:4px solid #3b6fb6;'
-             f'background:linear-gradient(90deg,#eef4fc 0%,rgba(238,244,252,0) 100%);'
-             f'border-radius:6px;">'
-             f'<div style="font-size:16px;font-weight:700;color:#173a63;line-height:1.4;">{_h(title)}</div>')
-    if desc:
-        block += (f'<div style="margin-top:4px;font-size:12.5px;color:#5a6678;'
-                  f'line-height:1.6;">{_h(desc)}</div>')
-    block += '</div>'
-    st.markdown(block, unsafe_allow_html=True)
+    section_header(title, desc)
 
 
 def _show_prepare_warnings(prepared):
@@ -642,7 +633,7 @@ def render(ctx):
                             except (TypeError, ValueError):
                                 continue
                             st.markdown(f"{'　'*(max(int(level), 1)-1)}- {title} "
-                                        f"<span style='color:#999'>·p{page}</span>", unsafe_allow_html=True)
+                                        f"<span style='color:var(--c-text-3)'>·p{page}</span>", unsafe_allow_html=True)
 
                 if stobj.get("tables"):
                     st.markdown(f"##### 📊 表格（{len(stobj['tables'])}）")

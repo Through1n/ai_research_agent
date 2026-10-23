@@ -531,29 +531,33 @@ def graph_html(G, metrics, cornerstone):
     indeg = metrics.get("indegree", {})
     corner_set = set(cornerstone)
     nodes, edges = [], []
+    # 图谱配色（2026-10-24 西式简洁重构）：与原第三套金/蓝灰（#E8A33D/#4A90E2/#9aa5b1）
+    # 划清界限——基石=唯一强调色星形，核心=深中性，边缘=浅中性，边=最浅中性。
+    # 全图只剩一种彩色（--c-accent #1f5fae），与界面层同一套政策。
     for name in G.nodes:
         if name in corner_set:
-            color, shape = "#E8A33D", "star"
+            color, shape = "#1f5fae", "star"
         elif indeg.get(name, 0) == 0:
-            color, shape = "#9aa5b1", "dot"
+            color, shape = "#a1a1aa", "dot"
         else:
-            color, shape = "#4A90E2", "dot"
+            color, shape = "#52525b", "dot"
         nodes.append({"id": name, "label": G.nodes[name]["title"][:40],
                       "value": 15 + pr.get(name, 0.05) * 120,
                       "color": color, "shape": shape,
                       "title": f"{name}\n被引 {indeg.get(name,0)} 次\nPageRank {pr.get(name,0):.4f}"})
     for a, b in G.edges:
-        edges.append({"from": a, "to": b, "arrows": "to", "color": {"color": "#b0b8c1"}})
+        edges.append({"from": a, "to": b, "arrows": "to", "color": {"color": "#d4d4d8"}})
     import json as _json
     data = _json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=False)
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>{css}
-html,body,#net{{margin:0;padding:0;width:100%;height:100%;}}
-#legend{{position:absolute;top:10px;left:10px;background:rgba(255,255,255,.92);padding:8px 12px;
-border-radius:8px;font:12px sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.15);z-index:5;}}
-#legend span{{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;}}
+html,body,#net{{margin:0;padding:0;width:100%;height:100%;background:#ffffff;}}
+#legend{{position:absolute;top:16px;left:16px;background:#ffffff;padding:8px 16px;
+border:1px solid #e4e4e7;border-radius:8px;font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","Helvetica Neue",Arial,sans-serif;
+color:#18181b;z-index:5;}}
+#legend span{{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:-1px;}}
 </style></head><body><div id="net"></div>
-<div id="legend"><div><span style="background:#E8A33D"></span>基石论文</div>
-<div><span style="background:#4A90E2"></span>核心节点</div><div><span style="background:#9aa5b1"></span>边缘衍生</div></div>
+<div id="legend"><div><span style="background:#1f5fae"></span>基石论文</div>
+<div><span style="background:#52525b"></span>核心节点</div><div><span style="background:#a1a1aa"></span>边缘衍生</div></div>
 <script>{js}</script><script>
 var data={data};var nodes=new vis.DataSet(data.nodes),edges=new vis.DataSet(data.edges);
 new vis.Network(document.getElementById('net'),{{nodes:nodes,edges:edges}},{{

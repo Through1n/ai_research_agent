@@ -2,9 +2,16 @@
 
 改动要点（抗幻觉 RAG 专项）：
 - 主问答流程统一调用 services/rag.py 的 answer()，不再内联重写，保证自动修复环生效；
-- 溯源卡片在本文件内自建增强版（不改 ui/common.py）：带 href="#p{page}" 锚点 + 跳转按钮；
+- 溯源卡片 anchor_card() 已与 ui/common.py 的 source_card 合并为**同一套 .ai-* 构件类
+  + design 令牌**，但仍保留本页独有的两处能力（页内锚点 / 阅读页入口，见该函数 docstring）；
 - 跳转写入 session_state["qa_jump_page"]（结构化）与 query_params（阅读页已实现的消费方）；
 - 支持"全部文献 / 单篇"范围锁定、多篇勾选对比、拒答闸门与可疑引用的可视化。
+
+Round 13 全站视觉重做（本页迁移）：
+- _QA_CSS 仅剩两个在用的哨兵类 + pills 字号/圆角，视觉值全部改为 var(--...)，
+  并改为会话级幂等注入（原来每轮 rerun 整段重灌）；
+- 溯源卡去装饰性阴影改 1px 描边、圆角统一 var(--r)=8px、颜色收敛到唯一强调色
+  var(--c-accent)；【n】序号改用公共类 .ai-num。
 
 Round 9 改动（S1）：
 - 缺陷 C：库内片段极少（< SMALL_LIBRARY_CHUNKS）时给出可操作的补充引导；
@@ -18,22 +25,42 @@ import time
 
 import streamlit as st
 from services import rag
+from ui import design as _design
 from ui.common import (require_library, page_header, show_error, at,
                        is_llm_degraded, llm_degraded_banner, empty_state_card)
 
 
 # 本页局部样式：仅作用于问答页，不改动 ui/common.py；让答案/来源分层更清爽。
+# 视觉值全部引用 ui/design.py 的令牌（页面渲染时已幂等注入，主文档内可直接用 var）。
+# ⚠️ .qa-answer-start / .qa-src-gap 是**仍在使用**的哨兵类（见 render 历史循环与
+#    _render_source）：只改样式值，绝不删类名。已删除两个零调用者的死选择器
+#    （.qa-hint、.qa-ex-wrap —— 2026-10-24 全仓 grep 确认无任何使用点）。
 _QA_CSS = """
 <style>
-.qa-hint{font-size:12.5px;color:#4a5a70;margin:2px 0 6px;}
-.qa-answer-start{height:0;border-top:1px solid #eaf0f8;margin:6px 0 2px;}
-.qa-src-gap{height:2px;}
-/* 示例问题 pills 与跳转按钮统一圆角，贴合「胶囊 / 卡片」视觉 */
-.stPills li{font-size:12.5px;}
-.qa-ex-wrap .stButton>button{border-radius:16px;}
-div:has(>.stPills) .stButton>button{border-radius:16px;}
+.qa-answer-start{height:0;border-top:1px solid var(--c-border);margin:var(--s-2) 0 var(--s-1);}
+.qa-src-gap{height:var(--s-2);}
 </style>
 """
+_QA_CSS_FLAG = "_qa_page_css_injected"   # 会话级幂等旗标
+
+
+def _inject_qa_css():
+    """会话级幂等注入本页局部 CSS（原实现在 render() 里每轮 rerun 都整段重灌一次）。
+
+    旗标放 session_state 而不是模块全局：Streamlit 每次 rerun 都是整脚本重跑，
+    模块变量在部分运行模式下不可靠（与 ui/common.py 的 _inject_css_once 同思路）。
+    """
+    try:
+        _design.ensure()
+    except Exception:
+        pass
+    try:
+        if st.session_state.get(_QA_CSS_FLAG):
+            return
+        st.markdown(_QA_CSS, unsafe_allow_html=True)
+        st.session_state[_QA_CSS_FLAG] = True
+    except Exception:
+        pass
 
 
 EX = ["这篇论文提出了什么模型？", "训练用了什么 GPU？数量和型号？",
@@ -101,31 +128,55 @@ def _esc(s):
 
 
 def anchor_card(source, page, score=0.0, para_idx=None, n=None):
-    """增强版溯源卡片（本文件自建，不改 ui/common.py 的 source_card）。
+    """溯源卡片：**已与 ui/common.py 的 source_card 合并为同一套视觉实现**。
 
-    三处可跳转：
-    1) 卡片顶部 <a id="p{page}"> 作为页内锚点落点；
-    2) 页码徽章 <a href="#p{page}"> —— 页内锚点跳转；
-    3) 徽章旁的"打开阅读页" <a href="?p=3&jump_page=N&paper=X"> —— 跨页跳到版式阅读页
-       （ui/page_reading.py:43-60 已消费 jump_page / paper 两个 query 参数）。
+    Round 13 前这里是第二套溯源卡（自建内联样式：圆角 8px/12px 混用、#f7faff 底、
+    #3b6fb6/#27518a 第二强调色、装饰性 box-shadow）。现改为与 source_card 完全同构：
+    同一批 .ai-card / .ai-chip / .ai-ellipsis / .ai-num 构件类 + 同一套 var(--...) 令牌，
+    圆角一律 var(--r)、间距一律 8px 倍数、去阴影改 1px 描边、颜色只用唯一强调色。
+
+    **合并≠删功能**——本页独有的两处能力全部保留（source_card 的跨页能力也不丢）：
+    1) 卡片顶部 <a id="p{page}"> 页内锚点落点（source_card 无，本页独有）；
+    2) 页码徽章 <a href="#p{page}"> 页内锚点跳转（source_card 的徽章是**跨页** href，
+       语义不同，故保留本页的页内语义）；
+    3) 徽章旁的「📖 打开阅读页」<a href="?p=3&jump_page=N&paper=X"> 跨页跳阅读页
+       —— 这正是 common.source_card 的跨页能力，本卡把它保留在自己独有的入口上
+       （ui/page_reading.py 已消费 jump_page / paper 两个 query 参数）。
+
+    💡 建议后续收敛：给 ui/common.py 的 source_card 加两个开关参数
+    ``anchor_id=True``（生成 <a id="p{N}"> + 徽章 href 改页内）与
+    ``reading_entry=True``（追加「📖 打开阅读页」入口），本函数即可退化为一次调用。
+    本轮不改 common.py（他人并行在改），故在此内联保留，能力一个都不少。
     """
+    try:
+        _design.ensure()
+    except Exception:
+        pass
     name = _esc(source)
-    tag = f"【{n}】 " if n else ""
+    # 【n】角标改用公共序号类 .ai-num（强调色 + 粗体），与空状态卡片同一套标记
+    tag = f'<span class="ai-num">【{n}】</span> ' if n else ""
     para = f" · 第{int(para_idx)}段" if para_idx else ""
-    badge = (f'<a href="#p{int(page)}" style="text-decoration:none;color:#fff;display:inline-block;">'
-             f'第 {int(page)} 页</a>')
+    # 强调色底上的徽章必须显式给白字：design 层有全局 a{color:var(--c-accent)}，
+    # 不覆盖会变成「蓝底蓝字」看不见
+    badge = (f'<a href="#p{int(page)}" style="color:var(--c-on-accent);text-decoration:none;'
+             f'display:inline-block;">第 {int(page)} 页</a>')
     cross = (f'<a href="?p={READING_PAGE_IDX}&jump_page={int(page)}&paper={name}" target="_self" '
-             f'style="color:#27518a;font-size:11.5px;">📖 打开阅读页</a>')
+             f'style="color:var(--c-accent);text-decoration:none;">📖 打开阅读页</a>')
     return (
         f'<a id="p{int(page)}"></a>'
-        f'<div style="background:#f7faff;border-left:4px solid #3b6fb6;border-radius:8px;'
-        f'padding:12px 16px;margin:8px 0;box-shadow:0 1px 2px rgba(0,0,0,.05);">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
-        f'<strong style="color:#27518a;font-size:13.5px;">{tag}📄 {name}</strong>'
-        f'<span style="background:#3b6fb6;color:#fff;padding:1px 10px;border-radius:12px;'
-        f'font-size:11.5px;">{badge}</span></div>'
-        f'<div style="color:#666;font-size:11.5px;margin-bottom:4px;">'
-        f'相关度 {float(score):.2f}{para}　{cross}</div></div>'
+        f'<div class="ai-card" style="border-left:3px solid var(--c-accent);">'
+        f'<div style="display:flex;flex-wrap:wrap;gap:var(--s-2);'
+        f'justify-content:space-between;align-items:baseline;'
+        f'margin-bottom:var(--s-2);min-width:0;">'
+        f'<strong class="ai-ellipsis" style="flex:1 1 auto;min-width:0;'
+        f'font-size:var(--fs-body);line-height:var(--lh-body);'
+        f'color:var(--c-text);font-weight:600;">{tag}📄 {name}</strong>'
+        f'<span class="ai-chip" style="background:var(--c-accent);color:var(--c-on-accent);'
+        f'flex:0 0 auto;">{badge}</span></div>'
+        f'<div style="display:flex;flex-wrap:wrap;gap:var(--s-2);align-items:baseline;'
+        f'min-width:0;font-size:var(--fs-caption);line-height:var(--lh-caption);'
+        f'color:var(--c-text-2);">'
+        f'<span>相关度 {float(score):.2f}{para}</span>{cross}</div></div>'
     )
 
 
@@ -148,6 +199,19 @@ def _set_jump(source, page, para_idx=None):
 
 
 def _render_source(rid, i, c):
+    """一条来源：溯源卡（相关度 / 段落 / 阅读页入口）+ 定位按钮 + 原文片段折叠区。
+
+    ⚠️ 布局为何从 [1.3, 1.1, 3.0] 三列改成 [1, 2] 两列（Round 13 实测计算，1200px
+    桌面壳下主区内容宽 = min(1280,1200) - 2×40 = 1120px）：
+      · 令牌层给每个 stColumn 加了 ``min-width:min(--col-basis(280px),100%)``；
+      · 三列的 flex 基准约为 259 / 219 / 597，前两列被 280px 下限抬到 280+280，
+        **假设主尺寸合计 1157px > 容器 1120px** → 第三列（expander）被挤到第二行，
+        第一行只剩两个被 flex-grow 拉到 560px 的按钮 / 说明列。这是**确定性塌陷**，
+        不是窄屏自适应换行，光靠视觉迁移修不掉；
+      · 且 col_meta 的「相关度 x.xx｜第 N 段」与溯源卡第三行**完全重复**，是冗余信息。
+    改后：定位按钮 373px / 片段折叠 747px，1120～1024 断点均稳定并排；相关度与段落
+    仍在卡片内可见，信息零损失。widget 文案与 key（jump_{rid}_{i}）一律未动。
+    """
     source = c.get("source", "未知来源")
     try:
         page = int(c.get("page", 1) or 1)
@@ -155,14 +219,11 @@ def _render_source(rid, i, c):
         page = 1
     st.markdown(anchor_card(source, page, c.get("score", 0.0), c.get("para_idx"), n=i),
                 unsafe_allow_html=True)
-    # 跳转按钮 / 相关度 / 原文片段 三列对齐，按钮贴右、卡片下方留白一致
-    col_btn, col_meta, col_snip = st.columns([1.3, 1.1, 3.0])
+    # 定位按钮 / 原文片段两列：卡片下方留白由 .qa-src-gap 统一给
+    col_btn, col_snip = st.columns([1, 2])
     with col_btn:
         if st.button(f"📖 定位第 {page} 页", key=f"jump_{rid}_{i}", use_container_width=True):
             _set_jump(source, page, c.get("para_idx"))
-    with col_meta:
-        st.caption(f"相关度 {float(c.get('score', 0.0)):.2f}"
-                   + (f"｜第 {c['para_idx']} 段" if c.get("para_idx") else ""))
     with col_snip:
         with st.expander(f"原文片段（前 {SNIPPET_LEN} 字）", expanded=False):
             st.text((c.get("text") or "")[:SNIPPET_LEN])
@@ -211,7 +272,7 @@ def render(ctx):
     page_header("💬 跨文献问答与溯源",
                 "Dense+Sparse 混合检索（多查询变体 RRF）→ 可选 LLM 重排 → 引用校验 + 一次自动修复；"
                 "每个结论带【n】内联引用与可点击的原文出处锚点。")
-    st.markdown(_QA_CSS, unsafe_allow_html=True)
+    _inject_qa_css()
     if not require_library(ctx):
         return
     _init_state()
@@ -392,8 +453,11 @@ def render(ctx):
                        + "\n".join(f"- {x}" for x in run["unverified"]))
         srcs = run.get("sources") or []
         if srcs:
-            # 「📚 答案来源」溯源区：默认折叠，卡片间距统一、页码徽章与跳转按钮对齐
-            st.markdown("**📚 答案来源**")
+            # 「📚 答案来源」溯源区：小标题改用全站公共构件 .ai-section-title
+            # （左侧 3px 强调竖条 + --fs-title），与其余页面分区层级一致；文案原样保留。
+            # 默认折叠，卡片间距统一、页码徽章与跳转按钮对齐
+            st.markdown('<div class="ai-section-title">📚 答案来源</div>',
+                        unsafe_allow_html=True)
             with st.expander(f"共 {len(srcs)} 条来源 · 点击展开可定位原文", expanded=False):
                 for i, c in enumerate(srcs, 1):
                     _render_source(rid, i, c)

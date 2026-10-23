@@ -304,17 +304,28 @@ _HEIGHT_JS = """
 # ---------- 共用 JS：A3 划词选区（捕获即清空 + hash 去重 + 长度<2 忽略） ----------
 SELECTION_JS = """
 <style>
-.ai4s-panel{position:fixed;right:14px;bottom:14px;max-width:330px;z-index:99;
-background:#ffffff;border:1px solid #d6e0ef;border-radius:10px;padding:10px 12px;
-box-shadow:0 4px 16px rgba(23,58,99,.16);font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;display:none;}
-.ai4s-panel .ai4s-t{font-size:12.5px;font-weight:700;color:#173a63;margin-bottom:6px;}
-.ai4s-panel .ai4s-x{font-size:12px;color:#333;line-height:1.65;max-height:96px;overflow:auto;
-background:#f7fafd;border:1px solid #e6edf7;border-radius:6px;padding:6px 8px;white-space:pre-wrap;}
-.ai4s-panel .ai4s-b{margin-top:8px;display:flex;gap:8px;}
-.ai4s-panel .ai4s-b button{border:1px solid #3b6fb6;background:#eef4fc;color:#173a63;
-border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;}
-.ai4s-panel .ai4s-b button:hover{background:#dbe8fa;}
-.ai4s-panel .ai4s-h{margin-top:6px;font-size:11px;color:#7a869a;}
+/* 令牌化（自包含）：每个自定义属性都写成「变量名 + 兜底字面量」的形式，
+   iframe 内取不到父窗口变量时自动回落，外部注入令牌后又能无缝接管。 */
+.ai4s-panel{position:fixed;right:14px;bottom:14px;width:100%;max-width:330px;
+max-width:min(330px, calc(100vw - 28px));z-index:99;
+background:var(--c-surface,#ffffff);border:1px solid var(--c-border-strong,#d4d4d8);
+border-radius:var(--r,8px);padding:var(--s-3,12px) var(--s-4,16px);box-shadow:none;
+font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
+font-size:var(--fs-caption,12px);line-height:1.5;color:var(--c-text,#18181b);overflow-wrap:anywhere;}
+.ai4s-panel .ai4s-t{font-size:var(--fs-caption,12px);font-weight:600;color:var(--c-text,#18181b);
+margin-bottom:var(--s-2,8px);}
+.ai4s-panel .ai4s-x{font-size:var(--fs-caption,12px);color:var(--c-text-2,#52525b);line-height:1.5;
+max-height:96px;overflow:auto;background:var(--c-bg,#fafafa);
+border:1px solid var(--c-border,#e4e4e7);border-radius:var(--r,8px);
+padding:var(--s-2,8px) var(--s-3,12px);white-space:pre-wrap;overflow-wrap:anywhere;}
+.ai4s-panel .ai4s-b{margin-top:var(--s-2,8px);display:flex;gap:var(--s-2,8px);flex-wrap:wrap;}
+.ai4s-panel .ai4s-b button{border:1px solid var(--c-accent,#1f5fae);
+background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));color:var(--c-accent,#1f5fae);
+border-radius:var(--r,8px);padding:var(--s-1,4px) var(--s-3,12px);
+font-size:var(--fs-caption,12px);font-family:inherit;line-height:1.5;cursor:pointer;}
+.ai4s-panel .ai4s-b button:hover{background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);}
+.ai4s-panel .ai4s-h{margin-top:var(--s-2,8px);font-size:var(--fs-micro,11.5px);line-height:1.5;
+color:var(--c-text-3,#a1a1aa);}
 </style>
 <script>
 (function(){
@@ -493,17 +504,23 @@ def native_page_html(doc, page_num, highlight=None):
 
     html = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 *{{box-sizing:border-box;}}
-html,body{{margin:0;padding:0;background:#f5f7fa;}}
-#tip{{position:fixed;top:6px;left:8px;right:8px;z-index:8;background:rgba(43,87,154,.92);color:#fff;
-font:12px/1.5 'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;padding:4px 10px;border-radius:12px;}}
-#page{{position:relative;width:{pw:.1f}px;height:{ph:.1f}px;background:#fff;margin:40px auto 18px;
-box-shadow:0 2px 10px rgba(0,0,0,.15);}}
+html,body{{margin:0;padding:0;background:var(--c-bg,#fafafa);overflow-wrap:anywhere;}}
+img{{max-width:100%;height:auto;}}
+#tip{{position:fixed;top:var(--s-2,8px);left:var(--s-2,8px);right:var(--s-2,8px);z-index:8;
+background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);
+font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
+font-size:var(--fs-caption,12px);line-height:1.5;padding:var(--s-1,4px) var(--s-3,12px);
+border-radius:var(--r,8px);}}
+/* 外层自适应容器：窄屏时 #page 不再撑破 iframe（只加容器，不动任何 PDF 坐标） */
+#stage{{max-width:100%;overflow-x:auto;overflow-y:hidden;padding:0 var(--s-2,8px);}}
+#page{{position:relative;width:{pw:.1f}px;height:{ph:.1f}px;background:var(--c-surface,#ffffff);
+margin:var(--s-5,40px) auto var(--s-3,16px);box-shadow:0 0 0 1px var(--c-border,#e4e4e7);}}
 .col{{position:absolute;top:0;overflow:visible;}}
 .col#col1{{border-left:0;}}
 .full{{position:absolute;left:0;top:0;width:100%;}}
-.gutter{{position:absolute;top:0;background:repeating-linear-gradient(180deg,#eef2f7 0 10px,#f7f9fc 10px 20px);
-border-left:1px dashed #dbe3ee;border-right:1px dashed #dbe3ee;}}
-.blk{{position:absolute;font-family:'Times New Roman',Times,serif;color:#1a1a1a;
+.gutter{{position:absolute;top:0;background:repeating-linear-gradient(180deg,var(--c-subtle,#f4f4f5) 0 10px,var(--c-bg,#fafafa) 10px 20px);
+border-left:1px dashed var(--c-border-strong,#d4d4d8);border-right:1px dashed var(--c-border-strong,#d4d4d8);}}
+.blk{{position:absolute;font-family:'Times New Roman',Times,serif;color:var(--c-text,#18181b);
 white-space:normal;overflow-wrap:break-word;word-break:break-word;user-select:text;}}
 .ln{{white-space:pre-wrap;}}
 /* 悬停高亮：半透明底 + 细描边。块 bbox 可能远大于文字本身（通栏块/长换行块），
@@ -516,7 +533,7 @@ white-space:normal;overflow-wrap:break-word;word-break:break-word;user-select:te
 @keyframes ai4smkf{{0%{{background:#ffcf4d;}}100%{{background:#ffe08a;}}}}
 .mk{{animation:ai4smkf 3s ease-out 1;}}
 </style></head><body><div id="tip">{tip}</div>
-<div id="page">{body}</div>{sel}{hgt}</body></html>""".format(
+<div id="stage"><div id="page">{body}</div></div>{sel}{hgt}</body></html>""".format(
         pw=pw, ph=ph, tip=_esc(tip), body=body_layers,
         sel=SELECTION_JS + _SENT_EXPAND_JS, hgt=_HEIGHT_JS)
     return html, pw, ph
@@ -535,17 +552,33 @@ def bilingual_html(pairs, glossary=None, align=True):
         left.append('<p data-index="%d" data-i="%d">%s</p>' % (i, i, en))
         right.append('<p data-index="%d" data-i="%d">%s</p>' % (i, i, zh))
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-*{{box-sizing:border-box;}} html,body{{margin:0;height:100%;
-font-family:'Microsoft YaHei','Segoe UI','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;background:#f5f7fa;}}
-#wrap{{display:flex;height:100vh;}}
-.pane{{flex:1 1 50%;overflow-y:auto;padding:26px 22px 60px;}}
-#l{{background:#fbfcfe;border-right:2px solid #e3e8ef;}}
-#r{{background:#f4fbf6;}}
-p{{font-size:13.5px;line-height:1.85;margin:0 0 12px;padding:8px 10px;border-radius:6px;
-border-bottom:1px solid #eef1f5;color:#26313f;cursor:default;}}
-p.active{{background:#fff2bf;box-shadow:inset 3px 0 #f0ad2e;}}
-#bar{{position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(30,60,110,.9);
-color:#fff;padding:5px 14px;border-radius:14px;font-size:12px;z-index:9;}}
+*{{box-sizing:border-box;}}
+html,body{{margin:0;height:100%;overflow:hidden;background:var(--c-bg,#fafafa);
+font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
+font-size:var(--fs-body,13.5px);line-height:1.65;color:var(--c-text,#18181b);overflow-wrap:anywhere;}}
+img{{max-width:100%;height:auto;}}
+/* 单层滚动（选 (b)）：#wrap 是全文档唯一滚动容器，两栏共用同一滚动位置。
+   理由：本视图由 embed_html(..., height=760, scrolling=False) 装载，iframe 本身
+   不可滚动；若选 (a) 内容自适应 + 高度 JS，长文档会被高度上限截断且无滚动条可救，
+   内容直接不可达；(b) 把滚动收敛到一层，两栏天然同步（不弱于原比例同步），
+   且窗口再窄也只会出现「一条」滚动条。 */
+#wrap{{display:flex;align-items:flex-start;flex-wrap:wrap;height:100vh;max-height:100vh;
+overflow-y:auto;overflow-x:hidden;}}
+.pane{{flex:1 1 320px;min-width:0;max-width:100%;
+padding:var(--s-5,24px) var(--s-4,16px) var(--s-7,40px);overflow-wrap:anywhere;}}
+#l{{background:var(--c-surface,#ffffff);border-right:1px solid var(--c-border,#e4e4e7);}}
+#r{{background:var(--c-bg,#fafafa);}}
+p{{font-size:var(--fs-body,13.5px);line-height:1.65;margin:0 0 var(--s-3,12px);
+padding:var(--s-2,8px) var(--s-3,12px);border-radius:var(--r,8px);
+border-bottom:1px solid var(--c-border,#e4e4e7);color:var(--c-text,#18181b);cursor:default;
+overflow-wrap:anywhere;}}
+p.active{{background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));
+box-shadow:inset 3px 0 0 var(--c-accent,#1f5fae);}}
+#bar{{position:fixed;top:var(--s-2,8px);left:50%;transform:translateX(-50%);
+background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);
+padding:var(--s-1,4px) var(--s-4,16px);border-radius:var(--r,8px);
+font-size:var(--fs-caption,12px);line-height:1.5;z-index:9;
+max-width:calc(100% - 16px);overflow-wrap:anywhere;}}
 </style></head><body><div id="bar">中英同步滚动（按比例）· 悬停/点击段落联动</div>
 <div id="wrap"><div class="pane" id="l">{L}</div><div class="pane" id="r">{R}</div></div>
 <script>
@@ -772,12 +805,22 @@ def citation_jump_html(forward_ctx, backward_ctx):
     fw = _esc(forward_ctx)
     bw = _esc(backward_ctx)
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-body{{font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei",sans-serif;padding:16px;background:#f7fafd;}}
-.s{{margin-bottom:14px;padding:14px 16px;border-radius:8px;font-size:13.5px;line-height:1.8;color:#26313f;}}
-.f{{background:#eef5ff;border-left:4px solid #4A90E2;}}
-.b{{background:#eefbf1;border-left:4px solid #2e9d57;}}
-.btn{{display:inline-block;margin-top:10px;padding:6px 14px;background:#4A90E2;color:#fff;
-border-radius:6px;cursor:pointer;font-size:13px;text-decoration:none;}}
+*{{box-sizing:border-box;}}
+html,body{{margin:0;background:var(--c-bg,#fafafa);
+font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
+font-size:var(--fs-body,13.5px);line-height:1.65;color:var(--c-text,#18181b);overflow-wrap:anywhere;}}
+body{{padding:var(--s-4,16px);}}
+img{{max-width:100%;height:auto;}}
+.s{{margin-bottom:var(--s-3,12px);padding:var(--s-4,16px);border-radius:var(--r,8px);
+background:var(--c-surface,#ffffff);border:1px solid var(--c-border,#e4e4e7);
+font-size:var(--fs-body,13.5px);line-height:1.65;color:var(--c-text,#18181b);overflow-wrap:anywhere;}}
+.f{{background:var(--c-subtle,#f4f4f5);border-left:3px solid var(--c-accent,#1f5fae);}}
+.b{{background:var(--c-surface,#ffffff);border-left:3px solid var(--c-border-strong,#d4d4d8);}}
+.btn{{display:inline-block;margin-top:var(--s-2,8px);padding:var(--s-2,8px) var(--s-4,16px);
+background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);
+border:1px solid var(--c-accent,#1f5fae);border-radius:var(--r,8px);cursor:pointer;
+font-family:inherit;font-size:var(--fs-caption,12px);line-height:1.5;text-decoration:none;}}
+.btn:hover{{background:var(--c-accent-hover,#1a4f92);border-color:var(--c-accent-hover,#1a4f92);}}
 </style></head><body>
 <div class="s f" id="fw"><b>📘 正文引用位置</b><div>...{fw}...</div>
 <a class="btn" href="#bw">⬇ 跳转参考文献</a></div>
@@ -797,19 +840,29 @@ if(t) t.scrollIntoView({{behavior:'smooth',block:'center'}});}};}});
 def selectable_text_html(text, title="在该区域用鼠标划选要翻译的词句"):
     """把整页文本渲染为可选中段落 HTML，并挂上 A3 的选区捕获/清空 JS。"""
     paras = [p.strip() for p in str(text or "").split("\n") if p.strip()]
-    body = "".join('<p style="margin:0 0 10px;padding:8px 10px;border-radius:6px;'
-                   'background:#fff;border:1px solid #eef1f5;">%s</p>' % _esc(p)
-                   for p in paras)
+    body = "".join('<p style="margin:0 0 var(--s-3,12px);padding:var(--s-2,8px) var(--s-3,12px);'
+                   'border-radius:var(--r,8px);background:var(--c-surface,#ffffff);'
+                   'border:1px solid var(--c-border,#e4e4e7);overflow-wrap:anywhere;">%s</p>'
+                   % _esc(p) for p in paras)
     if not body:
-        body = '<p style="color:#888;">（该页无可提取文本，可能是扫描件）</p>'
+        body = '<p style="color:var(--c-text-3,#a1a1aa);">（该页无可提取文本，可能是扫描件）</p>'
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{{margin:0;background:#f7fafd;font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;}}
-#tip{{position:fixed;top:6px;left:8px;right:8px;background:rgba(43,87,154,.92);color:#fff;
-font:12px/1.5 'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;padding:4px 10px;border-radius:12px;z-index:8;}}
-#box{{margin:38px 8px 12px;padding:12px 14px;background:#fff;border:1px solid #e3e8ef;
-border-radius:10px;}}
-#box p{{font-size:13.5px;line-height:1.85;color:#26313f;user-select:text;cursor:text;}}
-#box p:hover{{background:#fffbe6;}}
+*{{box-sizing:border-box;}}
+html,body{{margin:0;background:var(--c-bg,#fafafa);
+font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
+font-size:var(--fs-body,13.5px);line-height:1.65;color:var(--c-text,#18181b);overflow-wrap:anywhere;}}
+img{{max-width:100%;height:auto;}}
+#tip{{position:fixed;top:var(--s-2,8px);left:var(--s-2,8px);right:var(--s-2,8px);
+background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);
+font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
+font-size:var(--fs-caption,12px);line-height:1.5;padding:var(--s-1,4px) var(--s-3,12px);
+border-radius:var(--r,8px);z-index:8;overflow-wrap:anywhere;}}
+#box{{margin:var(--s-5,40px) var(--s-2,8px) var(--s-3,12px);
+padding:var(--s-3,12px) var(--s-4,16px);background:var(--c-surface,#ffffff);
+border:1px solid var(--c-border,#e4e4e7);border-radius:var(--r,8px);}}
+#box p{{font-size:var(--fs-body,13.5px);line-height:1.65;color:var(--c-text,#18181b);
+user-select:text;cursor:text;overflow-wrap:anywhere;}}
+#box p:hover{{background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));}}
 </style></head><body><div id="tip">{t}</div><div id="box">{b}</div>{s}{h}</body></html>""".format(
         t=_esc(title), b=body, s=SELECTION_JS + _SENT_EXPAND_JS, h=_HEIGHT_JS)
 
@@ -1189,33 +1242,54 @@ _CITE_JUMP_JS = """
 
 _CITE_JUMP_CSS = """
 * {box-sizing:border-box;}
-html,body{margin:0;background:#f5f7fa;font-family:'Microsoft YaHei','Segoe UI','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;}
-#bar{position:fixed;top:6px;left:8px;right:8px;z-index:8;background:rgba(43,87,154,.92);color:#fff;
-font:12px/1.5 'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei',sans-serif;padding:5px 12px;border-radius:12px;}
-#wrap{display:flex;gap:10px;padding:40px 8px 14px;height:720px;}
-.pane{flex:1 1 50%;overflow-y:auto;background:#fff;border:1px solid #e3e8ef;border-radius:10px;
-padding:10px 12px 24px;}
-#refsPane{background:#fbfcfe;}
-.pgn{font-size:11.5px;color:#7a869a;border-bottom:1px dashed #dde3ec;margin:12px 0 6px;padding-bottom:3px;}
+html,body{margin:0;background:var(--c-bg,#fafafa);
+font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
+font-size:var(--fs-body,13.5px);line-height:1.65;color:var(--c-text,#18181b);overflow-wrap:anywhere;}
+img{max-width:100%;height:auto;}
+#bar{position:fixed;top:var(--s-2,8px);left:var(--s-2,8px);right:var(--s-2,8px);z-index:8;
+background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);
+font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
+font-size:var(--fs-caption,12px);line-height:1.5;padding:var(--s-1,4px) var(--s-3,12px);
+border-radius:var(--r,8px);overflow-wrap:anywhere;}
+/* 高度解耦：不再写死 720px（旧写法与外层 iframe height=780 强耦合，容器高度一变
+   就变成「iframe 一条 + pane 一条」的双重滚动）。#wrap 高度完全由内容决定，
+   内部不设任何固定高度上限，也不使用 vh（vh + 高度自适应 JS 会互相追赶导致
+   iframe 高度震荡收缩）；_HEIGHT_JS 把 iframe 贴合内容 → 全程只剩一层滚动。 */
+#wrap{display:flex;flex-wrap:wrap;gap:var(--s-3,12px);height:auto;min-height:320px;
+padding:40px var(--s-2,8px) var(--s-3,12px);align-items:stretch;}
+.pane{flex:1 1 320px;min-width:0;max-width:100%;overflow-y:auto;overflow-x:hidden;
+background:var(--c-surface,#ffffff);border:1px solid var(--c-border,#e4e4e7);
+border-radius:var(--r,8px);padding:var(--s-3,12px) var(--s-3,12px) var(--s-5,24px);}
+#refsPane{background:var(--c-bg,#fafafa);}
+.pgn{font-size:var(--fs-micro,11.5px);line-height:1.5;color:var(--c-text-3,#a1a1aa);
+border-bottom:1px dashed var(--c-border,#e4e4e7);margin:var(--s-3,12px) 0 var(--s-2,8px);
+padding-bottom:var(--s-1,4px);}
 .pgn:first-child{margin-top:0;}
-p.bp{font-size:13.2px;line-height:1.85;color:#26313f;margin:0 0 10px;text-align:justify;user-select:text;}
-a.cit{color:#2f6fd0;text-decoration:none;font-weight:700;padding:0 1px;border-radius:3px;cursor:pointer;}
-a.cit:hover{background:#dbe8fa;text-decoration:underline;}
-.ref{position:relative;padding:8px 10px 8px 46px;border-bottom:1px solid #eef1f5;font-size:12.6px;
-line-height:1.7;color:#26313f;}
-.ref .rn{position:absolute;left:8px;top:8px;color:#2f6fd0;font-weight:700;}
+p.bp{font-size:var(--fs-body,13.5px);line-height:1.65;color:var(--c-text,#18181b);
+margin:0 0 var(--s-2,8px);text-align:justify;user-select:text;overflow-wrap:anywhere;}
+a.cit{color:var(--c-accent,#1f5fae);text-decoration:none;font-weight:600;padding:0 1px;
+border-radius:2px;cursor:pointer;}
+a.cit:hover{background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));text-decoration:underline;}
+.ref{position:relative;padding:var(--s-2,8px) var(--s-3,12px) var(--s-2,8px) var(--s-7,40px);
+border-bottom:1px solid var(--c-border,#e4e4e7);font-size:var(--fs-caption,12px);line-height:1.6;
+color:var(--c-text,#18181b);overflow-wrap:anywhere;}
+.ref .rn{position:absolute;left:var(--s-2,8px);top:var(--s-2,8px);color:var(--c-accent,#1f5fae);
+font-weight:600;}
 .ref .rt{user-select:text;}
-.ref .rb{margin-top:4px;}
-a.back{display:inline-block;font-size:11.5px;padding:2px 9px;border:1px solid #3b6fb6;border-radius:11px;
-background:#eef4fc;color:#173a63;text-decoration:none;cursor:pointer;}
-a.back:hover{background:#dbe8fa;}
-.noback{font-size:11.5px;color:#98a2b3;}
+.ref .rb{margin-top:var(--s-1,4px);}
+a.back{display:inline-block;font-size:var(--fs-micro,11.5px);line-height:1.5;
+padding:2px var(--s-2,8px);border:1px solid var(--c-accent,#1f5fae);border-radius:var(--r,8px);
+background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));color:var(--c-accent,#1f5fae);
+text-decoration:none;cursor:pointer;}
+a.back:hover{background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);}
+.noback{font-size:var(--fs-micro,11.5px);line-height:1.5;color:var(--c-text-3,#a1a1aa);}
 @keyframes ai4sflash{0%{background:#ffd85e;}60%{background:#fff3b0;}100%{background:transparent;}}
 .hit{animation:ai4sflash 2.6s ease-out 1;border-radius:4px;}
-.ctip{position:fixed;z-index:99;display:none;max-width:320px;background:#173a63;color:#fff;
-font-size:11.5px;line-height:1.6;padding:6px 9px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.22);
-pointer-events:none;}
-.empty{color:#98a2b3;font-size:12.5px;padding:12px;}
+.ctip{position:fixed;z-index:99;max-width:320px;max-width:min(320px, calc(100vw - 16px));
+background:var(--c-text,#18181b);color:var(--c-surface,#ffffff);
+font-size:var(--fs-micro,11.5px);line-height:1.6;padding:var(--s-2,8px) var(--s-3,12px);
+border-radius:var(--r,8px);box-shadow:none;pointer-events:none;overflow-wrap:anywhere;}
+.empty{color:var(--c-text-3,#a1a1aa);font-size:var(--fs-caption,12px);padding:var(--s-3,12px);}
 """
 
 
@@ -1724,7 +1798,8 @@ def _aligned_pair_html(en, zh, idx, align=True):
 _SENT_LINK_JS = """
 <style>
 .sn{cursor:default;border-radius:2px;transition:background .12s;}
-.sn.on{background:#ffe9a8;box-shadow:inset 0 -2px 0 #f0ad2e;}
+.sn.on{background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));
+box-shadow:inset 0 -2px 0 var(--c-accent,#1f5fae);}
 </style>
 <script>
 (function(){
@@ -1944,8 +2019,9 @@ def _glossary_mark(zh_html, glossary):
                 sentinels.append((tok, t))
         for tok, t in sentinels:
             zh_html = zh_html.replace(
-                tok, '<mark class="gt" style="background:#dff3e6;border-bottom:2px solid '
-                     '#2e9d57;border-radius:2px;padding:0 1px;">%s</mark>' % t)
+                tok, '<mark class="gt" style="background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));'
+                     'border-bottom:2px solid var(--c-accent,#1f5fae);'
+                     'border-radius:2px;padding:0 1px;">%s</mark>' % t)
         return zh_html
     except Exception:
         return zh_html
@@ -2146,8 +2222,8 @@ def _figures_html(doc, page, pw, ph):
                 '<div class="fig" style="position:absolute;left:%.1fpx;top:%.1fpx;'
                 'width:%.1fpx;height:%.1fpx;z-index:2;" title="图片（按原始坐标保位）">'
                 '<img src="data:%s;base64,%s" alt="figure" style="width:100%%;height:100%%;'
-                'object-fit:contain;border:1px dashed #c9d4e4;border-radius:3px;'
-                'background:#ffffff;"></div>'
+                'object-fit:contain;border:1px dashed var(--c-border-strong,#d4d4d8);'
+                'border-radius:2px;background:var(--c-surface,#ffffff);"></div>'
                 % (x0, y0, w, h, mime, b64))
         return "".join(parts)
     except Exception:

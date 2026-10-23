@@ -71,10 +71,10 @@ def _plan_block(trace):
         st_ = t.get("status", "pending")
         icon = _STATUS_ICON.get(st_, "⏳")
         ms = int(t.get("elapsed_ms") or 0)
-        tail = f" · <span style='color:#888'>{ms}ms</span>" if ms else ""
+        tail = f" · <span style='color:var(--c-text-3)'>{ms}ms</span>" if ms else ""
         tool = f" · 工具 `{_e(t.get('tool'))}`" if t.get("tool") else ""
-        note = f" · <span style='color:#888'>{_e(t.get('note'))}</span>" if t.get("note") else ""
-        st.markdown(f"<div style='margin-left:10px;font-size:13px;'>{icon} <b>{_e(t.get('id'))}</b> "
+        note = f" · <span style='color:var(--c-text-3)'>{_e(t.get('note'))}</span>" if t.get("note") else ""
+        st.markdown(f"<div style='margin-left:var(--s-2);font-size:var(--fs-body);'>{icon} <b>{_e(t.get('id'))}</b> "
                     f"{_e(t.get('title'))}（{_STATUS_TEXT.get(st_, '待执行')}{tool}{tail}）{note}</div>",
                     unsafe_allow_html=True)
 
@@ -87,9 +87,9 @@ def _handoff_block(trace):
     st.markdown("**② 多智能体路由 Multi-Agent Routing**")
     for c in chain:
         frm = c.get("from") or "（初始）"
-        st.markdown(f"<div style='margin-left:10px;font-size:13px;'>🤖 <code>{_e(frm)}</code> → "
+        st.markdown(f"<div style='margin-left:var(--s-2);font-size:var(--fs-body);'>🤖 <code>{_e(frm)}</code> → "
                     f"<code>{_e(c.get('to'))}</code> "
-                    f"<span style='color:#888'>{_e(c.get('reason'))}"
+                    f"<span style='color:var(--c-text-3)'>{_e(c.get('reason'))}"
                     f"{'｜触发工具：' + _e(c.get('tool')) if c.get('tool') else ''}"
                     f"｜{_e(c.get('ts'))}</span></div>", unsafe_allow_html=True)
     if len(chain) > 1:
@@ -119,8 +119,8 @@ def _timeline_block(trace, limit=200):
             extra += f"｜{_e(data.get('expert'))}｜⏱{int(data.get('elapsed_ms') or 0)}ms"
         elif kind == "route" and data.get("matched"):
             extra = f"｜命中关键词 {_e(data.get('matched'))}"
-        st.markdown(f"<div style='margin-left:10px;font-size:12.5px;color:#333;'>"
-                    f"{icon} <span style='color:#888'>{_e(e.get('ts'))}</span> "
+        st.markdown(f"<div style='margin-left:var(--s-2);font-size:var(--fs-caption);color:var(--c-text);'>"
+                    f"{icon} <span style='color:var(--c-text-3)'>{_e(e.get('ts'))}</span> "
                     f"{_e(e.get('content') or e.get('title'))}{extra}</div>",
                     unsafe_allow_html=True)
     return evs

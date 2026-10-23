@@ -45,7 +45,7 @@ header[data-testid="stHeader"] {visibility: hidden;}
 [data-testid="stExpandSidebarButton"]:hover,
 [data-testid="stSidebarCollapsedControl"]:hover {
     background: rgba(31, 95, 174, 0.08);
-    border-radius: 6px;
+    border-radius: 8px;   /* 与全站 --r 一致（原 6px，2026-10-24 主题门禁检出） */
 }
 </style>
 """

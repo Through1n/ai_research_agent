@@ -630,8 +630,8 @@ def _render_graphviz(code):
             st.success("✅ " + note)
         else:
             st.caption("⚠️ " + note + "（降级渲染（等价拓扑图））")
-        html = ('<div style="background:#fff;overflow:auto;display:flex;'
-                f'justify-content:center;padding:8px;">{res["svg"]}</div>')
+        html = ('<div style="background:var(--c-surface);overflow:auto;display:flex;'
+                f'justify-content:center;padding:var(--s-2);">{res["svg"]}</div>')
         embed_html(html, height=_svg_height(res["svg"]), scrolling=True)
         return
     if res.get("ok") and res.get("png"):
