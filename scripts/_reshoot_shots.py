@@ -323,7 +323,7 @@ def do_p0(pg, out):
     click_tab(pg, "版本差异")
     btn(pg, "版本差异").first.click()
     print("  版本差异对比（真实 LLM）…")
-    wait_text(pg, "版本差异报告", timeout=300, must=False)
+    wait_text(pg, "版本差异报告", timeout=90, must=False)
     wait_idle(pg)
     shoot(pg, CAND_DIR / "p0_ver.png", "p0候选-版本差异")
 
