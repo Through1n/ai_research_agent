@@ -604,7 +604,11 @@ def render(ctx):
     st.caption("本页面依赖外网；比赛现场断网时请先「🚀 一键加载演示数据」，"
                "用📁文献库 / 💬问答 / 🕸️图谱页完成演示。")
 
-    tab_sub, tab_search, tab_quality = st.tabs(["订阅与推荐", "检索与下载", "引用含金量"])
+    # key=：页签选中态必须钉住。提交后台任务会触发重跑，无 key 时 Streamlit 会把
+    # 页签重置回第一个（实测：在「检索与下载」点一次 arXiv 检索，立刻跳回「订阅与推荐」），
+    # 用户刚填的关键词和结果当场消失——真机截图脚本也因此在 p6 卡死。
+    tab_sub, tab_search, tab_quality = st.tabs(["订阅与推荐", "检索与下载", "引用含金量"],
+                                               key="search_tab")
 
     with tab_sub:
         section_header("动态追踪订阅", icon="⏰")

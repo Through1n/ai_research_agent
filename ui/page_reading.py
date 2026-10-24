@@ -1636,8 +1636,9 @@ def render(ctx):
                 default_page = 1
         default_page = min(max(1, int(default_page)), tps)
 
+        # key=：翻页/划词/翻译都会重跑，无 key 时页签被重置回「原生渲染」
         tabs = st.tabs(["📄 原生渲染", "🌐 中英同步滚动", "📑 原位 PDF",
-                        "🔗 引用跳转", "🖱️ 划词翻译", "📚 标题树"])
+                        "🔗 引用跳转", "🖱️ 划词翻译", "📚 标题树"], key="read_tab")
 
         # ---------- 1 原生渲染（A1） ----------
         with tabs[0]:
