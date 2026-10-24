@@ -286,6 +286,24 @@ def at(items, idx, default=None):
 
 
 # ============================ UI 规范 1：页面顶部 ============================
+def _head_text(title, icon) -> str:
+    """拼「图标 + 标题」，并在标题自带同一图标时**不重复叠加**。
+
+    事故（2026-10-24 视觉快照实测）：6 个页面同时传 `page_header("🤖 xxx", icon="🤖")`，
+    旧实现无条件 `f"{icon} {title}"` → 页头实渲成「🤖 🤖 智能总助手（Agent）」，
+    是重启后第一眼就能看到的错位。这里按字符比对去重（忽略 emoji 变体选择符 U+FE0F，
+    否则 "🕸" 与 "🕸️" 会被判成不同字符而漏判），既修当前调用点，也防后续新增页面复发。
+    """
+    t = str(title or "").strip()
+    ic = str(icon or "").strip()
+    if not ic:
+        return t
+    flat = lambda s: s.replace("\ufe0f", "")      # noqa: E731 — 单行归一化
+    if flat(t).startswith(flat(ic)):
+        return t
+    return f"{ic} {t}".strip()
+
+
 def page_header(title: str, subtitle: str = "", icon: str = ""):
     """统一页面顶部：标题 + 一句话说明 + 发丝线。各 page.render 第一行调用。
 
@@ -296,7 +314,7 @@ def page_header(title: str, subtitle: str = "", icon: str = ""):
 
     向后兼容：旧调用 `page_header("📁 文献库管理", "说明")` 仍可用（positional）。
     """
-    head = f"{icon} {title}".strip() if icon else str(title or "").strip()
+    head = _head_text(title, icon)
     sub = str(subtitle or "").strip()
     _ensure_tokens()
     _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
@@ -313,14 +331,14 @@ def page_header(title: str, subtitle: str = "", icon: str = ""):
 
 # ============================ UI 规范 1.5：统一分区标题 ============================
 def section_header(title: str, desc: str = "", icon: str = ""):
-    """统一分区标题（page_header 的次级形态）：3px 强调色竖条 + 主/副两级文案。
+    """统一分区标题（page_header 的次级形态）：18px 标题 + 副文案两级层次。
 
     收编原 page_library._section 与 page_graph._sec_head 两份各自为政的内联实现
     （曾各带 #3b6fb6 第二强调蓝、蓝色渐变底、6/10px 圆角、20px/10px 脱轨间距，
     且 page_graph 每次调用整段重灌 CSS）。样式全部走 _COMPONENT_CSS 的
     .ai-section* 类，自动跟随令牌；垂直节奏由 .ai-section 统一给。
     """
-    head = f"{icon} {title}".strip() if icon else str(title or "").strip()
+    head = _head_text(title, icon)
     sub = str(desc or "").strip()
     _ensure_tokens()
     _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)

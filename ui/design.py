@@ -569,6 +569,20 @@ button,input,textarea,select{font-family:var(--font-sans);}
 [data-testid="stSidebar"] label[data-testid="stRadioOption"][data-selected="true"]{
   background:var(--c-accent-soft); color:var(--c-accent); font-weight:600;
 }
+/* ⚠️ 文字色必须写成**显式状态色**，不能靠 inherit：Streamlit 在 label 与文字之间
+   还有一层容器（实渲 DOM：label > div > [圆点] + [stMarkdownContainer] > p），
+   那层容器自带正文色。`inherit` 只往上一层取色，于是无论写在哪一层都会取到正文黑，
+   选中态蓝与未选中态灰同时失效、导航层级被抹平（2026-10-24 真机实测：
+   label 计算色是强调蓝，文字实际渲染成正文黑）。 */
+[data-testid="stSidebar"] label[data-testid="stRadioOption"] [data-testid="stMarkdownContainer"]{
+  color:var(--c-text-2);
+}
+[data-testid="stSidebar"] label[data-testid="stRadioOption"]:hover [data-testid="stMarkdownContainer"]{
+  color:var(--c-text);
+}
+[data-testid="stSidebar"] label[data-testid="stRadioOption"][data-selected="true"] [data-testid="stMarkdownContainer"]{
+  color:var(--c-accent);
+}
 [data-testid="stSidebar"] label[data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] p{
   margin:0; font-size:var(--fs-body); line-height:var(--lh-caption);
   color:inherit; font-weight:inherit;

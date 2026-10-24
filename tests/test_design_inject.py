@@ -15,6 +15,7 @@
 会话级旗标，本用例必须翻红。
 """
 import os
+import re
 import sys
 import unittest
 
@@ -60,6 +61,29 @@ class TestCssPerRunInjection(unittest.TestCase):
         self.assertIn(".ai-section-title", second,
                       "重跑后构件 CSS 丢失——_inject_css_once 未按本轮序号重新注入")
         self.assertIn("--fs-display", second, "重跑后字阶令牌丢失")
+
+
+class TestHeaderIconNotDuplicated(unittest.TestCase):
+    """页头不得渲染出「🤖 🤖 标题」这种图标重复。
+
+    事故（2026-10-24 视觉快照实测）：6 个页面同时传「标题里带 emoji」和 `icon=同一 emoji`，
+    而 page_header 旧实现无条件拼接 → 首屏标题变成「🤖 🤖 智能总助手（Agent）」。
+    断言落在**渲染产物**上（不是断言辅助函数存在），改回去就会翻红。
+    """
+
+    def test_no_duplicated_leading_token(self):
+        at = AppTest.from_file(APP, default_timeout=180)
+        at.run()
+        heads = [str(m.value) for m in at.markdown if 'ai-page-title">' in str(m.value)]
+        self.assertTrue(heads, "页头未渲染，用例失效")
+        for h in heads:
+            m = re.search(r'ai-page-title">([^<]*)<', h)
+            self.assertIsNotNone(m, f"页头结构变了，用例需同步：{h[:80]}")
+            txt = m.group(1)
+            self.assertIsNone(
+                re.match(r"^(\S+)\s+\1(\s|$)", txt),
+                f"页头图标重复渲染：{txt!r}",
+            )
 
 
 if __name__ == "__main__":

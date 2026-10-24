@@ -550,6 +550,107 @@ def run_sabotages(browser):
     return blind
 
 
+# =============================================================================
+# B2. 侧栏导航行：文字色阶必须真的生效（选中=强调蓝 / 未选中=二级灰）
+# =============================================================================
+# 为什么单列一组（2026-10-24 实测盲区）：合成页原来没有侧栏，于是「导航行能不能
+# 真的显示成导航」完全没人看。实测事故：页头选中行 computed color 是强调蓝、
+# 但**渲染出来的字是 #18181b**——因为 CSS 只写了 `p{color:inherit}`，而 inherit
+# 只往上一层取色，那一层是 Streamlit 自带的 stMarkdownContainer（color:#18181b）。
+# 这里复刻那个容器色，让"只写 inherit"的实现精确翻红。
+# Streamlit 在 label 与文字之间还有一层容器，那一层自带正文色（实渲 DOM：
+# label > div(圆点 + stMarkdownContainer) > p）。照抄这层，才能测出"靠 inherit
+# 取色会取到正文黑"这个坑；把颜色写在容器自身反而测不出来。
+_MD_STUB_CSS = '.md-stub{color:#18181b}'
+
+_NAV_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+__MDSTUB__
+__STRUCT__
+__TOKENS__
+__COMPONENT__
+</style></head><body>
+<div data-testid="stSidebar"><div data-testid="stSidebarContent">
+<div class="ai-nav-eyebrow">功能导航</div>
+<div data-testid="stRadioGroup">
+<label data-testid="stRadioOption" data-selected="true">
+<span><input type="radio" checked></span>
+<div class="md-stub"><div class="dot"></div>
+<div data-testid="stMarkdownContainer"><p>🤖 0. 智能总助手</p></div></div>
+</label>
+<label data-testid="stRadioOption">
+<span><input type="radio"></span>
+<div class="md-stub"><div class="dot"></div>
+<div data-testid="stMarkdownContainer"><p>📁 1. 文献库管理</p></div></div>
+</label>
+</div></div></div></body></html>""".replace(
+    "__MDSTUB__", _MD_STUB_CSS).replace(
+    "__STRUCT__", _STRUCT_CSS).replace(
+    "__TOKENS__", TOKENS_CSS).replace(
+    "__COMPONENT__", _COMPONENT_CSS)
+
+_JS_NAV = """() => Array.from(
+    document.querySelectorAll('[data-testid="stSidebar"] label[data-testid="stRadioOption"]')
+  ).map(el => {
+    const p = el.querySelector('[data-testid="stMarkdownContainer"] p');
+    const dot = el.querySelector('.dot');
+    return {sel: el.getAttribute('data-selected') === 'true',
+            labelColor: getComputedStyle(el).color,
+            pColor: p ? getComputedStyle(p).color : null,
+            dotW: dot ? Math.round(dot.getBoundingClientRect().width) : null};
+  })"""
+
+ACCENT_RGB = "rgb(31, 95, 174)"      # --c-accent
+TEXT2_RGB = "rgb(82, 82, 91)"        # --c-text-2
+TEXT_RGB = "rgb(24, 24, 27)"         # --c-text（导航行不允许出现，会抹平层级）
+
+
+def nav_row_checks(browser):
+    """返回 True 表示「断言有效」（正向绿 + 反向翻红）。"""
+    results = {}
+
+    def measure(extra_css):
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        html = _NAV_HTML if not extra_css else _NAV_HTML.replace(
+            "</style>", extra_css + "\n</style>", 1)
+        page.set_content(html, wait_until="load")
+        rows = page.evaluate(_JS_NAV)
+        page.close()
+        return rows
+
+    global _RECORD
+    _RECORD = False
+    try:
+        rows = measure("")
+        prob = []
+        if len(rows) != 2:
+            prob.append(f"导航行数量异常 {len(rows)}")
+        else:
+            sel_row, plain_row = rows[0], rows[1]
+            if sel_row["pColor"] != ACCENT_RGB:
+                prob.append(f"选中行文字色={sel_row['pColor']}（应为强调蓝 {ACCENT_RGB}）")
+            if plain_row["pColor"] != TEXT2_RGB:
+                prob.append(f"未选中行文字色={plain_row['pColor']}（应为二级灰 {TEXT2_RGB}）")
+            if any(r["pColor"] == TEXT_RGB for r in rows):
+                prob.append("导航行文字退化为正文黑 #18181b（inherit 只往上取一层）")
+            if any(r["dotW"] != 0 for r in rows):
+                prob.append(f"圆点未归零：{[r['dotW'] for r in rows]}")
+        (ok if not prob else bad)("[1440px] 侧栏导航行：选中蓝/未选中灰/圆点归零"
+                                  + (f"：{prob[:3]}" if prob else ""))
+        results["navrow"] = not prob
+
+        # 反向对照：复刻「只写 inherit」的旧实现（容器被压回正文色），必须翻红
+        # 复刻"靠 inherit 取色"的写法（必须与真实规则同选择器强度，否则压不住）
+        broken = measure('[data-testid="stSidebar"] label[data-testid="stRadioOption"]'
+                         '[data-selected="true"] [data-testid="stMarkdownContainer"]'
+                         '{color:inherit}')
+        flipped = (len(broken) == 2 and broken[0]["pColor"] != ACCENT_RGB)
+        (ok if flipped else bad)("破坏「导航行文字色改回 inherit（往上取到正文色）」→ 断言精确翻红")
+        results["navrow_sabotage"] = flipped
+    finally:
+        _RECORD = True
+    return all(results.values())
+
+
 def main():
     print("全站主题门禁 · 西式简洁（中性+单一强调色+无衬线+去装饰）")
     print("=" * 74)
@@ -565,12 +666,15 @@ def main():
             browser_checks(page, vw, base)
             page.close()
         blind = run_sabotages(browser)
+        print("== B2. 侧栏导航行文字色阶（合成侧栏 + 1 份反向对照） ==")
+        nav_ok = nav_row_checks(browser)
         browser.close()
     print("=" * 74)
-    if _problems or blind:
-        print(f"汇总：失败 {len(_problems)} 项 + 失明 {len(blind)} 份")
+    if _problems or blind or not nav_ok:
+        print(f"汇总：失败 {len(_problems)} 项 + 失明 {len(blind)} 份"
+              + ("" if nav_ok else " + 导航行断言无效/失败"))
         return 1
-    print("汇总：全部通过（静态字面量 + 2 视口 × 9 组计算样式 + 7 份反向对照）")
+    print("汇总：全部通过（静态字面量 + 2 视口 × 9 组计算样式 + 导航行色阶 + 8 份反向对照）")
     return 0
 
 
