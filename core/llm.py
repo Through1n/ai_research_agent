@@ -701,23 +701,85 @@ def call_llm_with_retry(messages, *, model=None, temperature=None, max_tokens=No
     return client._create(**kwargs)
 
 
+_BAD_ESCAPE = re.compile(r'(?<!\\)\\(?!["\\/bfnrtu])')
+
+
+def _repair_escapes(s):
+    """把 JSON 里非法的反斜杠转义补成合法转义。
+
+    真实触发场景（2026-10-24 实测 glm-4-flash 抽取 LaTeX 公式）：模型返回
+    ``"latex": "\\frac{a}{b}"`` 这类单反斜杠 LaTeX，``\f`` 是合法转义但语义错，
+    ``\s``/``\m`` 等直接是非法转义 → ``json.loads`` 抛错 → 整个结果被判为
+    「无法解析为 JSON」，用户看到的就是功能不可用。补转义后再解析能救回大部分。
+    """
+    return _BAD_ESCAPE.sub(r"\\\\", s)
+
+
+def _close_truncated(s):
+    """补齐被截断的 JSON：按未闭合括号栈补 ``]``/``}``，并收掉悬空逗号与开串。"""
+    stack, in_str, esc = [], False, False
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "[{":
+            stack.append("]" if ch == "[" else "}")
+        elif ch in "]}":
+            if stack:
+                stack.pop()
+    if in_str:
+        s += '"'
+    s = s.rstrip().rstrip(",")
+    return s + "".join(reversed(stack))
+
+
 def parse_json(text):
-    """从模型输出中稳健解析 JSON（兼容 ```json 围栏与前后多余文字）。"""
+    """从模型输出中稳健解析 JSON（兼容代码围栏 / 前后多余文字 / 非法转义 / 截断）。
+
+    2026-10-24 加固（全部来自真机复现，不是臆测）：
+      ① 围栏可能只有开头没有结尾（输出被 max_tokens 截断）→ 不再要求成对 ``` ；
+      ② LaTeX 单反斜杠是非法 JSON 转义 → ``_repair_escapes`` 补齐；
+      ③ 输出被截断时数组没闭合 → ``_close_truncated`` 按括号栈补齐再试。
+    """
     if isinstance(text, (dict, list)):
         return text
-    t = text.strip()
-    fence = re.search(r"```(?:json)?\s*(.*?)```", t, re.DOTALL)
+    t = (text or "").strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)(?:```|$)", t, re.DOTALL)
     if fence:
         t = fence.group(1).strip()
-    try:
-        return json.loads(t)
-    except Exception:
-        # 退化：截取首个 [ 或 { 到对应结尾
-        for open_c, close_c in (("[", "]"), ("{", "}")):
-            i, j = t.find(open_c), t.rfind(close_c)
-            if i != -1 and j != -1 and j > i:
-                try:
-                    return json.loads(t[i:j + 1])
-                except Exception:
-                    pass
+
+    def _try(s):
+        for cand in (s, _repair_escapes(s)):
+            try:
+                return True, json.loads(cand)
+            except Exception:
+                continue
+        return False, None
+
+    ok, val = _try(t)
+    if ok:
+        return val
+    # 退化：从首个 [ / { 起解析。**列表优先且走完整条链**——否则「数组被截断」时
+    # 会掉进 { } 分支，把数组里的第一个对象当成整体返回（2026-10-24 单测抓到的错解）。
+    for open_c, close_c in (("[", "]"), ("{", "}")):
+        i = t.find(open_c)
+        if i == -1:
+            continue
+        j = t.rfind(close_c)
+        if j > i:
+            ok, val = _try(t[i:j + 1])
+            if ok:
+                return val
+        # 输出被截断（没有闭合括号）→ 补齐后解析
+        ok, val = _try(_close_truncated(t[i:]))
+        if ok:
+            return val
     raise ValueError(f"无法解析为 JSON：{text[:200]}")
+

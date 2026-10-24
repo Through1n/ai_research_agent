@@ -172,16 +172,51 @@ def _struct_worker(ctx, pdf_path, filename, with_vision, progress):
             "figs": figs or [], "vision_note": vision_note}
 
 
+# LaTeX 里的 `\f` `\b` `\r` `\n` `\t` 在 JSON 字符串里是**合法转义**，模型直接写
+# 单反斜杠时会被 json.loads 悄悄转成控制字符（`\frac{a}{b}` → 换页符 + "rac{a}{b}"），
+# 解析不报错，但公式渲染出来是乱码。改在公式字段上把这些控制字符还原成反斜杠+字母。
+_LATEX_CTRL_MAP = {"\x08": "\\b", "\x0c": "\\f", "\r": "\\r", "\n": "\\n", "\t": "\\t"}
+
+
+def _fix_latex_controls(items):
+    """还原公式字段里被 JSON 转义吃掉的反斜杠（`\\frac` 被读成换页符的经典坑）。"""
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return items
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        for k in ("latex", "formula"):
+            v = it.get(k)
+            if isinstance(v, str) and any(c in v for c in _LATEX_CTRL_MAP):
+                for ctrl, rp in _LATEX_CTRL_MAP.items():
+                    v = v.replace(ctrl, rp)
+                it[k] = v
+    return items
+
+
 def _formula_worker(ctx, filename, progress):
     """后台线程执行 LaTeX 公式抽取（正文文本来自已入库 chunks）。"""
     progress("收集正文片段", 0.2)
-    text = "\n".join(c["text"] for c in ctx.chunks if c.get("source") == filename)[:6000]
+    # 2026-10-24 实测：喂 6000 字符 + 不限条数时，生成经常顶到 LLM_TIMEOUT=45s
+    # 才结束（实测同 prompt 单次 37s，波动即超时 → 后台任务失败）。收敛输入与
+    # 输出规模，把生成时长压进演示保险窗口；-- 提取「最具代表性的公式」，不是全集。
+    text = "\n".join(c["text"] for c in ctx.chunks if c.get("source") == filename)[:3000]
     if not text.strip():
         return {"items": None, "note": "该论文暂无可分析的正文文本，换一篇论文试试。"}
     progress("调用大模型抽取公式", 0.7)
+    # 提示词 2026-10-24 收紧：旧版只说「提取数学公式」，实测 glm-4-flash 会把
+    # 「attention mechanism」「BLEU」这类名词当公式返回（st.latex 渲染成一串斜体单词）。
+    # 现在要求必须含运算符/上下标，且条数收敛到 6，兼顾质量与 LLM_TIMEOUT=45s 窗口。
     items = ctx.llm.json_chat([{"role": "user",
-                                "content": f"提取数学公式，输出JSON数组，每条 {{name,latex(不含$)}}。\n{text}"}])
-    return {"items": items, "note": ""}
+                                "content": ("只提取原文中真实出现的数学表达式（必须含 = ^ _ / sqrt "
+                                            "softmax max min sum prod 等运算符或上下标），"
+                                            "不要提取普通名词短语；最多 6 条；"
+                                            "输出 JSON 数组，每条 {name,latex(不含$)}；"
+                                            "latex 里反斜杠按 JSON 转义写成两个；"
+                                            "只输出 JSON，不要代码围栏与解释。\n" + text)}])
+    return {"items": _fix_latex_controls(items), "note": ""}
 
 
 def _ref_worker(ctx, pdf_path, progress):
@@ -196,8 +231,12 @@ def _ref_worker(ctx, pdf_path, progress):
         except Exception:
             pass
     progress("调用大模型结构化", 0.8)
+    # 同 _formula_worker：收敛输入与条数，避免生成顶到 LLM_TIMEOUT 造成后台任务失败
     return ctx.llm.json_chat([{"role": "user",
-                               "content": "提取参考文献，输出JSON数组，每条 {id,authors,title,year,venue}；无法识别填'未识别'。\n" + raw}])
+                               "content": ("提取参考文献，最多 12 条，输出 JSON 数组，"
+                                           "每条 {id,authors,title,year,venue}；"
+                                           "无法识别填'未识别'；"
+                                           "只输出 JSON，不要代码围栏与解释。\n" + raw[:5000])}])
 
 
 def _prepare_warning_text(prepared):

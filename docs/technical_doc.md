@@ -304,7 +304,7 @@ flowchart TD
 
 ### 4.2.1 统一 LLM 调用层（`core/llm.py`）
 
-业务代码（`core/ services/ tools/ ui/`）内 `client.chat.completions.create` 仅 **2 处运行时调用点**：`chat.completions.create@core/llm.py:489`（`LLMClient._create`，同步）与 `chat.completions.create@core/llm.py:555`（`LLMClient.stream`，流式）；`dist/` 构建产物、`version_history/` 历史版本、`chat.completions.create@scripts/_degrade_drill_api.py:337`（演练脚本 docstring）均不在运行链路——**调用层之外零裸调用**。对外一切经两处入口：`chat@core/llm.py:511`（同步）与 `stream@core/llm.py:531`（流式）；视觉调用与 JSON 调用走 `call_llm_with_retry@core/llm.py:652` + `parse_json@core/llm.py:704`（兼容 ```json 围栏与噪声文本）。
+业务代码（`core/ services/ tools/ ui/`）内 `client.chat.completions.create` 仅 **2 处运行时调用点**：`chat.completions.create@core/llm.py:489`（`LLMClient._create`，同步）与 `chat.completions.create@core/llm.py:555`（`LLMClient.stream`，流式）；`dist/` 构建产物、`version_history/` 历史版本、`chat.completions.create@scripts/_degrade_drill_api.py:337`（演练脚本 docstring）均不在运行链路——**调用层之外零裸调用**。对外一切经两处入口：`chat@core/llm.py:511`（同步）与 `stream@core/llm.py:531`（流式）；视觉调用与 JSON 调用走 `call_llm_with_retry@core/llm.py:652` + `parse_json@core/llm.py:743`（兼容 ```json 围栏、围栏被截断、噪声文本、LaTeX 单反斜杠这类非法转义，以及数组未闭合的截断输出）。
 
 - **重试与容错**：`RETRY_BACKOFF = (1.5, 3.0, 4.5)`（`core/llm.py:42`）集中管理，SDK 自带重试置 0（`core/llm.py:43 SDK_MAX_RETRIES = 0`），避免 3×3 叠加放大；第 4 次仍失败 → 把失败明细 append 到 `storage/llm_failures.log`（字段含 `ts / error_type / model / caller / n_messages / messages_preview(前2000字)`）→ **返回结构化伪响应而非抛异常**。
 - **Provider 切换**：侧边栏选 Provider/填 Key → 写回 `ctx.llm`，全服务层无感知。
@@ -621,7 +621,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![版式阅读与翻译页](shots/p3.png)
 
-原生版式渲染（`native_page_html@services/translate.py:441`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + 块宽夹持，结构上杜绝串栏（夹具实测超宽行被限制在栏内）；中英对照（`bilingual_html@services/translate.py:545`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:305`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:804`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:730`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
+原生版式渲染（`native_page_html@services/translate.py:552`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + **块按 PDF bbox 定框、块内每行再按原始坐标绝对定位**（行高不再随浏览器字体度量涨高而压住下一块），词间空格由词级坐标回补（`_words_of_page`，治逐字形定位 PDF 抽出「无空格长串」的拆行塌陷），结构上杜绝串栏与重叠（夹具实测越栏块 0 个、行级重叠对 40→4）；中英对照（`bilingual_html@services/translate.py:658`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:416`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:917`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:843`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
 
 ## 5.4 论文检索、追踪与推荐（模块③主体）
 
