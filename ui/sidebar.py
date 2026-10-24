@@ -411,7 +411,9 @@ def render(ctx):
             st.session_state["_nav_main"] = None
 
         # ── 分组标题（纯视觉，强化层次，不动导航逻辑）────────────────
-        st.markdown("**🧭 功能导航**")
+        # 2026-10-24：粗体 + 表情的「功能导航」改成小标签（eyebrow）——11.5px / 7% 字距
+        # / 三级灰，与下面的导航行形成两级层次，替代原先的粗体大字。
+        st.markdown('<div class="ai-nav-eyebrow">功能导航</div>', unsafe_allow_html=True)
         main_val = st.radio("🧭 功能导航", MENU_MAIN,
                             index=MENU_MAIN.index(cur) if cur in MENU_MAIN else None,
                             key="_nav_main",

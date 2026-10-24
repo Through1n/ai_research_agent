@@ -293,6 +293,11 @@ __PRETTY__
 
 <div data-testid="stElementContainer"><div data-testid="stMarkdown"><p>正文段落示例，用于验证正文字阶与行高层级。</p></div></div>
 
+<div data-testid="stElementContainer"><div class="ai-page-head">
+<div class="ai-page-title">页面主标题</div>
+<div class="ai-page-sub">这一屏干什么的一句话说明</div>
+</div></div>
+
 <div data-testid="stElementContainer"><div class="ai-card" style="border-left:3px solid var(--c-accent);">
 <div style="font-size:var(--fs-title);line-height:var(--lh-title);font-weight:700;color:var(--c-text);">📁 文献库管理</div>
 <div style="margin-top:var(--s-1);font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--c-text-2);">页面头部卡片副文案</div>

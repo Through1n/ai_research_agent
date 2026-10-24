@@ -168,6 +168,18 @@ def _inject_css_once(css_block: str, flag: str) -> bool:
 # 注入一次（会话幂等，见 _inject_css_once）。
 _COMPONENT_CSS = """<style>
 /* AI4S 共用构件类（ui/common.py :: _COMPONENT_CSS）—— 新页面优先复用，勿再内联写死样式 */
+.ai-page-head{                  /* 页面顶端：标题 + 一句话说明 + 发丝线（不再用卡片包框） */
+  padding:0 0 var(--s-4);margin:0 0 var(--s-5);min-width:0;
+  border-bottom:1px solid var(--c-border);
+}
+.ai-page-title{                 /* 页面主标题：全站唯一 display 级锚点，负字距收紧 */
+  font-size:var(--fs-display);line-height:var(--lh-display);font-weight:650;
+  letter-spacing:-0.01em;color:var(--c-text);overflow-wrap:anywhere;
+}
+.ai-page-sub{                   /* 页面副文案：说明这一屏干什么，三级层级的最弱一级 */
+  margin-top:var(--s-1);font-size:var(--fs-caption);line-height:var(--lh-caption);
+  color:var(--c-text-2);overflow-wrap:anywhere;
+}
 .ai-card{                       /* 标准白底卡片：列表项、说明块、溯源卡的通用容器 */
   background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);
   padding:var(--s-5);margin:0 0 var(--s-3);min-width:0;overflow-wrap:anywhere;
@@ -177,11 +189,11 @@ _COMPONENT_CSS = """<style>
   padding:var(--s-3);margin:0 0 var(--s-2);min-width:0;overflow-wrap:anywhere;
 }
 .ai-section{                    /* 分区容器：区块之间的垂直节奏由它统一给 */
-  margin-top:var(--s-7);margin-bottom:var(--s-4);min-width:0;
+  margin-top:var(--s-8);margin-bottom:var(--s-4);min-width:0;
 }
-.ai-section-title{              /* 分区标题：左侧 3px 强调色竖条表达层级，不靠阴影 */
-  font-size:var(--fs-title);line-height:var(--lh-title);font-weight:700;color:var(--c-text);
-  border-left:3px solid var(--c-accent);padding-left:var(--s-3);overflow-wrap:anywhere;
+.ai-section-title{              /* 分区标题：靠字号/字重/留白拉层级，不用彩色竖条（去装饰） */
+  font-size:var(--fs-title);line-height:var(--lh-title);font-weight:650;
+  letter-spacing:-0.01em;color:var(--c-text);overflow-wrap:anywhere;
 }
 .ai-section-sub{                /* 分区副文案：紧随标题的一句话口径说明 */
   font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--c-text-2);
@@ -270,30 +282,25 @@ def at(items, idx, default=None):
 
 # ============================ UI 规范 1：页面顶部 ============================
 def page_header(title: str, subtitle: str = "", icon: str = ""):
-    """统一页面顶部：白底卡片 + 标题 + 一句话说明。各 page.render 第一行调用。
+    """统一页面顶部：标题 + 一句话说明 + 发丝线。各 page.render 第一行调用。
 
-    视觉（重做后）：左侧 3px 强调色竖条 + 1px 描边 + 圆角 8，不再有渐变与阴影。
-    2026-10-24 二次放大：标题升 --fs-display（28，页面级锚点），副文案 --fs-caption，
-    间距取 8px 网格——与分区标题（--fs-title 18）拉开一级，层级一眼可辨。
+    视觉（2026-10-24 三次修订，用户第二次反馈「还是没变」）：取消「卡片包框 + 左侧
+    3px 强调色竖条」——那是最像"老后台模板"的元素；改为**无框页头**：28px 标题、
+    12px 三级灰副文案、底部 1px 发丝线分隔主区，强调色只留给交互控件与选中态。
+    字号/间距全部走令牌（--fs-display / --fs-caption / --s-4 / --s-5）。
 
     向后兼容：旧调用 `page_header("📁 文献库管理", "说明")` 仍可用（positional）。
     """
     head = f"{icon} {title}".strip() if icon else str(title or "").strip()
     sub = str(subtitle or "").strip()
-    # 样式全部走 var(--...)：原实现是 f-string 拼 20px/13px/5px/4px 等字面量，
-    # 且带渐变背景 + 阴影，与"中性留白 + 去装饰"的新版式不符。
     _ensure_tokens()
     _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
     st.markdown(
-        '<div class="ai-card" style="border-left:3px solid var(--c-accent);">'
-        '<div style="font-size:var(--fs-display);line-height:var(--lh-display);'
-        'font-weight:700;color:var(--c-text);overflow-wrap:anywhere;">%s</div>'
+        '<div class="ai-page-head">'
+        '<div class="ai-page-title">%s</div>'
         '%s</div>' % (
             _esc(head),
-            "" if not sub else
-            '<div style="margin-top:var(--s-1);font-size:var(--fs-caption);'
-            'line-height:var(--lh-caption);color:var(--c-text-2);'
-            'overflow-wrap:anywhere;">%s</div>' % _esc(sub),
+            "" if not sub else '<div class="ai-page-sub">%s</div>' % _esc(sub),
         ),
         unsafe_allow_html=True,
     )

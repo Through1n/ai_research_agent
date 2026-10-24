@@ -137,7 +137,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 ## 2.4 非功能需求
 
 - **可复现**：Streamlit 锁定 1.63.x；检索/切块/去重参数全部环境变量可覆盖（`config.py:134-140`，均走 `_env_int`）。
-- **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:763`）。
+- **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:770`）。
 - **长文档工程化**：20 页一批解析建块（`services/library.py:19 PDF_BATCH_SIZE = 20`）、单页 30s 守护线程超时跳过（`services/library.py:544 _extract_page_with_timeout`）、每 50 页进度回调、psutil 内存探针（`scripts/_memory_probe.py :: peak_mb`）。
 - **安全**：API Key 只经环境变量/会话注入；输出侧密钥正则脱敏（`core/guardrails.py:130 redact_secrets`）；Python 工具经 AST 白名单沙箱（`core/sandbox.py:27 validate_code`）；`.env` 同时被 `.gitignore` 与 `.dockerignore` 排除，不入仓库、不入镜像。
 - **诚实降级**：每个外部依赖（LLM、embedding、外部 API、LaTeX 编译器、Graphviz）都有明确降级路径并向用户说明原因与建议动作，绝不静默失败、绝不编造数据。

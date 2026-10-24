@@ -545,6 +545,42 @@ button,input,textarea,select{font-family:var(--font-sans);}
   padding:var(--s-5) var(--s-4);
 }
 
+/* ---- 6b. 侧边栏导航：把 st.radio 做成「导航行」而非表单单选 -----------------
+   为什么改：radio 的原生外观是「圆点 + 文本」，加上菜单里的「0./1.」序号，
+   第一眼像问卷控件而不是导航，是「没重设计」的最强视觉信号（实测截图确认）。
+   DOM 实测（streamlit 1.63.0）：选项行 = label[data-testid="stRadioOption"]，
+   选中态由属性 data-selected="true" 给出（无需 :has 猜状态）；圆点节点是
+   「紧邻 stMarkdownContainer 之前的那个空 div」，用 :has(+ …) 精确命中。
+   纪律：这里只把圆点的视觉占位收为 0（0 宽 0 高 + 透明），**不隐藏任何控件**，
+   原生 radio input 仍在（视觉上由 Streamlit 自己裁成 1px），键盘与读屏可用。 */
+[data-testid="stSidebar"] [data-testid="stRadioGroup"]{gap:2px;}
+[data-testid="stSidebar"] label[data-testid="stRadioOption"]{
+  display:flex; align-items:center; min-height:36px;
+  padding:var(--s-1) var(--s-3); margin:0;
+  border-radius:var(--r); cursor:pointer;
+  color:var(--c-text-2);
+  transition:background .12s ease, color .12s ease;
+}
+[data-testid="stSidebar"] label[data-testid="stRadioOption"]:hover{
+  background:var(--c-border); color:var(--c-text);
+}
+[data-testid="stSidebar"] label[data-testid="stRadioOption"][data-selected="true"]{
+  background:var(--c-accent-soft); color:var(--c-accent); font-weight:600;
+}
+[data-testid="stSidebar"] label[data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] p{
+  margin:0; font-size:var(--fs-body); line-height:var(--lh-caption);
+  color:inherit; font-weight:inherit;
+}
+[data-testid="stSidebar"] label[data-testid="stRadioOption"] div:has(+ div[data-testid="stMarkdownContainer"]){
+  width:0; min-width:0; height:0; margin:0; padding:0; opacity:0; overflow:hidden;
+}
+/* 导航分组小标签（eyebrow）：11.5px / 7% 字距 / 三级灰，西式简洁的层级手段之一 */
+.ai-nav-eyebrow{
+  font-size:var(--fs-micro); line-height:var(--lh-micro);
+  letter-spacing:.07em; font-weight:700; color:var(--c-text-3);
+  margin:0 0 var(--s-1); padding:0 var(--s-3);
+}
+
 /* 键盘焦点环：唯一允许的 box-shadow —— 可访问性，不是装饰 */
 :focus-visible{outline:none; box-shadow:0 0 0 3px var(--c-accent-ring);}
 
