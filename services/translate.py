@@ -212,14 +212,99 @@ def _esc(s):
     return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def _block_html(block, rel_x, y, max_w, highlight=None):
-    """把一个 dict block 渲染成绝对定位的 .blk（内部行用常规流，避免块内重叠）。
+def _words_of_page(page):
+    """取词级坐标（`get_text("words")`），用于给行内文字补回词间空格。
+
+    2026-10-24 真机根因：这批 PDF 的文本层是逐字形定位（TJ 数组），`get_text("dict")`
+    返回的 span 文本**没有词间空格**（"ingandauto-encoderobjectiveshavebeenused"）。
+    没有空格的长串在 `overflow-wrap:anywhere` 下被浏览器从中间拆行 → 块高超出原始
+    高度 → 绝对定位的下一个块压上来，看起来就是「文字重叠 / 串栏」。
+    词级接口本身带空格语义，用它做行内补空，块高才能与原版面一致。
+    """
+    try:
+        return list(page.get_text("words") or [])
+    except Exception:
+        return []
+
+
+def _join_words(ws):
+    """按 x 顺序拼接一行内的词：纯 ASCII 边界补空格，CJK 之间不补（避免「中 文 字」）。"""
+    out = ""
+    for w in ws:
+        t = str(w[4] or "")
+        if not t:
+            continue
+        if out and out[-1].isascii() and t[:1].isascii():
+            out += " "
+        out += t
+    return out
+
+
+def _line_text_from_words(words, bb):
+    """在给定行 bbox 内挑出词并按序拼接；挑不到返回空串（调用方回落到 span 文本）。"""
+    if not words:
+        return ""
+    x0, y0, x1, y1 = bb
+    picked = [w for w in words
+              if (y0 - 2.0) <= float(w[1]) <= (y1 + 2.0)
+              and float(w[2]) >= (x0 - 2.0) and float(w[0]) <= (x1 + 2.0)]
+    if not picked:
+        return ""
+    picked.sort(key=lambda w: float(w[0]))
+    return _join_words(picked)
+
+
+def _word_rows_from_words(words, bb, y_tol=3.0):
+    """按 y 把 bbox 内的词聚成「视觉行」并各自拼接。
+
+    为什么需要分簇：dict 里的一个 line 可能横跨整页（图注 / 通栏标题），此时按 bbox
+    一次性取词会把左右两栏的词交错拼在一起（实测：「symbol models for added
+    different in front down-stream of every input tasks…」就是交错产物）。
+    先按 y 分簇，每簇只包含同一视觉行上的词，再拼接。
+    """
+    if not words:
+        return []
+    x0, y0, x1, y1 = bb
+    picked = [w for w in words
+              if (y0 - 2.0) <= float(w[1]) <= (y1 + 2.0)
+              and float(w[2]) >= (x0 - 2.0) and float(w[0]) <= (x1 + 2.0)]
+    if not picked:
+        return []
+    picked.sort(key=lambda w: (float(w[1]), float(w[0])))
+    rows, cur = [], [picked[0]]
+    for w in picked[1:]:
+        if abs(float(w[1]) - float(cur[-1][1])) <= y_tol:
+            cur.append(w)
+        else:
+            rows.append(cur)
+            cur = [w]
+    rows.append(cur)
+    out = []
+    for row in rows:
+        row.sort(key=lambda w: float(w[0]))
+        t = _join_words(row)
+        if t.strip():
+            out.append((min(float(w[1]) for w in row), t))
+    return out
+
+
+def _block_html(block, rel_x, y, max_w, highlight=None, words=None, bbox=None):
+    """把一个 dict block 渲染成绝对定位的 .blk；**块内每一行也按 PDF 原始坐标绝对定位**。
+
+    为什么行也要绝对定位（2026-10-24 真机定位到的根因）：行若走常规流，行高由浏览器
+    字体度量决定，块内容高度就可能超过 PDF 版面的原始高度，绝对定位的下一个块随即被
+    压住 —— 截图上就是「文字重叠 / 串栏」。改成「块按 bbox 定框 + 行按原始 y 定位」后，
+    版式与 PDF 一一对应，与字体是否一致无关。
 
     T2：highlight 为标题文本时，命中的 span 加 class="mk"（黄色高亮），
     供「标题树点击 → 原生渲染定位并高亮该标题」使用；highlight 为空则行为不变。
+    `words`：整页词级坐标，用于补回词间空格（见 `_words_of_page` 的根因说明）。
+    `bbox`：(x0,y0,x1,y1) 页面坐标；给了就按它定块框，行坐标相对它换算。
     """
     hl = str(highlight or "").strip().lower()
     lines_html = []
+    bx0 = float(bbox[0]) if bbox else float(rel_x)
+    by0 = float(bbox[1]) if bbox else float(y)
     for line in block.get("lines", []) or []:
         spans = [s for s in (line.get("spans", []) or []) if str(s.get("text", "")).strip()]
         if not spans:
@@ -259,10 +344,36 @@ def _block_html(block, rel_x, y, max_w, highlight=None):
             inner.append(
                 '<span class="sp%s" style="font-size:%.1fpx;color:%s;%s">%s</span>'
                 % (mk, sfs, rgb, style, _esc(s_text)))
-        lines_html.append('<div class="ln" style="font-size:%.1fpx;line-height:%.2fpx;">%s</div>'
-                          % (fs, lh, "".join(inner)))
+        # 逐字形定位的 PDF：span 文本是一整串没有空格的字（长串）→ 用词级坐标重建
+        # 该行文本；通栏行（图注/标题）再按 y 分簇，避免左右栏词交错。
+        span_text = "".join(str(s.get("text", "")) for s in spans).strip()
+        lx0 = min(float((s.get("bbox") or [0, 0, 0, 0])[0]) for s in spans)
+        lx1 = max(float((s.get("bbox") or [0, 0, 0, 0])[2]) for s in spans)
+        rows = []
+        if words and " " not in span_text and len(span_text) > 12 and ly0 is not None:
+            rows = [r for r in _word_rows_from_words(words, (lx0, ly0, lx1, ly1))
+                    if " " in r[1]]
+        if rows:
+            for ry, rtext in rows:
+                mk = " mk" if (hl and hl in rtext.lower()) else ""
+                lines_html.append(
+                    '<div class="ln" style="left:%.1fpx;top:%.1fpx;font-size:%.1fpx;'
+                    'line-height:%.2fpx;"><span class="sp%s">%s</span></div>'
+                    % (lx0 - bx0, ry - by0, fs, lh, mk, _esc(rtext)))
+        else:
+            # 每行按 PDF 原始坐标绝对定位：行高由版面决定，不再随浏览器字体度量
+            # 撑高块、把下一个块压住（2026-10-24 实测「文字重叠」的根因）。
+            lines_html.append(
+                '<div class="ln" style="left:%.1fpx;top:%.1fpx;font-size:%.1fpx;'
+                'line-height:%.2fpx;">%s</div>'
+                % (lx0 - bx0, (ly0 if ly0 is not None else by0) - by0, fs, lh, "".join(inner)))
     if not lines_html:
         return None
+    if bbox is not None:
+        bw = max(12.0, float(bbox[2]) - float(bbox[0]))
+        bh = max(4.0, float(bbox[3]) - float(bbox[1]))
+        return ('<div class="blk" style="left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;">%s</div>'
+                % (rel_x, y, bw, bh, "".join(lines_html)))
     return ('<div class="blk" style="left:%.1fpx;top:%.1fpx;max-width:%.1fpx;">%s</div>'
             % (rel_x, y, max(12.0, max_w), "".join(lines_html)))
 
@@ -452,6 +563,7 @@ def native_page_html(doc, page_num, highlight=None):
         raw = page.get_text("dict")["blocks"] or []
     except Exception:
         raw = []
+    _page_words = _words_of_page(page)          # 词级坐标：补回词间空格（防长串拆行）
     layers = {0: [], 1: [], -1: []}
     for block in raw:
         try:
@@ -473,7 +585,8 @@ def native_page_html(doc, page_num, highlight=None):
                 if max_w < 12.0:                     # 块起点已越出栏右边界：夹回栏内
                     rel_x = 0.0
                     max_w = max(12.0, c1 - c0 - 2.0)
-            html = _block_html(block, rel_x, y0, max_w, highlight=highlight)
+            html = _block_html(block, rel_x, y0, max_w, highlight=highlight,
+                               words=_page_words, bbox=bb)
             if html:
                 layers[css_layer].append(html)
         except Exception:
@@ -522,7 +635,7 @@ margin:var(--s-5,40px) auto var(--s-3,16px);box-shadow:0 0 0 1px var(--c-border,
 border-left:1px dashed var(--c-border-strong,#d4d4d8);border-right:1px dashed var(--c-border-strong,#d4d4d8);}}
 .blk{{position:absolute;font-family:'Times New Roman',Times,serif;color:var(--c-text,#18181b);
 white-space:normal;overflow-wrap:break-word;word-break:break-word;user-select:text;}}
-.ln{{white-space:pre-wrap;}}
+.ln{{position:absolute;white-space:nowrap;}}
 /* 悬停高亮：半透明底 + 细描边。块 bbox 可能远大于文字本身（通栏块/长换行块），
    早期用不透明 #fff3b0 会把页面图片与相邻文本整片糊住（2026-10-22 用户实测
    「鼠标放置遮挡图片」）；半透明化后既保留「当前在哪一块」的提示，又不遮内容。 */

@@ -658,7 +658,11 @@ body{
   line-height:1.65;
   -webkit-font-smoothing:antialiased;
 }
-p,li,h1,h2,h3,h4,td,th,div{overflow-wrap:anywhere;word-break:break-word}
+p,li,h1,h2,h3,h4,div{overflow-wrap:anywhere;word-break:break-word}
+/* 表格单元格例外：`anywhere` 会把 min-content 收到 1 个字符，表格自动布局据此把窄列
+   压到几像素，于是 "2018" 被拆成 "201"/"8"、"38" 被拆成 "3"/"8"（2026-10-24 真机
+   截图可见）。改成 break-word：只在真要溢出时才断，数字/短词不再被拆。 */
+th,td{overflow-wrap:break-word;word-break:normal}
 img{max-width:100%;height:auto;display:block}
 pre,code{overflow-x:auto;max-width:100%}
 table{max-width:100%;border-collapse:collapse}

@@ -1658,23 +1658,49 @@ def render(ctx):
                             except Exception:
                                 hl_word = ""
                             h, pw, ph = native_page_html(doc, int(p), highlight=hl_word or None)
-                            embed_html(h, height=min(int(ph * 1.18) + 60, 900), scrolling=True)
-                            if hl_word:
-                                st.caption(f"🔎 已高亮标题：{hl_word[:60]}")
+                            # 结果落会话态：Streamlit 每次重跑都重建元素树，若只在按钮
+                            # 分支里 embed_html，用户点任意其他控件（如「检测本页栏数」）
+                            # 渲染结果就整块消失（2026-10-24 真机复现，见
+                            # scripts/_verify_read_render_persist.py）。
+                            st.session_state["read_np_render"] = {
+                                "page": int(p), "html": h,
+                                "height": min(int(ph * 1.18) + 60, 900), "hl": hl_word or ""}
                         except Exception as e:
-                            st.warning(f"⚠️ 该页渲染失败：{str(e)[:160]}")
+                            st.session_state["read_np_render"] = {"err": str(e)[:160]}
                 with c_b:
                     if st.button("🔍 检测本页栏数", key="np_col"):
                         try:
                             info = detect_columns(doc[int(p) - 1])
                             if info.get("n_cols") == 2:
                                 g = info.get("gap") or (0, 0)
-                                st.success(f"📑 双栏：左 {info.get('left')} 块 / 右 {info.get('right')} 块，"
-                                           f"中缝 {g[0]:.0f}–{g[1]:.0f}pt")
+                                st.session_state["read_np_cols"] = {
+                                    "tone": "success", "page": int(p),
+                                    "msg": (f"📑 双栏：左 {info.get('left')} 块 / 右 {info.get('right')} 块，"
+                                            f"中缝 {g[0]:.0f}–{g[1]:.0f}pt")}
                             else:
-                                st.info(f"📄 单栏（文本块 {info.get('n_blocks')} 个，未发现 ≥ {12:g}pt 中缝）")
+                                st.session_state["read_np_cols"] = {
+                                    "tone": "info", "page": int(p),
+                                    "msg": (f"📄 单栏（文本块 {info.get('n_blocks')} 个，"
+                                            f"未发现 ≥ {12:g}pt 中缝）")}
                         except Exception as e:
-                            st.warning(f"⚠️ 栏数检测失败：{str(e)[:160]}")
+                            st.session_state["read_np_cols"] = {
+                                "tone": "warning", "page": int(p),
+                                "msg": f"⚠️ 栏数检测失败：{str(e)[:160]}"}
+                # ---- 结果区（会话态驱动：跨重跑保留，宽度占满整行）----
+                _cols = st.session_state.get("read_np_cols")
+                if _cols:
+                    _show = {"success": st.success, "info": st.info,
+                             "warning": st.warning}.get(_cols.get("tone"), st.info)
+                    _show(_cols.get("msg", ""))
+                _r = st.session_state.get("read_np_render")
+                if _r:
+                    if _r.get("err"):
+                        st.warning(f"⚠️ 该页渲染失败：{_r['err']}")
+                    else:
+                        st.caption(f"🖼️ 已渲染第 {_r.get('page')} 页（原生版式，不重排）")
+                        embed_html(_r["html"], height=_r.get("height") or 900, scrolling=True)
+                        if _r.get("hl"):
+                            st.caption(f"🔎 已高亮标题：{str(_r['hl'])[:60]}")
             except Exception as e:
                 st.warning(f"⚠️ 原生渲染区异常：{str(e)[:160]}")
 

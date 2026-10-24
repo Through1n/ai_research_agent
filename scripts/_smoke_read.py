@@ -50,7 +50,7 @@ def _layer_content(html, ident):
     return html[j + 1:]
 
 
-_BLK_RE = re.compile(r'class="blk" style="left:([\d.]+)px;top:([\d.]+)px;max-width:([\d.]+)px')
+_BLK_RE = re.compile(r'class="blk" style="left:([\d.]+)px;top:([\d.]+)px;width:([\d.]+)px;height:([\d.]+)px')
 
 
 def _col_blocks(html, ident):
@@ -91,9 +91,16 @@ def part1():
     check("A1 分栏渲染：输出含 col0/col1 两个独立容器",
           ('id="col0"' in h) and ('id="col1"' in h))
     n_blk = h.count('class="blk"')
-    n_maxw = h.count("max-width:")
-    check("A1 分栏渲染：每个块都带 max-width 限宽（不溢出到另一栏）",
-          n_maxw >= n_blk >= 1, f"blk={n_blk} max-width={n_maxw}")
+    n_w = h.count(";width:")
+    # 2026-10-24 起块按 PDF bbox 定框（width+height），块内每行再按原始坐标绝对定位；
+    # 旧实现只有 max-width、行用常规流 → 行高随浏览器字体度量涨高，把下一个块压住
+    # （真机表现就是「文字重叠」）。契约改成：块宽高齐备 + 行绝对定位。
+    check("A1 分栏渲染：每个块都带 bbox 限宽限高（不溢出到另一栏）",
+          n_w >= n_blk >= 1, f"blk={n_blk} width={n_w}")
+    n_ln_abs = len(re.findall(r'class="ln" style="left:[\d.]+px;top:[\d.]+px', h))
+    n_ln = h.count('class="ln"')
+    check("A1 分栏渲染：块内每行按 PDF 原始坐标绝对定位（行高不随字体度量涨高）",
+          n_ln >= 1 and n_ln_abs == n_ln, f"ln={n_ln} 绝对定位={n_ln_abs}")
     check("A1 分栏渲染：栏间有分隔（gutter）", "gutter" in h)
     check("A1 分栏渲染：HTML 无未替换的模板占位符", not re.search(r"\{[a-z_]+\}", h))
 
@@ -141,7 +148,7 @@ def part1():
         overflow = 0
         for ci, items in blks_by_col.items():
             c0, c1 = colmap.get(ci, (0, 595))
-            for (lx, _ty, mw) in items:
+            for (lx, _ty, mw, _hh) in items:
                 right = c0 + float(lx) + float(mw)
                 worst = max(worst, right - c1)
                 if right > c1 + 1.5:
@@ -164,8 +171,8 @@ def part1():
             col0_right = colmap.get(0, (0, 595))[1]
             check("A1 超宽行：原始跨度确实越过了左栏右边界（旧渲染会串栏）",
                   raw_w[1] > col0_right, f"span {raw_w[0]:.0f}→{raw_w[1]:.0f} vs 栏右 {col0_right:.0f}")
-        widest = max((float(mw) for (_l, _t, mw) in blks_by_col.get(0, [])), default=0.0)
-        check("A1 超宽行：新渲染被 max-width 夹在栏内（不再串栏）",
+        widest = max((float(mw) for (_l, _t, mw, _h) in blks_by_col.get(0, [])), default=0.0)
+        check("A1 超宽行：新渲染块框夹在栏内（不再串栏）",
               colmap.get(0, (0, 595))[0] + widest <= colmap.get(0, (0, 595))[1] + 1.5,
               f"左栏最大块宽 {widest:.0f}px，栏宽 "
               f"{colmap.get(0, (0, 595))[1] - colmap.get(0, (0, 595))[0]:.0f}px")
