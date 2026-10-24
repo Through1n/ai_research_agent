@@ -280,6 +280,14 @@ def render(ctx):
         return
     _init_state()
 
+    # 上一轮提交成功后留下的「清空输入框」标记：必须在这里消费——此刻带
+    # key="qa_input" 的 st.text_input 还没实例化，写它合法。晚一步（在提交完成的
+    # 当轮直接写）会抛 StreamlitWidgetAlreadyInstantiatedError，整页崩成错误卡片：
+    # 2026-10-24 真机实测，答案已经流式显示出来了，一两秒后整页被错误卡替换掉。
+    if st.session_state.pop("_qa_need_clear_input", False):
+        st.session_state["qa_input"] = ""
+        st.session_state["qa_q"] = ""
+
     # ---------- 缺陷 C：库内内容极少时的可操作引导 ----------
     guidance = _library_guidance(ctx)
     if guidance:
@@ -425,8 +433,10 @@ def render(ctx):
                         "对比：" + "、".join(compare_papers) if compare_papers else "全部文献"),
                 })
                 st.session_state["qa_run_seq"] += 1
-                st.session_state["qa_q"] = ""
-                st.session_state["qa_input"] = ""   # 与 clear_on_submit 对齐：提交后清空输入框
+                # ⚠️ 禁止在这里写 st.session_state["qa_input"]：本轮的 st.text_input
+                # 早已实例化，Streamlit 会抛 WidgetAlreadyInstantiatedError 并把整页
+                # 换成错误卡片（答案流式显示后整页消失）。改为置标记，下一轮开头消费。
+                st.session_state["_qa_need_clear_input"] = True
                 st.rerun()
 
     # ---------- 历史问答渲染（答案优先，证据/调试默认折叠，保持界面整洁） ----------
