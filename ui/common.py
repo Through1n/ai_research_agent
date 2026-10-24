@@ -34,8 +34,8 @@ _C_BG_ZEBRA2 两个只服务它的常量。）
 -------------------------------------------------------------------
   .ai-card            标准白底卡片：圆角 8 / 1px 描边 / 内边距 --s-5 / 长词可控换行
   .ai-card-tight      同系列，内边距收紧到 --s-3（列表项、小幅卡片）
-  .ai-section         分区容器：上间距 --s-7 / 下间距 --s-4
-  .ai-section-title   分区标题：--fs-title + 左侧 3px 强调色竖条 + --s-3 左内距
+  .ai-section         分区容器：上间距 --s-8 / 下间距 --s-4
+  .ai-section-title   分区标题：--fs-title / 650 字重 / -0.01em 字距（不用彩色竖条）
   .ai-section-sub     分区副文案：--fs-caption / --c-text-2
   .ai-kpi             KPI 指标卡容器（白底 + 1px 描边 + 圆角 8）
   .ai-kpi-val         指标数值：--fs-display / 强调色 / tabular-nums 等宽数字
@@ -147,17 +147,22 @@ def _ensure_tokens() -> None:
 
 
 def _inject_css_once(css_block: str, flag: str) -> bool:
-    """把一段**自带 <style> 包裹**的 CSS 一次性注入会话，返回本次是否真的注入了。
+    """把一段**自带 <style> 包裹**的 CSS 注入本页 —— **每次运行一次**（本轮幂等）。
 
-    幂等旗标放在 session_state 而不是模块全局变量：Streamlit 每次 rerun 都是整脚本
-    重跑，模块变量在部分运行模式下不可靠。
+    ⚠️ 原实现是"会话级幂等"（旗标置 True 后永久跳过），这是真实事故（2026-10-24）：
+    Streamlit 每次 rerun 重建整个元素树，上一轮的 <style> 不会保留；旗标导致第二轮起
+    不再注入 → 第一次点击后全站构件类（.ai-card / .ai-section / 表格）样式全部消失。
+    现按 app.py 维护的 `_run_seq` 判定：同一轮只注入一次，跨轮必注入；无序号时每调用
+    都注入（宁可多一份 style，绝不丢样式）。
     """
     _ensure_tokens()
     try:
-        if st.session_state.get(flag):
+        if st.session_state.get(flag) == st.session_state.get("_run_seq") \
+                and st.session_state.get("_run_seq") is not None:
             return False
         st.markdown(css_block, unsafe_allow_html=True)
-        st.session_state[flag] = True
+        seq = st.session_state.get("_run_seq")
+        st.session_state[flag] = seq if seq is not None else True
         return True
     except Exception:
         return False

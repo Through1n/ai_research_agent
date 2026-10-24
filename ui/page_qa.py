@@ -41,24 +41,27 @@ _QA_CSS = """
 .qa-src-gap{height:var(--s-2);}
 </style>
 """
-_QA_CSS_FLAG = "_qa_page_css_injected"   # 会话级幂等旗标
+_QA_CSS_FLAG = "_qa_page_css_injected"   # 本轮幂等旗标（值=本轮 _run_seq）
 
 
 def _inject_qa_css():
-    """会话级幂等注入本页局部 CSS（原实现在 render() 里每轮 rerun 都整段重灌一次）。
+    """**本轮幂等**注入本页局部 CSS（原实现在 render() 里每轮 rerun 都整段重灌一次）。
 
-    旗标放 session_state 而不是模块全局：Streamlit 每次 rerun 都是整脚本重跑，
-    模块变量在部分运行模式下不可靠（与 ui/common.py 的 _inject_css_once 同思路）。
+    ⚠️ 原实现是会话级旗标（置 True 后永久跳过）——这是真实事故（2026-10-24）：
+    Streamlit 每次 rerun 重建元素树，上一轮的 <style> 不保留；旗标导致第二次起不再
+    注入，本页样式在任意一次交互后消失。现按 app.py 的 `_run_seq` 判定本轮是否已注入
+    （与 ui/common.py::_inject_css_once 同一口径）。
     """
     try:
         _design.ensure()
     except Exception:
         pass
     try:
-        if st.session_state.get(_QA_CSS_FLAG):
+        seq = st.session_state.get("_run_seq")
+        if seq is not None and st.session_state.get(_QA_CSS_FLAG) == seq:
             return
         st.markdown(_QA_CSS, unsafe_allow_html=True)
-        st.session_state[_QA_CSS_FLAG] = True
+        st.session_state[_QA_CSS_FLAG] = seq if seq is not None else True
     except Exception:
         pass
 

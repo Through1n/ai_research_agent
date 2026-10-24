@@ -553,7 +553,9 @@ button,input,textarea,select{font-family:var(--font-sans);}
    「紧邻 stMarkdownContainer 之前的那个空 div」，用 :has(+ …) 精确命中。
    纪律：这里只把圆点的视觉占位收为 0（0 宽 0 高 + 透明），**不隐藏任何控件**，
    原生 radio input 仍在（视觉上由 Streamlit 自己裁成 1px），键盘与读屏可用。 */
-[data-testid="stSidebar"] [data-testid="stRadioGroup"]{gap:2px;}
+/* 行节距：36px 行高 + 4px 间距 = 40px（8px 基准的整数倍）。Streamlit 默认 gap 会被
+   压到 2px → 节距 38px，脱离间距令牌，实测（1440 视口）导航行 pitch 全为 38px。 */
+[data-testid="stSidebar"] [data-testid="stRadioGroup"]{gap:var(--s-1);}
 [data-testid="stSidebar"] label[data-testid="stRadioOption"]{
   display:flex; align-items:center; min-height:36px;
   padding:var(--s-1) var(--s-3); margin:0;
@@ -639,7 +641,7 @@ a:hover{text-decoration:underline}
 # =============================================================================
 # (e) 函数
 # =============================================================================
-_FLAG_KEY = "_ai_design_tokens_injected"   # 会话级幂等旗标
+_FLAG_KEY = "_ai_design_tokens_injected"   # 本轮幂等旗标（值=本轮 _run_seq）
 _RATIO_RE = _re.compile(r"^\s*\d+(?:\.\d+)?\s*/\s*\d+(?:\.\d+)?\s*$")
 
 
@@ -670,18 +672,27 @@ def inject_into_head(html: str) -> str:
 
 
 def apply() -> None:
-    """向页面注入 TOKENS_CSS，一次且仅一次（会话级幂等）。
+    """向页面注入 TOKENS_CSS —— **每次运行注入一次**（本轮幂等，不是会话幂等）。
 
-    幂等旗标放在 session_state：Streamlit 每次 rerun 都是整脚本重跑，
-    不设旗标会把整段 CSS 反复注入。用 .get() 先读再赋值，不做"实例化后回填自身 key"。
+    ⚠️ 这里曾经是"会话级幂等"（session_state 旗标置 True 后永久跳过），这是一个
+    真实事故（2026-10-24 定位）：Streamlit 每次 rerun 都会重建整个元素树，上一轮
+    st.markdown 注入的 <style> 不保留；旗标让第二轮起跳过注入 → 用户第一次点击
+    侧栏后全站令牌 CSS 从 DOM 消失，界面静默退回 Streamlit 默认外观（实测导航后
+    document 内查不到 --c-on-accent）。用户反馈"重启后没啥变化"的根因即此。
+
+    现按 app.py 维护的 `_run_seq`（每轮 +1）判定本轮是否已注入：同一轮内多次调用
+    只注入一次，跨轮必重新注入。若上游没有 _run_seq（如单页级测试），则每调用都注入，
+    宁可多一份 <style> 也绝不丢样式。
+
     任何异常都静默忽略——令牌层不得影响页面渲染。
     """
     try:
         import streamlit as st                     # 惰性导入：模块级零副作用
-        if st.session_state.get(_FLAG_KEY):
-            return
+        seq = st.session_state.get("_run_seq")
+        if seq is not None and st.session_state.get(_FLAG_KEY) == seq:
+            return                                  # 本轮已注入
         st.markdown("<style>" + TOKENS_CSS + "</style>", unsafe_allow_html=True)
-        st.session_state[_FLAG_KEY] = True
+        st.session_state[_FLAG_KEY] = seq if seq is not None else True
     except Exception:
         pass
 

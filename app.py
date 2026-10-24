@@ -52,6 +52,15 @@ try:
 except Exception:                                        # pragma: no cover
     pass
 
+# ---------- 每次重跑的唯一序号：CSS 注入的「本轮幂等」锚点 ----------
+# 为什么需要（2026-10-24 实测事故）：Streamlit 每次 rerun 都会**重建整个元素树**，
+# 上一轮 st.markdown 注入的 <style> 不会保留下来。若注入用「会话级旗标」跳过重跑，
+# 则用户第一次点击（侧栏导航/任意按钮）后全站令牌 CSS 整体消失，界面静默退回
+# Streamlit 默认外观（实测：导航后 document 内 hasTokens=False、侧栏圆点复现）。
+# 故幂等粒度必须是「每次运行注入一次」，用递增序号做锚点；design.apply() 与
+# ui/common.py::_inject_css_once 都按这个序号判定本轮是否已注入。
+st.session_state["_run_seq"] = int(st.session_state.get("_run_seq", 0)) + 1
+
 # ---------- 全局 session_state 集中初始化：先初始化再读，杜绝 KeyError ----------
 # 各页面自身的私有 key 仍在页面顶部 ensure_state 中声明，此处只放跨页共享/高频 key。
 ensure_state({
