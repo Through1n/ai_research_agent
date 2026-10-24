@@ -205,9 +205,13 @@ TOKENS_CSS = r"""
   --r-mark:2px;                          /* 仅 PDF 批注等纯功能性标记 */
   --ctl-h:36px;
 
-  /* 字阶与行高（22 / 16 / 13.5 / 12 / 11.5，层级单调递减） */
-  --fs-display:22px;  --lh-display:1.3;
-  --fs-title:16px;    --lh-title:1.4;
+  /* 字阶与行高（28 / 18 / 13.5 / 12 / 11.5，层级单调递减）。
+     2026-10-24 二次放大：用户反馈「重启后没啥变化」——Round 21 首轮中性化在
+     Round 13 浅色基底上只是细微改良（#f7f9fc→#fafafa 肉眼几乎无感）。西式简洁的
+     两个肉眼可辨信号是**留白**与**层级**：display 22→28、title 16→18，配合分区
+     间距 32→40 与侧边栏轻灰分层，一眼可辨。 */
+  --fs-display:28px;  --lh-display:1.3;
+  --fs-title:18px;    --lh-title:1.4;
   --fs-body:13.5px;   --lh-body:1.65;
   --fs-caption:12px;  --lh-caption:1.5;
   --fs-micro:11.5px;  --lh-micro:1.5;
@@ -531,9 +535,10 @@ button,input,textarea,select{font-family:var(--font-sans);}
   font-size:var(--fs-body); line-height:var(--lh-body); margin:0;
 }
 
-/* 侧边栏 */
+/* 侧边栏：轻灰底与主区 #fafafa 分层——白侧边栏+近白主区的区分度不足，
+   是「没啥变化」的共犯之一；#f4f4f5 一档灰阶差即让结构可辨（西方简洁惯例） */
 [data-testid="stSidebar"]{
-  background:var(--c-surface);
+  background:var(--c-subtle);
   border-right:1px solid var(--c-border);
 }
 [data-testid="stSidebarContent"]{
@@ -556,7 +561,7 @@ button,input,textarea,select{font-family:var(--font-sans);}
 }
 @media (max-width:480px){
   :root{--pad-top:16px; --pad-x:16px; --pad-bottom:24px; --col-basis:100%;
-        --fs-display:20px;}
+        --fs-display:24px;}
   [data-testid="stBaseButton-secondary"],
   [data-testid="stBaseButton-primary"]{padding:0 var(--s-3);}
 }

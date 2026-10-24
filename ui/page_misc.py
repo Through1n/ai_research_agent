@@ -53,7 +53,7 @@ _ARCH_HTML = """
   --accent-wash:rgba(31,95,174,0.04); --accent-line:rgba(31,95,174,0.32);
   --radius:8px;
   --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-6:24px; --s-8:32px;
-  --fs-title:16px; --lh-title:1.4;
+  --fs-title:18px; --lh-title:1.4;
   --fs-body:13.5px; --lh-body:1.65;
   --fs-aux:12px; --lh-aux:1.5;
   --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif;

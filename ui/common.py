@@ -32,9 +32,9 @@ _C_BG_ZEBRA2 两个只服务它的常量。）
 
 共用构件类清单（一次性注入 :: _COMPONENT_CSS，后续页面迁移直接调用）
 -------------------------------------------------------------------
-  .ai-card            标准白底卡片：圆角 8 / 1px 描边 / 内边距 --s-4 / 长词可控换行
+  .ai-card            标准白底卡片：圆角 8 / 1px 描边 / 内边距 --s-5 / 长词可控换行
   .ai-card-tight      同系列，内边距收紧到 --s-3（列表项、小幅卡片）
-  .ai-section         分区容器：上间距 --s-6 / 下间距 --s-4
+  .ai-section         分区容器：上间距 --s-7 / 下间距 --s-4
   .ai-section-title   分区标题：--fs-title + 左侧 3px 强调色竖条 + --s-3 左内距
   .ai-section-sub     分区副文案：--fs-caption / --c-text-2
   .ai-kpi             KPI 指标卡容器（白底 + 1px 描边 + 圆角 8）
@@ -170,14 +170,14 @@ _COMPONENT_CSS = """<style>
 /* AI4S 共用构件类（ui/common.py :: _COMPONENT_CSS）—— 新页面优先复用，勿再内联写死样式 */
 .ai-card{                       /* 标准白底卡片：列表项、说明块、溯源卡的通用容器 */
   background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);
-  padding:var(--s-4);margin:0 0 var(--s-2);min-width:0;overflow-wrap:anywhere;
+  padding:var(--s-5);margin:0 0 var(--s-3);min-width:0;overflow-wrap:anywhere;
 }
 .ai-card-tight{                 /* 紧凑卡片：密集列表（如溯源多条、目录项） */
   background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);
   padding:var(--s-3);margin:0 0 var(--s-2);min-width:0;overflow-wrap:anywhere;
 }
 .ai-section{                    /* 分区容器：区块之间的垂直节奏由它统一给 */
-  margin-top:var(--s-6);margin-bottom:var(--s-4);min-width:0;
+  margin-top:var(--s-7);margin-bottom:var(--s-4);min-width:0;
 }
 .ai-section-title{              /* 分区标题：左侧 3px 强调色竖条表达层级，不靠阴影 */
   font-size:var(--fs-title);line-height:var(--lh-title);font-weight:700;color:var(--c-text);
@@ -272,8 +272,9 @@ def at(items, idx, default=None):
 def page_header(title: str, subtitle: str = "", icon: str = ""):
     """统一页面顶部：白底卡片 + 标题 + 一句话说明。各 page.render 第一行调用。
 
-    视觉（重做后）：左侧 3px 强调色竖条 + 1px 描边 + 圆角 8，不再有渐变与阴影，
-    字阶走 --fs-title / --fs-caption，间距取 8px 网格。
+    视觉（重做后）：左侧 3px 强调色竖条 + 1px 描边 + 圆角 8，不再有渐变与阴影。
+    2026-10-24 二次放大：标题升 --fs-display（28，页面级锚点），副文案 --fs-caption，
+    间距取 8px 网格——与分区标题（--fs-title 18）拉开一级，层级一眼可辨。
 
     向后兼容：旧调用 `page_header("📁 文献库管理", "说明")` 仍可用（positional）。
     """
@@ -285,7 +286,7 @@ def page_header(title: str, subtitle: str = "", icon: str = ""):
     _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
     st.markdown(
         '<div class="ai-card" style="border-left:3px solid var(--c-accent);">'
-        '<div style="font-size:var(--fs-title);line-height:var(--lh-title);'
+        '<div style="font-size:var(--fs-display);line-height:var(--lh-display);'
         'font-weight:700;color:var(--c-text);overflow-wrap:anywhere;">%s</div>'
         '%s</div>' % (
             _esc(head),
