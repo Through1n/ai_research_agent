@@ -597,6 +597,22 @@ button,input,textarea,select{font-family:var(--font-sans);}
   margin:0 0 var(--s-1); padding:0 var(--s-3);
 }
 
+/* ---- 7b. Streamlit 原生提示条：info 收进中性+强调色系 ---------------------
+   为什么（2026-10-24 逐页真机审查）：st.info 默认底色是 Streamlit 自带的蓝，
+   与全站唯一强调蓝**不是同一个蓝**——一屏出现两种蓝，正是"仅用一种强调色"
+   要禁止的情形，而且它出现在首页第一屏最显眼的位置。
+   处理：info 改为中性底 + 1px 发丝边 + 左边 3px 强调色；语义由图标承担。
+   success / warning / error 保留语义色（状态色不是装饰色，删掉会伤可用性）。 */
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentInfo"]){
+  background:var(--c-subtle); border:1px solid var(--c-border);
+  border-left:3px solid var(--c-accent); border-radius:var(--r);
+  color:var(--c-text-2);
+}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentInfo"]) svg,
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentInfo"]) [data-testid="stAlertContentInfo"]{
+  color:var(--c-accent);
+}
+
 /* 键盘焦点环：唯一允许的 box-shadow —— 可访问性，不是装饰 */
 :focus-visible{outline:none; box-shadow:0 0 0 3px var(--c-accent-ring);}
 

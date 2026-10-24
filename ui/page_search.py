@@ -10,7 +10,7 @@ import streamlit as st
 
 from services import extern
 from tools import definitions as df
-from ui.common import (ensure_state, page_header, friendly_error, show_error, pretty_table,
+from ui.common import (ensure_state, page_header, section_header, friendly_error, show_error, pretty_table,
                        empty_state, llm_guard, long_block, show_llm_result,
                        bg_submit, bg_consume, bg_running)
 from ui.sidebar import set_flash
@@ -232,7 +232,7 @@ def _consume_track(kind, t):
 # ============================ 页面各区（提交闸门 + 结果渲染） ============================
 
 def _arxiv(ctx):
-    st.subheader("📚 arXiv 检索 / 下载")
+    section_header("arXiv 检索 / 下载", icon="📚")
     q = st.text_input("标题 / 关键词 / ID", key="aq")
     _running = bg_running(kinds={_K_ARXIV})
     if st.button("🔍 搜索 arXiv", disabled=_running,
@@ -279,7 +279,7 @@ def _arxiv(ctx):
 
 
 def _batch(ctx):
-    st.subheader("📋 参考文献批量抓取")
+    section_header("参考文献批量抓取", icon="📋")
     titles = st.text_area("标题列表（每行一条）", height=130, key="bt")
     _running = bg_running(kinds={_K_BATCH})
     if st.button("🚀 批量下载入库", disabled=_running,
@@ -322,7 +322,7 @@ def _batch(ctx):
 def _others(ctx):
     c1, c2 = st.columns([1, 1])
     with c1:
-        st.subheader("🧬 PubMed")
+        section_header("PubMed", icon="🧬")
         pq = st.text_input("关键词", key="pq")
         _running = bg_running(kinds={_K_PUBMED})
         if st.button("🔍 PubMed", disabled=_running,
@@ -351,7 +351,7 @@ def _others(ctx):
             if isinstance(r, dict) and r.get("url"):
                 st.markdown(f"[📎 PubMed 原文]({r['url']})")
     with c2:
-        st.subheader("🌐 网页搜索")
+        section_header("网页搜索", icon="🌐")
         wq = st.text_input("关键词", key="wq")
         _running = bg_running(kinds={_K_WEB})
         if st.button("🔍 DuckDuckGo", disabled=_running,
@@ -607,14 +607,14 @@ def render(ctx):
     tab_sub, tab_search, tab_quality = st.tabs(["订阅与推荐", "检索与下载", "引用含金量"])
 
     with tab_sub:
-        st.subheader("⏰ 动态追踪订阅")
+        section_header("动态追踪订阅", icon="⏰")
         try:
             _track(ctx)
         except Exception as e:
             show_error("渲染「动态追踪」区块", e)
             st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
 
-        st.subheader("⭐ 个性化推荐")
+        section_header("个性化推荐", icon="⭐")
         try:
             _recommend(ctx)
         except Exception as e:

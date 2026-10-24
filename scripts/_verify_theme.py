@@ -212,6 +212,23 @@ def static_scan():
                 if is_graph:
                     continue                      # 图谱 canvas font 简写另行管理
                 bad(f"{rel}:{lineno} font-family 未走 var(--font-sans): {v[:60]}")
+    # ---- A2. 字阶入口：分区标题必须走 section_header()，不得用 st.subheader() ----
+    # 事故（2026-10-24 逐页真机审查）：写作页/检索页仍用 st.subheader（22px），
+    # 与其它页的 .ai-section-title（18px）并存 → 同一层级出现两种字号，
+    # 页内层级 28 → 22 → 13.5 与 28 → 18 → 13.5 两套打架。
+    stray = []
+    for rel in SCAN_FILES:
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            for i, line in enumerate(f, 1):
+                if "st.subheader(" in line:
+                    stray.append(f"{rel}:{i}")
+    if stray:
+        bad(f"分区标题绕过 section_header（st.subheader 会跳过 18px 字阶）：{stray[:4]}")
+    else:
+        ok("分区标题统一走 section_header()（无 st.subheader 残留）")
     if not _problems:
         ok("ui/ 与 services 渲染层字面量全部在色板内（圆角/阴影/字体同样合规）")
 
@@ -651,6 +668,86 @@ def nav_row_checks(browser):
     return all(results.values())
 
 
+# =============================================================================
+# B3. st.info 提示条：底色必须收进中性/强调色系（不得出现 Streamlit 自带第二个蓝）
+# =============================================================================
+_ALERT_STUB_CSS = ('[data-testid="stAlertContainer"].info-stub{'
+                   'background:rgba(28,131,255,0.1);border:1px solid rgb(0,84,163)}')
+
+_ALERT_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+__STUB__
+__STRUCT__
+__TOKENS__
+__COMPONENT__
+</style></head><body>
+<div data-testid="stAlert" class="stAlert"><div data-testid="stAlertContainer" class="stAlertContainer info-stub">
+<div data-testid="stAlertContentInfo"><svg width="16" height="16"></svg><p>三步上手：按提示操作</p></div>
+</div></div></body></html>""".replace(
+    "__STUB__", _ALERT_STUB_CSS).replace(
+    "__STRUCT__", _STRUCT_CSS).replace(
+    "__TOKENS__", TOKENS_CSS).replace(
+    "__COMPONENT__", _COMPONENT_CSS)
+
+_JS_ALERT = """() => {
+  const el = document.querySelector('[data-testid="stAlertContainer"]');
+  if (!el) return null;
+  const cs = getComputedStyle(el);
+  return {bg: cs.backgroundColor, bl: cs.borderLeftWidth, blc: cs.borderLeftColor,
+          radius: cs.borderRadius};
+}"""
+
+
+def alert_checks(browser):
+    """info 提示条不得使用 Streamlit 自带的第二个蓝。"""
+    results = {}
+
+    def measure(extra_css):
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        html = _ALERT_HTML if not extra_css else _ALERT_HTML.replace(
+            "</style>", extra_css + "\n</style>", 1)
+        page.set_content(html, wait_until="load")
+        d = page.evaluate(_JS_ALERT)
+        page.close()
+        return d
+
+    global _RECORD
+    _RECORD = False
+    try:
+        d = measure("")
+        prob = []
+        if not d:
+            prob.append("提示条未渲染")
+        else:
+            p = _parse_color(d["bg"])
+            if not p:
+                prob.append(f"底色不可解析 {d['bg']}")
+            else:
+                r, g, b, a = p
+                neutral = _is_gray((r, g, b)) and ("#%02x%02x%02x" % (r, g, b)) in NEUTRAL_RAMP
+                if not neutral and (r, g, b) not in ACCENT_FAMILY:
+                    prob.append(f"底色={d['bg']}（中性阶/强调色系之外的第三种色）")
+            if _px(d["bl"]) != 3:
+                prob.append(f"左标线宽={d['bl']}（应为 3px 强调色）")
+            p2 = _parse_color(d["blc"])
+            if p2 and (p2[0], p2[1], p2[2]) not in ACCENT_FAMILY:
+                prob.append(f"左标色={d['blc']}（应为强调蓝）")
+        (ok if not prob else bad)("[1440px] st.info 提示条收进中性+强调色系"
+                                  + (f"：{prob[:3]}" if prob else ""))
+        results["alert"] = not prob
+
+        broken = measure('[data-testid="stAlertContainer"].info-stub{'
+                         'background:rgba(28,131,255,0.1)}')
+        pb = _parse_color(broken["bg"]) if broken else None
+        flipped = bool(pb) and (pb[0], pb[1], pb[2]) not in ACCENT_FAMILY \
+            and not (_is_gray((pb[0], pb[1], pb[2]))
+                     and ("#%02x%02x%02x" % (pb[0], pb[1], pb[2])) in NEUTRAL_RAMP)
+        (ok if flipped else bad)("破坏「提示条换回 Streamlit 原生蓝」→ 断言精确翻红")
+        results["alert_sabotage"] = flipped
+    finally:
+        _RECORD = True
+    return all(results.values())
+
+
 def main():
     print("全站主题门禁 · 西式简洁（中性+单一强调色+无衬线+去装饰）")
     print("=" * 74)
@@ -668,13 +765,17 @@ def main():
         blind = run_sabotages(browser)
         print("== B2. 侧栏导航行文字色阶（合成侧栏 + 1 份反向对照） ==")
         nav_ok = nav_row_checks(browser)
+        print("== B3. st.info 提示条配色（合成提示条 + 1 份反向对照） ==")
+        alert_ok = alert_checks(browser)
         browser.close()
     print("=" * 74)
-    if _problems or blind or not nav_ok:
+    if _problems or blind or not nav_ok or not alert_ok:
         print(f"汇总：失败 {len(_problems)} 项 + 失明 {len(blind)} 份"
-              + ("" if nav_ok else " + 导航行断言无效/失败"))
+              + ("" if nav_ok else " + 导航行断言无效/失败")
+              + ("" if alert_ok else " + 提示条配色断言无效/失败"))
         return 1
-    print("汇总：全部通过（静态字面量 + 2 视口 × 9 组计算样式 + 导航行色阶 + 8 份反向对照）")
+    print("汇总：全部通过（静态字面量 + 2 视口 × 9 组计算样式 + 导航行色阶 + "
+          "提示条配色 + 10 份反向对照）")
     return 0
 
 

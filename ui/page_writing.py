@@ -28,7 +28,7 @@ import re
 import time
 
 import streamlit as st
-from ui.common import (embed_html, page_header, show_error, _esc, empty_state, pretty_table,
+from ui.common import (embed_html, page_header, section_header, show_error, _esc, empty_state, pretty_table,
                        is_llm_degraded, llm_degraded_banner,
                        bg_submit, bg_consume, bg_running)
 from ui.sidebar import set_flash
@@ -277,9 +277,9 @@ def _render_plan_chart(df, plan):
 
 
 def _csv_section(ctx):
-    st.subheader("📊 CSV 数据可视化（自动出图）")
-    st.caption("💡 上传 CSV 或载入示例后，系统按列类型**自动**推荐并渲染图表，无需手动选择；"
-               "需要更精细控制时，用下方「🛠️ 自定义图表」手动调整。")
+    section_header("CSV 数据可视化（自动出图）",
+                   "上传 CSV 或载入示例后，系统按列类型自动推荐并渲染图表，无需手动选择；"
+                   "需要更精细控制时，用下方「🛠️ 自定义图表」手动调整。", icon="📊")
     c_up, c_demo = st.columns([2, 1])
     cf = c_up.file_uploader("上传 CSV", type=["csv"], key="csv")
     with c_demo:
@@ -464,9 +464,9 @@ def _render_reference_provenance(refs, source):
 
 
 def _outline_section(ctx):
-    st.subheader("✍️ 无幻觉论文框架（References 确定性拼接 + 白名单校验）")
-    st.caption("💡 输入研究 Idea 并选择引用来源，系统生成正文框架；References 由入库 PDF "
-               "**确定性拼接**（不经大模型），生成后自动做白名单校验，杜绝编造文献。")
+    section_header("无幻觉论文框架（References 确定性拼接 + 白名单校验）",
+                   "输入研究 Idea 并选择引用来源，系统生成正文框架；References 由入库 PDF "
+                   "确定性拼接（不经大模型），生成后自动做白名单校验，杜绝编造文献。", icon="✍️")
     files = list(getattr(ctx, "paper_order", []) or [])
     if not files:
         empty_state("文献库为空，无法生成框架（以免出现编造文献）。",
@@ -645,9 +645,9 @@ def _render_graphviz(code):
 
 
 def _diagram_section(ctx):
-    st.subheader("🏗️ 架构拓扑图（真实渲染）")
-    st.caption("💡 选择类型并填写主题，生成 Mermaid / TikZ / Graphviz / Matplotlib 代码，"
-               "并尽可能**真实渲染**（本地编译器优先，缺失时降级为源码 / 在线编辑器）。")
+    section_header("架构拓扑图（真实渲染）",
+                   "选择类型并填写主题，生成 Mermaid / TikZ / Graphviz / Matplotlib 代码，"
+                   "并尽可能真实渲染（本地编译器优先，缺失时降级为源码 / 在线编辑器）。", icon="🏗️")
     c1, c2 = st.columns(2)
     kind = c1.selectbox("类型", ["mermaid", "tikz", "graphviz", "matplotlib"], key="dg_kind")
     topic = c2.text_input("主题", key="topic")
@@ -705,8 +705,9 @@ def _diagram_section(ctx):
 
 # ---------------------------------------------------------------- 翻译
 def _translate_section(ctx):
-    st.subheader("🌐 学术翻译")
-    st.caption("💡 粘贴待翻译文本，选择中英方向，一键获得学术风格译文（需配置 API Key）。")
+    section_header("学术翻译",
+                   "粘贴待翻译文本，选择中英方向，一键获得学术风格译文（需配置 API Key）。",
+                   icon="🌐")
     direction = st.radio("方向", ["中→英", "英→中"], horizontal=True, key="trdir")
     text = st.text_area("粘贴文本", key="trtext", height=160)
     _tr_run = bg_running(kinds={_K_TRANSLATE})
@@ -746,11 +747,9 @@ def render(ctx):
                 _K_TRANSLATE: _consume_translate})
     page_header("✍️ 学术写作与可视化",
                 "CSV→自动出图+Figure Caption、无幻觉论文框架（白名单校验）、拓扑图真实渲染、中英学术翻译。")
-    with st.container(border=True):
-        _csv_section(ctx)
-    with st.container(border=True):
-        _outline_section(ctx)
-    with st.container(border=True):
-        _diagram_section(ctx)
-    with st.container(border=True):
-        _translate_section(ctx)
+    # 不再用 container(border=True) 四连包框：全站统一「分区标题 + 留白」分段，
+    # 页面不再是四张并排卡片（那是"老后台模板"的强信号，与去装饰目标相反）。
+    _csv_section(ctx)
+    _outline_section(ctx)
+    _diagram_section(ctx)
+    _translate_section(ctx)
