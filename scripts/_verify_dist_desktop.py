@@ -13,71 +13,40 @@
 
 只读 + 临时目录，不碰仓库、不碰真实 %APPDATA%。
 """
-import os
-import shutil
-import subprocess
 import sys
-import tempfile
-import time
-import urllib.request
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-EXE = ROOT / "dist" / "AI4SResearchAgent" / "AI4SResearchAgent.exe"
+from _dist_verify_common import ROOT, FrozenApp, pick_port, require_exe, wait_http
+
 PORT = 8765
 # 本次业务代码的特征串：只有新代码里才有（旧文案是「（v1/v7/BERT）」）
 FINGERPRINT = "一键加载演示数据（6 篇）"
 
 
-def wait_http(url, timeout=180, interval=2.0):
-    deadline = time.time() + timeout
-    last = ""
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=5) as r:
-                if r.status == 200:
-                    return True, ""
-                last = f"HTTP {r.status}"
-        except Exception as exc:
-            last = f"{type(exc).__name__}: {exc}"
-        time.sleep(interval)
-    return False, last
-
-
 def main():
-    if not EXE.exists():
-        print(f"[FAIL] 产物不存在：{EXE}")
+    err = require_exe()
+    if err:
+        print(f"[FAIL] {err}")
         return 1
+    port = pick_port(PORT)
 
-    tmp_appdata = tempfile.mkdtemp(prefix="ai4s_dist_verify_")
-    env = dict(os.environ)
-    env["APPDATA"] = tmp_appdata
-    env.pop("AI4S_DESKTOP", None)
-
-    print(f"[1/4] 启动产物（临时 APPDATA，端口 {PORT}）")
-    proc = subprocess.Popen(
-        [str(EXE), "--st-server", str(PORT)],
-        env=env, cwd=str(EXE.parent),
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-
-    try:
+    print(f"[1/4] 启动产物（临时 APPDATA，端口 {port}）")
+    with FrozenApp(port) as app:
         print("[2/4] HTTP 探活（只证明 streamlit 起来了）")
-        ok, err = wait_http(f"http://127.0.0.1:{PORT}/")
+        ok, why = wait_http(app.url)
         if not ok:
-            print(f"[FAIL] 服务没起来：{err}")
-            _dump_logs(tmp_appdata)
+            print(f"[FAIL] 服务没起来：{why}")
+            app.dump_logs()
             return 1
         print("      HTTP 200")
 
         print("[3/4] headless 浏览器加载（真正执行 app.py）")
-        rc = _browser_check()
+        rc = _browser_check(app.url)
         if rc != 0:
-            _dump_logs(tmp_appdata)
+            app.dump_logs()
             return rc
 
         print("[4/4] 校验复制出来的业务代码是本次新代码")
-        sidebar = Path(tmp_appdata) / "AI4SResearchAgent" / "app" / "ui" / "sidebar.py"
+        sidebar = app.app_dir / "ui" / "sidebar.py"
         if not sidebar.exists():
             print(f"[FAIL] 业务代码没被复制：{sidebar}")
             return 1
@@ -86,39 +55,29 @@ def main():
             return 1
         print("      app_bundle 已复制且为新代码")
 
-        print("\nRESULT: PASS —— 产物可启动、可渲染、业务代码为本次版本")
-        return 0
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        shutil.rmtree(tmp_appdata, ignore_errors=True)
+    print("\nRESULT: PASS —— 产物可启动、可渲染、业务代码为本次版本")
+    return 0
 
 
-def _browser_check():
+def _browser_check(url):
     from playwright.sync_api import sync_playwright
 
-    page_errors, console_errors = [], []
+    page_errors = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 900})
         page.on("pageerror", lambda e: page_errors.append(str(e)[:300]))
-        page.on("console", lambda m: console_errors.append(m.text[:300])
-                if m.type == "error" else None)
         try:
-            page.goto(f"http://127.0.0.1:{PORT}/", wait_until="domcontentloaded", timeout=60000)
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
             # 首次运行要 import chromadb/onnxruntime，冷启动慢，给足时间等侧栏出现
             page.wait_for_selector(f"text={FINGERPRINT}", timeout=240000)
             print(f"      侧栏命中「{FINGERPRINT}」")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 失败要把现场打出来
             print(f"[FAIL] 页面没渲染出预期内容：{type(exc).__name__}: {exc}")
             try:
-                body = page.inner_text("body")[:800]
                 print("      --- 页面文本片段 ---")
-                print(body)
-            except Exception:
+                print(page.inner_text("body")[:800])
+            except Exception:  # noqa: BLE001
                 pass
             if page_errors:
                 print("      --- pageerror ---")
@@ -129,11 +88,11 @@ def _browser_check():
 
         # Streamlit 的异常块：冻结态缺模块时通常以 stException 呈现
         exc_blocks = page.query_selector_all('[data-testid="stException"]')
-        shot = ROOT / "docs" / "shots" / "_dist_verify.png"
         try:
-            page.screenshot(path=str(shot), full_page=False)
+            shot = ROOT / "docs" / "shots" / "_dist_verify.png"
+            page.screenshot(path=str(shot))
             print(f"      截图：{shot}")
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         browser.close()
 
@@ -145,19 +104,6 @@ def _browser_check():
         return 1
     print("      无未捕获异常、无 stException 块")
     return 0
-
-
-def _dump_logs(tmp_appdata):
-    logs = Path(tmp_appdata) / "AI4SResearchAgent" / "logs"
-    if not logs.exists():
-        print("      （没有日志目录）")
-        return
-    for f in sorted(logs.glob("*")):
-        print(f"      --- {f.name} ---")
-        try:
-            print(f.read_text(encoding="utf-8", errors="replace")[-2000:])
-        except Exception as exc:
-            print(f"      （读不动：{exc}）")
 
 
 if __name__ == "__main__":

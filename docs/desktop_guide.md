@@ -57,12 +57,42 @@
 
 ### 5.1 一键打包
 
+打包依赖与业务依赖分开放：`requirements.txt` 只描述运行时，桌面壳另需
+`requirements-desktop.txt`（pywebview / PyInstaller / pythonnet）。首次打包前装一次：
+
+```powershell
+pip install -r requirements.txt -r requirements-desktop.txt
+```
+
 ```powershell
 # 在项目根目录
 build_desktop.bat
 ```
 
 产物：`dist\AI4SResearchAgent\AI4SResearchAgent.exe`（及同目录依赖）。
+整包约 495 MB / 3766 个文件，exe 本体约 40 MB；目标机不需要装 Python。
+
+> **别只看日志说成功。** PyInstaller 在 COLLECT 阶段要删旧目录，删不掉（文件被占用/杀软锁）时
+> 会**静默跳过生成**：日志里不会出现 `Build complete!`，但进程退出码可能仍是 0。
+> `build_desktop.bat` 已经用「exe 的 mtime 是否晚于本次构建开始时刻」兜住这个坑，判定不过会直接报错。
+
+### 5.1.1 打包后验真（两条脚本）
+
+```powershell
+# ① 能启动、能渲染、业务代码是新版本
+python scripts\_verify_dist_desktop.py
+# ② 真点「一键加载演示数据」跑通业务闭环（向量化 + 入库）
+python scripts\_verify_dist_deep.py
+```
+
+脚本要点（自己写验证时同样适用）：
+
+- **必须用临时 `%APPDATA%`** 起进程。真实目录下若已有 `%APPDATA%\AI4SResearchAgent\app\`，
+  启动时会走热更新、直接用旧业务代码，验证就假绿了；脚本会改成临时目录模拟「全新安装」。
+- **HTTP 200 不算验证**。Streamlit 的脚本跑在 WebSocket 会话里，纯 GET 请求不会执行 `app.py`；
+  必须用无头浏览器真加载一次，才能暴露冻结态缺模块（chromadb / onnxruntime / PyMuPDF）的问题。
+- 断言要落在**本次新增的文案和业务结果**上（侧栏「一键加载演示数据（6 篇）」、
+  点完之后「文献库 6 篇 · 18 个片段」），而不是「页面没报错」——后者对旧代码同样成立。
 
 ### 5.2 发布业务更新（热更新包）
 
