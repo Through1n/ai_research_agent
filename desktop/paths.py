@@ -141,9 +141,19 @@ def ensure_app_copy() -> None:
 
     if (target / "app.py").exists():
         bundled, installed = _read_build_id(src), _read_build_id(target)
-        # 只有「两边都有戳且新版更晚」才替换。任一方没戳（老版本安装 / 热更新包）
-        # 就保持原样——宁可跑旧代码，也不能把用户的业务包覆盖成更旧的。
-        if not (bundled and installed and bundled > installed):
+        # 决策表（每一条都有 scripts/_verify_dist_refresh.py 与
+        # tests/test_desktop_app_copy.py 兜底）：
+        #   bundle 无戳            → 不动。打包脚本没跑第 4 步 = 打包异常，
+        #                             宁可跑旧代码也不做没依据的覆盖。
+        #   bundle 有戳 + 已装无戳 → 替换。「已装无戳」只可能是**打戳机制之前**
+        #                             装的旧版，而本次 exe 一定比它新——这正是
+        #                             用户「重装了却什么都没变」的那批安装。
+        #   bundle 有戳 + 已装有戳 → 只在 bundle 更新时替换。热更新包会自己
+        #                             写戳（updater.apply_update），所以这条
+        #                             能正确保护「比 exe 更新的热更新版本」。
+        if not bundled:
+            return
+        if installed and not (bundled > installed):
             return
         backup = target.with_name("app.backup-" + time.strftime("%Y%m%d-%H%M%S"))
         try:

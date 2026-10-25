@@ -104,19 +104,20 @@ def _run_case(name: str, bundle_id, install_id, expect: str) -> None:
 
 
 def main() -> int:
-    print("[1/5] 决策表：bundle 新 / 已装旧  → 应替换")
+    print("[1/6] 决策表：bundle 新 / 已装旧  → 应替换")
     _run_case("老安装 + 新 exe", BUNDLE_ID, OLD_ID, "replace")
 
-    print("[2/5] 决策表：bundle 旧 / 已装新  → 不该替换（不能把用户代码覆盖成更旧）")
+    print("[2/6] 决策表：bundle 旧 / 已装新  → 不该替换（不能把用户代码覆盖成更旧）")
     _run_case("热更新包比 exe 新", BUNDLE_ID, NEW_ID, "keep")
     _run_case("已装戳更新", OLD_ID, NEW_ID, "keep")
 
-    print("[3/5] 决策表：任一方没戳 → 保持原样")
-    _run_case("已装无戳（老版本安装）", OLD_ID, None, "keep")
-    _run_case("bundle 无戳（未走打包脚本）", None, OLD_ID, "keep")
+    print("[3/6] 决策表：已装无戳 = 打戳机制之前的旧安装 → 必须替换")
+    _run_case("已装无戳（老版本安装）", BUNDLE_ID, None, "replace")
+    print("[4/6] 决策表：bundle 无戳（打包脚本没跑第 4 步）→ 保持原样")
+    _run_case("bundle 无戳", None, OLD_ID, "keep")
     _run_case("两边都无戳", None, None, "keep")
 
-    print("[4/5] 全新安装：目标目录不存在 → 应正常复制")
+    print("[5/6] 全新安装：目标目录不存在 → 应正常复制")
     tmp = Path(tempfile.mkdtemp(prefix="ai4s_fresh_"))
     try:
         bundle = tmp / "app_bundle"
@@ -139,7 +140,7 @@ def main() -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print("[5/5] 产物自检：dist 里的 bundle 必须带 .build_id 且戳是新的")
+    print("[6/6] 产物自检：dist 里的 bundle 必须带 .build_id 且戳是新的")
     if not DIST_BUNDLE.exists():
         _bad(f"产物缺失：{DIST_BUNDLE}（先跑 build_desktop.bat）")
     else:

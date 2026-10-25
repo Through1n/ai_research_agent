@@ -19,6 +19,7 @@ import sys
 import time
 import urllib.request
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 from desktop import paths
@@ -337,6 +338,16 @@ def apply_update(zip_path: Path, expected_sha256: str,
         new_version = "unknown"
 
     _write_state(new_version)
+    # 给热更新出来的业务包打上构建戳：paths.ensure_app_copy() 靠它比较
+    # 「已装版本 vs exe 自带版本」。不写戳的话，下次启动会把它当成
+    # 「打戳机制之前的老安装」而被 exe 自带的代码覆盖掉——更新的热更新版本
+    # 反而被降级。戳用**应用时刻**（比 exe 自带的 build_id 新），
+    # 语义上就是「这份业务包比 exe 里那份新」。
+    try:
+        (app / paths.BUILD_ID_FILE).write_text(
+            datetime.now().astimezone().isoformat(), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - 写戳失败不应让升级失败
+        log(f"write build id failed (ignored): {exc}")
     log(f"update applied: {old_version} -> {new_version}")
     return True, f"已更新到业务版本 {new_version}，下次启动生效。"
 
