@@ -77,9 +77,9 @@
 
 ### ⑤ 持久化挂载（storage / docs/shots / 向量库）
 
-- 向量库：`storage/chroma`（`config.py:32` → `services/state.py:68`）
+- 向量库：`storage/chroma`（`config.py:32` → `services/state.py:169-170`）
 - 业务 JSON：`storage/library.json`、`.memory.json`、`.user_profile.json`（`config.py:113-115`）
-- 上传件：`storage/uploads`（`config.py:31`，写点 `services/library.py:777`）+ 插图 `storage/uploads/figs/*`（`services/parsing.py:690`）
+- 上传件：`storage/uploads`（`config.py:31`，写点 `services/library.py:903`）+ 插图 `storage/uploads/figs/*`（`services/parsing.py:770`）
 - 引用缓存：`storage/cache/citation_cache.json`（`services/citation_quality.py:65-67`）
 - 失败日志：`storage/llm_failures.log` / `llm_config_errors.log`（`core/llm.py:382-384`）
 - `docs/shots/`：grep 全仓 `*.py`，`docs/shots` 只出现在 `scripts/_reshoot_*` / `scripts/resnap.py` /
@@ -88,7 +88,7 @@
 - **结论：⚠️ 达标但挂载方式有致命坑，已改。** 详见 §2.3 / §3。
 - 另：`docker-compose.yml:146` 挂 `/app/logs` 是对的。我核对过 `config.py:36` 的
   `LOGS_DIR = ROOT/"storage"`（非桌面态）**全仓无运行时代码读取**（只有它自己定义与 mkdir），
-  真正落盘的是 `app.py:15` 与 `ui/common.py:191` 两处硬编码的 `"logs"`。
+  真正落盘的是 `app.py:15` 与 `ui/common.py:439` 两处硬编码的 `"logs"`。
   这个不一致已写进 §5 移交清单。
 
 ### ⑥ 是否以非 root 运行
@@ -130,36 +130,62 @@
 
 | # | 路径 | 操作 | 代码位置 | 目录/文件不存在 | 文件为空 | 合法但类型错 |
 |---|---|---|---|---|---|---|
-| 1 | `storage/library.json` | 读 | `services/state.py:90`（`json.loads` 包在 `:89-92` 的 try/except） | ✅ 回落默认字典 | ✅ 回落 | ❌ **崩**（见下行） |
-| 1b | 同上 | **用** | `services/state.py:74-77` `lib.get(...)`，**在 try 之外** | — | — | ⚠️曾经 ❌（`[]` → `AttributeError`），**本轮已被队友修复**：`state.py:90` 改为 `_ensure_lib_dict(...)`（定义 `state.py:181-190`），已复测通过 |
-| 2 | `storage/library.json` | 写 | `services/state.py:95` `save_library()` | 目录需存在且可写 | — | — |
+| 1 | `storage/library.json` | 读 | `services/state.py:193`（`json.loads` 包在 `:192-195` 的 try/except） | ✅ 回落默认字典 | ✅ 回落 | ✅ **已修复**（见下行） |
+| 1b | 同上 | **用** | `services/state.py:177` `lib.get("papers", {})`，**在 try 之外** | — | — | ⚠️曾经 ❌（`[]` → `AttributeError`），**本轮已被 team-lead 修复**：`:193` 改为 `_ensure_lib_dict(...)`（定义 `:294-303`），已复测通过 |
+| 2 | `storage/library.json` | 写 | `services/state.py:197-201` `save_library()` | 目录需存在且可写 | — | — |
 | 3 | `storage/memory.json` | 读 | `core/memory.py:35`（try/except，`:32-37`）+ `:14` 调 `_normalize` | ✅ 回落 `{"notes":[],"kv":{}}` | ✅ 回落 | ✅ **已修复**：`_normalize`（`:16-30`）补齐 `notes`/`kv` |
 | 4 | `storage/memory.json` | 写 | `core/memory.py:40` `_save`；键访问 `core/memory.py` 的 `remember/add_note/relevant_notes` | 目录需可写 | — | ✅ **已修复**（原 `{}` → `KeyError: 'kv'`） |
 | 5 | `storage/user_profile.json` | 读 | `core/memory.py:35`（默认 `{}`）+ `_normalize` | ✅ | ✅ | ✅ **已修复**（非 dict 一律回落 `{}`） |
 | 6 | `storage/user_profile.json` | 写 | `core/memory.py:43` `_save_profile`；`update_profile` 的 `profiles.setdefault` | 目录需可写 | — | ✅ **已修复**（原 `[]` → `AttributeError: 'list' object has no attribute 'setdefault'`） |
-| 7 | `storage/chroma/` | 读写 | `services/state.py:68` `PersistentClient(path=...)` | ✅ chromadb 自建 | — | — |
-| 8 | `storage/uploads/` | 建/写 | `config.py:31`+`38-42`；`services/library.py:777` `write_bytes` | ❌ **不可写则崩**（见 §2.3） | — | — |
-| 9 | `storage/uploads/figs/<pdf>/` | 建/写 | `services/parsing.py:690` `os.makedirs` | ✅ 自建（父目录需可写） | — | — |
-| 10 | `storage/uploads/figs/*` | 读 | `ui/page_library.py:385`、`ui/common.py:749-753`、`ui/page_reading.py:1094`、`services/library.py:834`、`services/writing.py:829-830` | ✅ 各调用点均有兜底 | — | — |
+| 7 | `storage/chroma/` | 读写 | `services/state.py:169-170` `PersistentClient(path=...)` / `get_or_create_collection` | ✅ chromadb 自建 | — | — |
+| 8 | `storage/uploads/` | 建/写 | `config.py:31`+`38-42`；`services/library.py:903` `write_bytes` | ❌ **不可写则崩**（见 §2.3） | — | — |
+| 9 | `storage/uploads/figs/<pdf>/` | 建/写 | `services/parsing.py:765` `def extract_figures` → `:770` `os.makedirs(out_dir, exist_ok=True)` | ✅ 自建（父目录需可写） | — | — |
+| 10 | `storage/uploads/figs/*` | 写→读 | 见下方「命题拆分」：写 `ui/page_library.py:153-154`；读 `ui/page_library.py:795` | ✅ 写入点外层有 try/except | — | — |
 | 11 | `storage/cache/citation_cache.json` | 读 | `services/citation_quality.py:152-160`（先 `isfile` 再 `isinstance(data, dict)`，整段 try/except） | ✅ | ✅ | ✅ **安全**（有类型校验） |
 | 12 | 同上 | 写 | `services/citation_quality.py:169` `makedirs` + `:174-177` 原子写（`.tmp` + `os.replace`），整段 try/except 静默 | ✅ 目录自建 | — | — |
 | 13 | `storage/llm_failures.log` | 追加 | `core/llm.py:414`（路径 `:382-384`） | ✅ `storage` 由 config 建 | — | — |
 | 14 | `storage/llm_config_errors.log` | 追加 | 同上（`category=="config"` 分支） | ✅ | — | — |
-| 15 | `storage/backup_<时间戳>/` | 建/写 | `services/library.py:899-918`，`:903-904` 有 try/except | ✅ 失败只返回 warning | — | — |
+| 15 | `storage/backup_<时间戳>/` | 建/写 | `services/library.py:1026-1056` `_backup_storage`（整段有 try/except，最坏只把失败原因写进 warnings） | ✅ 失败只返回 warning | — | — |
 | 16 | `storage/pdf/` | 建 | `config.py:34`（**仅桌面态**；容器非桌面态不用） | — | — | — |
 | 17 | `storage/track_daemon.log` | 追加 | `scripts/watch_daemon.py:25` —— **守护脚本专用，Web 运行时不碰** | — | — | — |
+
+#### 第 10 行的命题拆分与留痕（Round 13 行号对账）
+
+本行原先写「`storage/uploads/figs/*` 读」，下挂 5 条引用。对账时逐条回源码，**5 条里 4 条与插图无关、1 条读写方向写反**，属于用伪证支撑一个结论正确的命题。现按「最小可验证命题 + 唯一证据」重写：
+
+| 最小命题 | 唯一证据 | 该行实际内容 |
+|---|---|---|
+| P1 插图被写入 `storage/uploads/figs/<pdf名>/` | `ui/page_library.py:153-154` → `services/parsing.py:765`（`def extract_figures(doc, out_dir)`）、`:770`（`os.makedirs(out_dir, exist_ok=True)`） | `fig_dir = os.path.join(str(UPLOAD_DIR), "figs", …)` / `figs = parsing.extract_figures(doc, fig_dir)` |
+| P2 渲染时按解析结果携带的路径直接 `st.image` | `ui/page_library.py:795` | `st.image(path, caption=f"第 {fig.get('page','?')} 页插图")` |
+
+**被删除的 5 条引用（留痕，不做静默删除）**：
+
+| 原引用 | 那一行实际是什么 | 删除理由 |
+|---|---|---|
+| `ui/page_library.py:385` | `set_flash("warning", …元数据抽取未返回内容…)` | 与插图无关；且原命题写"读"，真实落点是 `:153-154` 的**写** |
+| `ui/common.py:749-753` | `:751` 是 `def long_block(...)`（长文本折叠） | 与插图无关 |
+| `ui/page_reading.py:1094` | `_ensure_ref_index()` 的 docstring | 与插图无关 |
+| `services/library.py:834` | `invalid["embedding"] = None` | 与插图无关（该文件 `grep figs` 命中数 = 0） |
+| `services/writing.py:829-830` | `resolve_pdf` 在 `UPLOAD_DIR`/`PDF_DIR` 里找 **PDF** | 找 PDF 不是找图；该文件唯一的 `figs` 是 matplotlib 的 `figsize` |
+
+> 判据：`grep -c figs` 在 `services/library.py`、`ui/common.py`、`ui/page_reading.py` 均为 **0**
+> → 这些引用不可能是"行号漂移指错了位置"，而是当初就没找对地方。
+
+**命题措辞也一并更正**：原写「读」会让人以为是"按目录扫描读回"。实际是解析时写入、
+渲染时由解析结果携带路径直接 `st.image`，**不存在目录遍历**。这一处措辞错比行号错更误导。
+
 
 **上表的完整性取证**：对全仓 `*.py` 做 `grep "storage"|'storage'|/storage` 与
 `grep STORAGE_DIR|UPLOAD_DIR|CHROMA_DIR|LIBRARY_JSON|MEMORY_JSON|PROFILE_JSON|LOGS_DIR`，
 运行时包（`ui/ services/ core/ tools/ app.py config.py`）的命中全部在上表内；
 `scripts/` 与 `desktop/` 的命中已单独标注为非运行时。
 
-**没有发现任何 `json.load` 裸读**：三处 JSON 读取（`state.py:90`、`memory.py:18`、
+**没有发现任何 `json.load` 裸读**：三处 JSON 读取（`state.py:193`、`memory.py:33-37`、
 `citation_quality.py:154`）**全部**包在 try/except 里，且 `citation_quality.py:155`
 还额外做了 `isinstance(data, dict)` 校验。
 
 **`[0]` 式取首个元素的风险**：对上表涉及的文件未发现。
-（`services/library.py:93` 的 `per[0]`、`services/graph.py:212` 的 `latest_of(files)[0]`
+（`services/library.py:187` 的 `per[0]`、`services/graph.py:212` 的 `latest_of(files)[0]`
 都与 storage 初始化无关，只在已有文献时才会走到。）
 
 ### 2.2 结论：真正会崩的不是"空"，是"不可写"和"类型错"
@@ -223,7 +249,7 @@ except OSError:
 
 | 文件 | 内容 | 类型约束的**当前**依据 |
 |---|---|---|
-| `storage/library.json` | `{"papers": {}, "paper_order": [], "chunks": [], "likes": {}}` | `state.py:74-77` 直接 `.get()` → 要 dict；**但** `state.py:90` 的 `_ensure_lib_dict` 已兜底，现在写 `[]` 也不会崩 |
+| `storage/library.json` | `{"papers": {}, "paper_order": [], "chunks": [], "likes": {}}` | `state.py:177` 直接 `.get()` → 要 dict；**但** `state.py:193` 的 `_ensure_lib_dict` 已兜底，现在写 `[]` 也不会崩 |
 | `storage/memory.json` | `{"notes": [], "kv": {}}` | `remember` 写 `data["kv"][key]`；**但** `memory.py:14` 的 `_normalize` 已补键，现在写 `{}` 也不会崩 |
 | `storage/user_profile.json` | `{}` | `update_profile` 调 `.setdefault` → 要 dict；`_normalize` 已兜底 |
 | `storage/cache/citation_cache.json` | `{}` | `citation_quality.py:155` 校验 `isinstance(data, dict)` |
@@ -271,8 +297,8 @@ Docker 创建**新**命名卷时会把镜像内该目录的内容复制进卷（
 我核代码时（`services/state.py` 与 `core/memory.py` 还是旧版）实测出「合法 JSON 但类型错」会崩，
 据此把种子设计成强类型。写这份报告的过程中，有队友改了这两个文件：
 
-- `services/state.py:90` → `return _ensure_lib_dict(json.loads(...))`，
-  新增 `_ensure_lib_dict` 定义在 **`services/state.py:181-190`**（非 dict 一律回落默认字典）
+- `services/state.py:193` → `return _ensure_lib_dict(json.loads(...))`，
+  新增 `_ensure_lib_dict` 定义在 **`services/state.py:294-303`**（非 dict 一律回落默认字典）
 - `core/memory.py:14` → 构造末尾调用新增的 `_normalize()`，定义在 **`core/memory.py:16-30`**，
   补齐 `notes` / `kv`，并把非 dict 的 `data` / `profiles` 一律回落
 
@@ -327,9 +353,9 @@ grep `[A-Za-z]:\\` 与 `\\` → **0 命中**。四个文件里没有任何 Windo
 
 | 代码引用 | 实际目录/文件 | 一致？ |
 |---|---|---|
-| `demo_data/data.csv`（`ui/page_writing.py:107`） | `demo_data/data.csv` | ✅ |
+| `demo_data/data.csv`（`ui/page_writing.py:290`） | `demo_data/data.csv` | ✅ |
 | `lib/vis-9.1.2/vis-network.min.js`（`services/graph.py:528`） | `lib/vis-9.1.2/vis-network.min.js` | ✅ |
-| `static/mermaid.min.js`（`ui/page_writing.py:496`） | `static/mermaid.min.js` | ✅ |
+| `static/mermaid.min.js`（`ui/page_writing.py:688`） | `static/mermaid.min.js` | ✅ |
 | `pdf/`（`config.py:34`） | `pdf/` | ✅ |
 | `docs/shots/`（仅 scripts） | `docs/shots/` | ✅ 不存在 `docs/Shots` 双份 |
 | `.streamlit/config.toml` | `.streamlit/config.toml` | ✅ |
@@ -402,7 +428,7 @@ ROOT = C:\Users\Administrator\ai_research_agent
 | §1 | **首次启动硬校验**：属主必须是 `app`；三个种子文件逐字节比对；密钥未烤进镜像的 `docker history` 复查 |
 | §2 | **9 个页面逐个点**（清单取自 `ui/sidebar.py:13-23` 的 `MENU`，不是凭印象），含路由前缀与模块对应表；并说明「页面空」可能是空库守卫而非故障 |
 | §3 | **必点按钮**：① 加载演示数据（4 条预期响应）② 无 Key 也必须出结果的 5 个按钮 ③ 无 Key 时必须弹人话提示的 4 个按钮（附原文）④ 有 Key 时 `🔌 测试连通性` 才算真验过 |
-| §4 | **无 Key / Key 失效降级文案原文对照表**：侧边栏 4 态、失败横幅 5 类（取自 `ui/common.py:359-377` 的 `_LLM_ERR_KINDS`）、伪响应的抗幻觉红线 |
+| §4 | **无 Key / Key 失效降级文案原文对照表**：侧边栏 4 态、失败横幅 5 类（取自 `ui/common.py:606` 起的 `_LLM_ERR_KINDS`）、伪响应的抗幻觉红线 |
 | §5 | **打开速度**：不给拍脑袋秒数，只给可观测界（构建结束标志 = 那行 `[build] ONNX embedding warmed at ...`；冷启动界 = `start_period: 120s`） |
 | §6 | **10 条症状 → 第一处置动作 → 判据** |
 | §7 | 演示前最后 5 分钟，9 个勾 |
@@ -417,7 +443,7 @@ ROOT = C:\Users\Administrator\ai_research_agent
 >
 > **⚠️ 本节状态（Round 13 收尾时更新）**：P1–P4 **均已修复，且经确认由 team-lead 本人动手改的**
 > （我当初被禁止改 `.py`，这个分工是对的）。他采用的是**等行替换 + 辅助函数追加到文件尾**，
-> 因此本节引用的行号（`app.py:43-45`、`services/state.py:90/181-190`、`core/memory.py:14/16-30`）
+> 因此本节引用的行号（`app.py:43-45`、`services/state.py:193/294-303`、`core/memory.py:14/16-30`）
 > **全部仍然准确，未漂移**。他的实测是三种预置组合 **5/5 通过**；
 > 我独立复测的是三类 3/3 通过。两者口径不同但结论一致。
 > 下方原文与"已修复"标注**故意保留**，不改成从未出过问题 —— 保留推理链，便于后来人理解
@@ -436,11 +462,11 @@ ROOT = C:\Users\Administrator\ai_research_agent
 
 ### ~~【P2 · 高】`library.json` 类型校验在 try 之外~~ → ✅ **已由队友修复（我复测过）**
 
-- 原状：`services/state.py:87-92` 的 `_load_library` 有 try/except，但 `services/state.py:73-77`
+- 原状：`services/state.py:191-195` 的 `_load_library` 有 try/except，但 `services/state.py:177-178`
   的 `lib.get("papers", {})` 等 4 行**在 try 之外**；`library.json` 为 `[]` 时抛 `AttributeError`
-  → `Container()` 构造失败 → `app.py:89` 显示「存储目录不可写或已损坏」（同样不准确）。
-- 现状：`services/state.py:90` 改为 `return _ensure_lib_dict(json.loads(...))`，
-  `_ensure_lib_dict` 定义在 `services/state.py:181-190`（非 dict 一律回落默认字典）。
+  → `Container()` 构造失败 → `app.py:98` 显示「存储目录不可写或已损坏」（同样不准确）。
+- 现状：`services/state.py:193` 改为 `return _ensure_lib_dict(json.loads(...))`，
+  `_ensure_lib_dict` 定义在 `services/state.py:294-303`（非 dict 一律回落默认字典）。
 - 复测：`[]` → `OK {'papers': {}, 'paper_order': [], 'chunks': [], 'likes': {}}`。
 - **无需再处理。**
 
@@ -469,7 +495,7 @@ ROOT = C:\Users\Administrator\ai_research_agent
 ### 【P5 · 低】两个 LOG_DIR 不一致，`config.py` 的那个没人用
 
 - `config.py:36` `LOGS_DIR = DATA_ROOT / "logs" if DESKTOP_MODE else ROOT / "storage"`
-- `app.py:15` `LOG_DIR = "logs"`、`ui/common.py:191` `LOG_DIR = "logs"`
+- `app.py:15` `LOG_DIR = "logs"`、`ui/common.py:438` `LOG_DIR = "logs"`
 - 全仓 grep `LOGS_DIR`：运行时代码**只有 config.py 自己在定义与 mkdir**，
   `ui/common.py` 与 `app.py` 用的是各自硬编码的 `"logs"`，两者在非桌面态**指向不同目录**
   （`/app/storage` vs `/app/logs`）。
@@ -479,7 +505,7 @@ ROOT = C:\Users\Administrator\ai_research_agent
 
 ### 【P6 · 低】空库守卫只覆盖 2 个页面
 
-- `ui/common.py:559-572` 的 `require_library` 只在 `ui/page_qa.py:213` 与
+- `ui/common.py:807` 起的 `require_library` 只在 `ui/page_qa.py:213` 与
   `ui/page_graph.py:207` 被显式调用；`page_reading` / `page_writing` 靠各自的文件下拉框，
   文献库为空时**不会**给出「去加载演示数据」的引导。
 - 影响：评委空库打开「📖 版式阅读」看到的是空下拉框，没有下一步提示。
@@ -522,7 +548,10 @@ ROOT = C:\Users\Administrator\ai_research_agent
    裁决理由：**在未真正部署前无法验证改成 `true` 后在 Nginx 反代下能否照常工作；
    CSRF 开关一旦踩空，后果是评委打不开页面 —— 打不开站点比少一道 XSRF 保护严重得多。
    先交付一个能访问的站点，再谈加固。**
-   已落：`docs/部署后自检清单.md §4.6「已知安全边界」`（正文显眼处，非附录）+ §7 一个勾选项。
+   已落：`docs/部署后自检清单.md §4.6「已知安全边界」`（正文显眼处，非附录）。
+   > **勘误（自查）**：本行先前写作「+ §7 一个勾选项」，但 §4.6 实际落地时我判定
+   > 设勾选项会诱导"点一下就当作过了"，故改为在 §4.6 内**明示不设 checkbox** ——
+   > 演示期的正确动作就是保持 `false`。此处按实际改正。
    ⚠️ **未落**：`DEPLOY.md`（仓库根，72KB，独立文档）—— **该文件不在我的独占改动范围内**，
    我没有动它。要落请指派给 doc-audit，或明确授权我改。
 
@@ -539,8 +568,11 @@ ROOT = C:\Users\Administrator\ai_research_agent
 5. **✅ P1/P2/P3/P4 已全部修掉 —— 现在可以确认是 team-lead 本人动手改的**（见 §2.5 与 §5 的逐条标注）。
    补充 team-lead 提供的三条信息（我此前只知道"被队友修了"，不知道是谁、怎么改的）：
    - **改动方式**：全部用**等行替换**（1 行换 1 行）+ 辅助函数追加到**文件尾**，
-     所以 `services/state.py:174/101/108`、`app.py:121/33-52` 这些行号**一个没漂**。
-     我引用的 `state.py:90` / `app.py:43-45` / `memory.py:14` 因此仍然准确。
+     所以 `services/state.py:101/108`、`app.py:121/33-52` 这些行号**一个没漂**。
+     我引用的 `app.py:43-45` / `memory.py:14` 因此仍然准确。
+     > 对账更正：原并列的 `state.py:174` 现为**空行**，已删除该引用；我原先在全文各处
+     > 用 `state.py:90` 指「library.json 的 `json.loads`」，正确位置是 **`:193`**（`:90` 是
+     > `_EMBED_FN` 的自旋锁变量）。这类批量重指见 §9「行号对账」。
    - **实测**：三种预置组合 `5/5 全通过`，含 `library.json=[]`、`memory.json={}`、
      `user_profile.json=[]` 这三个原本必崩的组合（数字由 team-lead 实测，我此前测的是三类 3/3）。
    - 我移交清单里**现在只剩 P5/P6/P7 三条低优先级**。
@@ -578,7 +610,13 @@ crossplat 完成扫描后给我发了三条针对 Dockerfile/compose 的建议�
 | 1 | `ENV` 块补 `PYTHONUTF8=1 LANG=C.UTF-8 LC_ALL=C.UTF-8` | ✅ **采纳，但只加前两个，不加 `LC_ALL`** | `PYTHONUTF8=1`（PEP 540）与 `LANG` 是**互补**的：前者不依赖 locale 数据是否存在，后者覆盖 locale 数据齐全时的场景。而 Debian slim 不设任何 `LC_*` 时 `LANG` 就是生效 locale，`LC_ALL` 在这里不提供额外信息，反而会**覆盖**将来在 compose 里单独设的 `LC_TIME`/`LC_COLLATE`，故不设。已在 Dockerfile 注释里写明这层取舍 |
 | 2 | graphviz 那层必须保留；且**不要**把 matplotlib 加回 requirements.txt | ✅ **与我的独立结论一致，无需改动** | 我审计 ② 时已 grep 确认：`render_dot`（`services/writing.py:1480`）四级降级为 ① Python graphviz 包 `:1507`（**需要包 + dot 同时存在**，而 requirements.txt 里没有 graphviz 包，故 ① 恒不触发）→ ② `dot -Tsvg` `:1517/1519` → ③ matplotlib `:1531` → ④ 零依赖 SVG `:1537`。容器有 dot 走 ②，与 crossplat 说的完全一致；matplotlib 的 CJK 方框问题我在 §1② 也独立核到了（`requirements.txt:12-19` 已有论证） |
 | 3 | 容器不需要装中文字体包 | ✅ **与我的独立结论一致，无需改动** | 我 grep 到 PyMuPDF 内置 `_CJK_FONTNAME = "china-s"`（`services/translate.py:53`，crossplat 实测 = Droid Sans Fallback Regular，随 wheel 走）；`rcParams`/`font_manager`/`SimHei`/`Noto` 运行时**0 命中**；浏览器侧中文由客户端字体决定，容器装字体对客户端无效 |
-| 4 | 他修了 3 处临时文件泄漏（`tools/definitions.py:206/319`、`ui/page_reading.py:1063`），让我别重复处理 | ✅ 无重叠 | 我的报告只在 §2.1 顺带提到"下载入库与 tikz 走 `tempfile.mkdtemp`"，**没有**任何 /tmp 残留的统计数字，不存在口径冲突 |
+| 4 | 他修了 3 处临时文件泄漏（`tools/definitions.py:206`），让我别重复处理 | ✅ 无重叠 | 我的报告只在 §2.1 顺带提到"下载入库与 tikz 走 `tempfile.mkdtemp`"，**没有**任何 /tmp 残留的统计数字，不存在口径冲突 |
+
+> **更正（行号对账时发现，原断言不成立）**：本行原写「`tools/definitions.py:206/319`、
+> `ui/page_reading.py:1063`」。核查后：`:319` 实为 `value = bytes(value).decode(…)`、
+> `page_reading.py:1063` 实为标题推断的 `return []` —— **两处都与"临时文件泄漏修复"无关，
+> 该两个引用已删除**。仅 `:206`（`def _ingest_arxiv_paper`）可核。
+> 那三处修复的确切位置本轮**未能定位**，故标注为「未核」而非「已核」。
 
 ### 8.1 crossplat 第二批（他复核我 4 条后补的 5 项），逐条处置
 
@@ -592,9 +630,9 @@ crossplat 完成扫描后给我发了三条针对 Dockerfile/compose 的建议�
 
 **我独立核实过的（不是照抄他的话）：**
 
-- `scripts/_smoke_ui.py:22` 用的是 `streamlit.testing.v1.AppTest` —— **进程内渲染，不需要浏览器 / playwright**。
+- `scripts/_smoke_ui.py:25` 用的是 `streamlit.testing.v1.AppTest` —— **进程内渲染，不需要浏览器 / playwright**。
   grep `_smoke_ui.py` 的 `requests|urlopen|http` → **0 命中**。所以它在容器里确实能跑，没有隐藏依赖。
-- `scripts/_smoke_read.py:384` 写死 `available = False`（显式模拟未填 API Key）→ **不需要真 Key**。
+- `scripts/_smoke_read.py:403` 写死 `available = False`（显式模拟未填 API Key）→ **不需要真 Key**。
   它还会在 `:348-349` 断言 `storage/llm_failures.log` 存在 —— 那个文件是它自己用 StubClient 触发失败写出来的
   （`:335-350`），所以**门禁 ④ 顺带验证了 `/app/storage` 对 uid 10001 可写**，与 §1.1 是同一件事的两种查法。
   我在清单里加了一句"这一条 FAIL 时先回 §1.1 查属主，别去查脚本"。
@@ -626,3 +664,107 @@ crossplat 完成扫描后给我发了三条针对 Dockerfile/compose 的建议�
 后者看的是工作区文件，正是我把它转回 LF 的理由。
 
 另：我已主动把我这边的路径 / 大小写 / CRLF 实测结论同步给他（见 §3），避免重复 grep。
+
+---
+
+## 9. 行号引用对账（Round 13 收尾）
+
+### 9.1 为什么要做，以及怎么判定
+
+本轮交付前我对 5 份文件里所有 `xxx.py:NNN` 形式的引用做了一次全量对账：
+`Dockerfile`、`.dockerignore`、`docker-compose.yml`、本报告、`docs/在线演示部署指南.md`。
+共 **161 个引用标记**（`x.py:35/40/43` 这类复合写法按 3 个计）。
+
+判定三档：
+
+- ✅ **成立**：目标行内容直接支撑该命题
+- ✗ **需重指**：目标行是空白/注释/无关代码，但命题在别处有直接证据
+- ⛔ **伪证**：命题在该文件里根本找不到支撑，换行号也救不了
+
+**关键分析工具：位移量一致性。** 同一文件内多条引用若位移量相同，说明它们当时是准的、
+只是文件变长了；位移量不一致则提示"先有结论后凑引用"。实测：
+
+| 文件 | 位移量 | 结论 |
+|---|---|---|
+| `services/state.py` | 90→193(+103)、95→198(+103)、74→177(+103)、68→169(+101)、81→184(+103) | 高度一致 → 真漂移 |
+| `ui/common.py` | 191→439(+248)、224→471(+247)、359→606(+247)、559→807(+248) | 高度一致 → 真漂移 |
+| `services/library.py` | 777→903(+126)、899→1026(+127)、93→187(+94)、969→1123(+154) | 不一致，但仍是多点插入造成的漂移 |
+
+**伪证的硬判据**（不靠感觉）：在目标文件里 grep 该命题的关键词，**一次都不命中**，
+就不可能是"漂移指错位置"。例如 §2.1 第 10 行那 5 条引用所对应的
+`services/library.py` / `ui/common.py` / `ui/page_reading.py`，`grep -c figs` 全为 **0**。
+
+### 9.2 处理结果
+
+| 文件 | 引用标记 | 需处理 | 实际改动 |
+|---|---|---|---|
+| `Dockerfile` | 26 | 12 | 12 处（含 `:125-129` 整段改写为「修复前/修复后对照」） |
+| `.dockerignore` | 8 | 6 | 8 处（6 处引用 + 2 处体积数字陈旧） |
+| `docker-compose.yml` | 17 | 7 | 7 处 |
+| 本报告 | ~100 | 24 行 | 31 处（含同源漏网 7 处） |
+| `docs/在线演示部署指南.md` | 10 | 4 | 4 处 |
+
+合计 **62 处**改动（签字范围 53 处 + 表外同源追加 9 处）。**跳过 0 处，定位失败 0 处。**
+
+表外追加的 9 处，全部是签字表漏掉的同类引用，不单独处理会留下"改了 53 处却仍能 grep 到旧行号"的尾巴：
+
+- `.dockerignore` 两处体积数字陈旧：`scripts/` 写 964KB → 实测 **1,587,272 B（1.6MB）**；
+  `pdf/` 写 31MB → 实测 **36,407,214 B（36.4MB）**（与部署指南 §9.6 对齐，避免跨文档矛盾）
+- 本报告 7 处：第 252、301、446、465、467、468、469 行的 `state.py:74/90/181-190/87-92`
+  与 `app.py:89`（`app.py:89` 实为 flash 注释，真正显示「存储目录不可写或已损坏」的是 **`app.py:98`**）
+
+### 9.3 三处「伪证」的更正（删除之外另立更正，避免被洗白）
+
+1. **`query_expansion.py:305`「remember 均无兜底」——断言不成立。**
+   该行实为 `from core.llm import parse_json`；真正的 `remember` 在 `:394`，且
+   **`:392-396` 已包 `try/except`（`except Exception: pass`）**。
+   `track.py:22` 的 `set_subscriptions` 确实无兜底，但"均"这个量词错了。已在 `Dockerfile` 正文更正。
+
+2. **`tools/definitions.py:319` 与「临时文件泄漏修复」无关。**
+   该行实为 `value = bytes(value).decode("utf-8", errors="replace")`。
+   引用已删，并在 §8 对应行下标注「未核」——三处修复的确切位置本轮**没能定位**。
+
+3. **`ui/page_reading.py:1063` 同上。**
+   该行实为标题推断兜底 `return []`，与临时文件无关。引用已删，理由同上。
+
+### 9.4 `Dockerfile:125-129` 为什么整段改写而不是改行号
+
+原文写「`library.json` 写成 `[]` → `state.py:74` 抛 AttributeError」等三条失效形态。
+P1–P4 修复后，这些行上的代码**已经不存在**（`:127` 的 `memory.py:30` 现在是守卫本身）。
+只改行号会让读者顺着引用看到"不会崩的代码"，却在文字里读到"这里会崩"——**那比原样更糟**。
+
+改法是：**"修复前"形态一律不挂行号**（那些行不存在，挂任何行号都是伪证），
+"修复后"守卫每条挂一个能直接支撑的引用（`state.py:177/193`、`memory.py:29-30`、`memory.py:71`）。
+
+### 9.5 自证（不用肉眼看 diff）
+
+三份配置文件只动注释：
+
+```
+$ for f in Dockerfile .dockerignore docker-compose.yml; do
+    git diff -U0 -- "$f" | grep -E "^[+-][^+-]" | grep -vE "^[+-]\s*(#|//)" | wc -l
+  done
+Dockerfile 非注释改动行数 = 0
+.dockerignore 非注释改动行数 = 0
+docker-compose.yml 非注释改动行数 = 0
+```
+
+`docker-compose.yml` 语法（本机无 docker，退化为 YAML 解析）：
+
+```
+$ python -c "import yaml; d=yaml.safe_load(open('docker-compose.yml',encoding='utf-8'))"
+YAML 解析通过；顶层键 = ['services', 'volumes']
+services = ['ai4s-agent']
+volumes  = ['app_storage', 'app_logs']
+```
+
+改完后重跑了一遍全量扫描（对每个引用取其目标行，只打印指向空行/注释/越界的），
+残留的 4 处全部是**故意保留的留痕文字**（本报告 §9.3 与 §8 的更正说明、指南 §9.2 的标题
+「原引用 `:438` 已漂移」），不是真引用。
+
+### 9.6 一条教训
+
+这批引用不是抄错，是**写在某个快照上、之后文件长长了**。同一个位置（`library.py` 的上传落盘点）
+本轮连续漂了两次（438 → 777 → 903），中间那次还是我自己写的勘误。
+**行号是易腐证据。** 以后凡是能换成"函数名 + 该行内容片段"的取证，优先不用裸行号；
+必须用行号时，写完立刻回源码读一遍，并且不要跨天复用。

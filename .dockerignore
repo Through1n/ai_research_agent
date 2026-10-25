@@ -53,7 +53,7 @@ node_modules/
 # ===== Streamlit 本地配置 =====
 # ⚠️ 不要忽略！.streamlit/config.toml 内有两样运行时必需的东西：
 #   1) [theme] 学术风配色（评审观感）
-#   2) [server] enableStaticServing=true —— ui/page_writing.py:495 依赖它把
+#   2) [server] enableStaticServing=true —— ui/page_writing.py:688 依赖它把
 #      /app/static/mermaid.min.js 本地提供给前端；该项默认 false，丢了会退化到 CDN
 # 其中的 address 已由配置作者注释掉（留给云平台决定），Docker 侧由 Dockerfile CMD 的
 # --server.address=0.0.0.0 显式指定，不影响容器外访问。
@@ -68,20 +68,20 @@ docs/
 
 # ⚠️ 下面五个目录**一个都不能加进来**，加了不会报错、只会静默丢功能，最难排查：
 #   · pdf/         —— config.py 的 PDF_DIR（非桌面态）= ROOT/pdf，
-#                     services/library.py:969 的 rebuild_from_pdf_dir（:983 取 PDF_DIR）
+#                     services/library.py:1123 的 rebuild_from_pdf_dir（:1137 取 PDF_DIR）
 #                     与 UI「🔧 一键重建文献库」都从这里读盘
 #   · demo_data/   —— config.py 的 DEMO_DIR + DEMO_PAPERS 演示语料
-#                     （ui/page_writing.py:105-106 读 demo_data/data.csv）
+#                     （ui/page_writing.py:290 读 demo_data/data.csv）
 #   · static/      —— mermaid.min.js（3.2MB），理由见上方 .streamlit 说明
 #   · lib/         —— services/graph.py:528-529 读 lib/vis-9.1.2/vis-network.min.js
-#                     与 vis-network.css 拼引用图谱的 HTML。丢了不会崩（page_graph.py:221
-#                     有兜底 → html="" 并提示"检查 lib/ 目录完整性"），但图谱可视化直接变空白，
-#                     只剩表格指标 —— 评审现场最难当场定位的一类故障。
-#   · scripts/     —— ui/page_reading.py:81 `from scripts._memory_probe import MemoryProbe`。
-#                     该文件被 try/except 包着（page_reading.py:77-84），丢了**不崩**，
+#                     与 vis-network.css 拼引用图谱的 HTML。丢了不会崩（page_graph.py:84-86
+#                     把 graph_html 包在 try/except 里 → html="" 并提示"检查 lib/ 目录完整性"），
+#                     但图谱可视化直接变空白，只剩表格指标 —— 评审现场最难当场定位的一类故障。
+#   · scripts/     —— ui/page_reading.py:100 `from scripts._memory_probe import MemoryProbe`。
+#                     该文件被 try/except 包着（page_reading.py:98-102），丢了**不崩**，
 #                     但会静默退化成 _NullProbe（数值恒 0），版式阅读页的内存探针读数全废。
-#                     只有 964KB，别为这点体积冒险。
-#   （pdf/ 约 31MB 会打进镜像，属已知体积代价，见部署报告）
+#                     实测 1,587,272 B（1.6MB），别为这点体积冒险。
+#   （pdf/ 实测 36,407,214 B（36.4MB）会打进镜像，属已知体积代价，见部署报告）
 
 # ===== 系统 / 编辑器 =====
 .DS_Store

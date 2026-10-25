@@ -56,7 +56,7 @@
 
 ### 1.1 准备 API Key（没有也能演示，但建议有）
 
-应用**不配 Key 也能打开并用大部分离线功能**（`config.py:147-214` 的 `DEMO_PAPERS` 内置 3 篇演示论文语料），但问答 / 翻译 / 写作三块会走离线降级。评审要展示完整能力，建议配一个。
+应用**不配 Key 也能打开并用大部分离线功能**（`config.py:147-334` 的 `DEMO_PAPERS` 内置 6 篇演示论文语料），但问答 / 翻译 / 写作三块会走离线降级。评审要展示完整能力，建议配一个。
 
 > ⚠️ **「离线」的准确含义（别理解错，这条容易翻车）**，完整时序是两句，**两句都要看**：
 >
@@ -64,7 +64,7 @@
 > `app.py:86 get_container()` → `services/state.py` 的 `Container.__init__` → `_build_embed_fn()` → `fn(["warmup"])`，
 > **应用一启动就触发下载**。但这次下载失败会被 `except Exception` 吞掉、界面不报任何错，只是 fallback 到 `DefaultEmbeddingFunction()`。
 >
-> **② 现象要到用户点「🚀 一键加载演示数据」时才暴露** —— 那时才真正 `ctx.embed` 抛异常，表现为**三篇全部「⚠️ 失败」**。
+> **② 现象要到用户点「🚀 一键加载演示数据」时才暴露** —— 那时才真正 `ctx.embed` 抛异常，表现为**6 篇全部「⚠️ 失败」**。
 >
 > → 只写第①句，运维不知道故障长什么样；只写第②句，会让人以为可以"先离线进去再说"。
 > → 演示**语料**是内置的（不需要联网下载论文），要联网的只是这个向量模型。
@@ -141,8 +141,6 @@ streamlit run app.py --server.port=8501 --server.address=0.0.0.0
 
 （`.streamlit/config.toml` 里的 `address` 现已注释掉，不传参时由 Streamlit 默认值决定；显式传参最保险。详见 §1.3。）
 
-### 1.3 ⚠️ 一个必须先知道的项目特性：`.streamlit/config.toml`
-
 ### 1.3 ✅ 已知无风险：`.streamlit/config.toml` 的 `address`
 
 > 这条原先是方案 A / B 的头号阻塞点，**已彻底解决**，留着说明仅供理解背景。
@@ -166,6 +164,37 @@ streamlit run app.py --server.port=8501 --server.address=0.0.0.0
 > ⚠️ 如果你在别的分支 / 旧版本上部署，**先确认 config.toml 里没有生效的 `address = "127.0.0.1"`**。判断方法：部署后一直转圈 / 502 / 连接被拒时，看日志里 Streamlit 绑到了哪个地址。
 
 另外 `enableStaticServing = true`（config.toml）与 Dockerfile 的 `--server.enableStaticServing=true` 是必需的：`ui/page_writing.py` 从 `/app/static/mermaid.min.js` 本地加载 mermaid，关掉会退化到 CDN，离线环境图谱就废了。
+
+### 1.4 ⚠️ 已知安全边界：XSRF 防护当前是关着的（有意保留）
+
+`.streamlit/config.toml:23` 写着 `enableXsrfProtection = false`。这是**主动选择，不是漏配**。
+
+**为什么关着**：Streamlit 的 XSRF 校验要靠 `Origin` / `X-XSRF-TOKEN` 头与反向代理配合。
+本仓库交付时**没有真实的 Nginx 环境可验证**改成 `true` 后是否仍能正常交互。
+而 XSRF 一旦在代理后面误触发，表现不是"少一层防护"，是**点任何按钮都失败、页面直接不可用**。
+两害相权：先交付一个能访问的站点，再谈加固。
+
+**三种方案的影响不同，按你的选型处理**：
+
+| 你的方案 | 建议 | 理由 |
+|---|---|---|
+| A 云平台 / B HF Spaces | 建议改回 `true` | 平台自己托管、你不控制反代，XSRF 走 Streamlit 默认行为，误触发面小 |
+| C 自建（Nginx 反代） | 先保持 `false`，按下面步骤验证后再改 | 这正是**未验证**的那条链路 |
+
+> 对 A / B 的那条建议，风险低但**同样未经本仓库实测** —— 改完必须走下面第 3 步验证，异常就回滚。
+
+**怎么改**：
+
+1. 编辑 `.streamlit/config.toml`，把 `enableXsrfProtection` 改成 `true`
+2. `docker compose restart ai4s-agent` —— **不需要重新 build**，`config.toml` 是挂载进容器的
+   （方案 A / B 直接在平台上重启应用）
+3. **改完只验一件事**：用**无痕窗口**打开站点，点一个会改状态的按钮
+   （推荐「🚀 一键加载演示数据」）→ 必须仍然弹出 `✅` 成功提示
+
+若第 3 步变成报错、白屏或无响应 → 代理链路下 XSRF 校验误伤。
+**先改回 `false` 恢复可用**，再去查 Nginx 是否透传了 `Origin` 与 `X-XSRF-TOKEN` 头（见 C-4 节）。
+
+> 演示当天不要动这个开关。它的正确使用时机是「从一次性演示转为长期公网运行」。
 
 ---
 
@@ -327,7 +356,7 @@ git push space main
 HF Spaces 免费档的容器文件系统**不是持久的**，Space 重启后 `storage/`（向量库、`library.json`、`memory.json`、上传的 PDF）**会被清空重建**。
 
 对策：
-- 每次评审/演示前，先点侧边栏「🚀 一键加载演示数据（v1/v7/BERT）」重建 3 篇内置论文
+- 每次评审/演示前，先点侧边栏「🚀 一键加载演示数据（6 篇）」重建 6 篇内置论文
 - 别指望上传的 PDF 会留到明天
 - 若要持久存储，需 HF 的付费 Persistent Storage（本方案按免费档说明）
 
@@ -668,11 +697,11 @@ sudo ufw status
 
 ### 5.0 ⭐ 演示/评审当天必做第一步（漏了会被当成"系统坏了"）
 
-**文献库初始是空的。** 评委第一次打开，问答 / 图谱 / 写作三块全是空状态——代码里已有这条提示（`services/writing.py:74-77` 的 `EMPTY_LIBRARY_HINT`：*"⚠️ 文献库为空，无法生成「无幻觉 References」。请先到「📁 文献库管理」上传 PDF（或在左侧点击「🚀 一键加载演示数据」）"*）。
+**文献库初始是空的。** 评委第一次打开，问答 / 图谱 / 写作三块全是空状态——代码里已有这条提示（`services/writing.py:73-76` 的 `EMPTY_LIBRARY_HINT`：*"⚠️ 文献库为空，无法生成「无幻觉 References」。请先到「📁 文献库管理」上传 PDF（或在左侧点击「🚀 一键加载演示数据」）"*）。
 
-**动作**：打开应用 → 侧边栏最底部 → 点 **「🚀 一键加载演示数据（v1/v7/BERT）」** → 等进度走到 3/3 → 再开始演示。
+**动作**：打开应用 → 侧边栏最底部 → 点 **「🚀 一键加载演示数据（6 篇）」** → 等进度走到 6/6 → 再开始演示。
 
-- 之前上传过的论文不会被覆盖（`ui/sidebar.py:402` help 原文："不覆盖已有论文"），重复点是安全的
+- 之前上传过的论文不会被覆盖（`ui/sidebar.py:466` help 原文："不覆盖已有论文"），重复点是安全的
 - **HF Spaces 免费档每次重启后都要重点一次**（见 B-3，文件系统非持久）
 - 这一步需要联网（首次要拉向量模型，见 §1.1）
 
@@ -707,17 +736,17 @@ sudo ufw status
 - [ ] 侧边栏「接入方式」选 **🏢 预设平台** → 「选择平台」能看到 5 项：智谱 GLM（默认）/ DeepSeek / 通义千问 / OpenAI / 本地 Ollama（`core/providers.py:33-74`）
 - [ ] 选智谱 → 在 Key 输入框填真实 Key → 出现 **「✅ Key 已填入，模型通道就绪」**
 - [ ] 点 **「🔌 测试连通性」** → 出现 **「✅ 连通性正常，模型返回：…」**（约 10 秒）
-      > 只出现"已填入"不算成功 —— 填入 ≠ 有效（`ui/sidebar.py:216` 原文注释）。**必须以这条为准。**
+      > 只出现"已填入"不算成功 —— 填入 ≠ 有效（`ui/sidebar.py:308` 原文注释）。**必须以这条为准。**
 - [ ] 侧边栏显示 **「🎯 当前模型：glm-4-flash」**
 
 ### 5.3 不依赖 LLM 的链路（**没配 Key 时这几条是底线**）
 
 > ⚠️ 标题里的"不依赖 LLM"**不等于"不需要网络"**：首次启动要联网拉一次向量模型（见 §1.1）。
-> 语料是内置的（`config.py:147-214` 的 `DEMO_PAPERS`），不需要联网下载论文。
+> 语料是内置的（`config.py:147-334` 的 `DEMO_PAPERS`），不需要联网下载论文。
 
-- [ ] 点侧边栏底部 **「🚀 一键加载演示数据（v1/v7/BERT）」** → 进度走完 3/3，无报错
+- [ ] 点侧边栏底部 **「🚀 一键加载演示数据（6 篇）」** → 进度走完 6/6，无报错
       > 失败 = 首次向量模型下载没成功（断网 / 国内服务器被墙）。看 §八 故障表最后一条。
-- [ ] 进 `📁 文献库管理` → 能看到 **3 篇论文**（Attention v1 / v7、BERT）
+- [ ] 进 `📁 文献库管理` → 能看到 **6 篇论文**（Attention v1 / v7、BERT、Adam、VAE、BatchNorm）
 - [ ] 📁 页能看到论文元数据（标题/作者/年份/arXiv ID）
 - [ ] 进 `📖 版式阅读与智能翻译` → 能打开 PDF 并翻页（PyMuPDF 正常）
 - [ ] 进 `🔍 论文检索与追踪` → arXiv 搜索能返回结果（**这条需要服务器能出网**，国内服务器一般 OK）
@@ -900,7 +929,7 @@ jobs:
 | 页面顶部出现黄色降级横幅 | LLM 调用失败（Key 无效 / 额度耗尽 / 429 / 超时 / 断网） | `app.py:124-131` 会按错误类型给中文指引；先点「🔌 测试连通性」确认 |
 | 提示「API Key 含非 ASCII 字符」 | 把中文占位符（如 `你的智谱Key`）真填进去了 | `core/llm.py:133` 的 `isascii()` 校验拦截。填真实纯英文 Key，或整行删除 |
 | 构建卡住 / 很慢 | 构建期在下载 ONNX 向量模型（79.3 MiB）+ 装依赖 + 装 graphviz | **构建机必须出网**（PyPI + Debian 源 + AWS S3）。`HF_ENDPOINT` 对模型下载无效，别指望靠镜像解决。断网方案见 §1.1 末尾 |
-| 「🚀 一键加载演示数据」三篇全失败 | 向量 embedding 用不了 | **方案 A/B**：首次冷启动时模型没下载成功（断网 / 出口被墙），且**下载失败是静默的**，界面不报错，直到点这里才爆。见 §1.1<br>**方案 C**：模型已烤进镜像，正常情况下不会犯；若犯了，检查是不是给 `$HOME/.cache/chroma` 挂了卷把镜像内的模型覆盖掉了（见 C-3） |
+| 「🚀 一键加载演示数据」6 篇全失败 | 向量 embedding 用不了 | **方案 A/B**：首次冷启动时模型没下载成功（断网 / 出口被墙），且**下载失败是静默的**，界面不报错，直到点这里才爆。见 §1.1<br>**方案 C**：模型已烤进镜像，正常情况下不会犯；若犯了，检查是不是给 `$HOME/.cache/chroma` 挂了卷把镜像内的模型覆盖掉了（见 C-3） |
 | 文献库是空的，问答/图谱/写作全无内容 | 没点「一键加载演示数据」 | 见 §5.0，这是演示第一动作，不是 bug |
 | TikZ 只显示源码 | 镜像没装 TeX | **预期行为，已定案不修**（team-lead 拍板：TikZ 不在演示主线）。见 §5.0b |
 | Graphviz 图没走 `dot` 真实渲染 | 方案 A/B 装不了系统包 graphviz（**预期**）；或方案 C 的 `dot` 没装上 | 方案 C 的 `Dockerfile` 已 `apt-get install graphviz`，检查构建是否成功；**方案 A/B 走零依赖 DOT→SVG，浏览器渲染，中文正常，图仍然画得出来**，见 §5.0b |
@@ -921,7 +950,7 @@ jobs:
 - `core/llm.py:133` 的非 ASCII Key 校验、`.dockerignore` 排除项（含 `.streamlit/` 与 `static/` **不** 被排除）
 - **Key 在云平台读得到**：`config.py:61` `_st_secret()` 与 `core/providers.py:116-138` `resolve_key()` 已加 `st.secrets` 兜底层（本轮由 team-lead 补上，本条在初稿时是"待确认"，现已核实）
 - `.streamlit/config.toml` 中 `address = "127.0.0.1"` **已被注释**（本轮由 deploy-docker 修掉，本条在初稿时是"待确认"，现已核实）
-- **首次启动/构建的联网需求完整时序**：`app.py:86 get_container()` → `services/state.py` `Container.__init__` → `_build_embed_fn()` → `fn(["warmup"])`，**启动即触发**；失败被 `except Exception` 吞掉、界面不报错，直到用户点「🚀 一键加载演示数据」才表现为三篇全失败
+- **首次启动/构建的联网需求完整时序**：`app.py:86 get_container()` → `services/state.py` `Container.__init__` → `_build_embed_fn()` → `fn(["warmup"])`，**启动即触发**；失败被 `except Exception` 吞掉、界面不报错，直到用户点「🚀 一键加载演示数据」才表现为 6 篇全失败
 - **模型体积（实测，非估算；由 deploy-audit 与 deploy-docker 给出，我未在本地复现）**：下载 `onnx.tar.gz` **79.31 MiB**（83,178,821 B）、解压后 `onnx/` 目录 **87.10 MiB**（91,332,068 B，其中 `model.onnx` 86.20 MiB）、**缓存目录合计 166.42 MiB**（174,510,889 B，含未删的压缩包）。⚠️ **79.3 是下载量、87.1 是解压量、166.4 是合计** —— deploy-docker 特别纠正过：把 166 MiB 说成"解压后占用"是错的。早期流传的"90MB"指 `model.onnx` 单文件（90.4 MB），与"79.3"不是同一个东西，且 MiB/MB 混用——文档已统一为双单位
 - **方案 C 的镜像已烤进模型**：`Dockerfile` 第 5 层构建期 warmup，容器**运行期不需要访问 S3**（`docker-compose.yml` 注释亦确认，且刻意不给 `$HOME/.cache/chroma` 挂卷以免覆盖）
 - **镜像已装 graphviz**：`Dockerfile` 第 2 层 `apt-get install graphviz`，写作页 DOT 图可 `dot -Tsvg` 真实渲染（证据：`services/writing.py` 的 `render_dot()` 里 `dot_exe = shutil.which("dot")` 与 `subprocess.run([dot_exe, "-Tsvg"])` 两处 —— **按符号名定位，不写行号**：`grep -n "dot_exe\|subprocess.run(\[dot_exe" services/writing.py`。此处原写 `:1496/1517`，本轮该文件已增长至 `:1496/1519`，故改为符号名）

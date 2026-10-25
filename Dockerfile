@@ -44,10 +44,10 @@ FROM python:3.11-slim
 # PYTHONUTF8 / LANG        : 显式锁定 UTF-8（Round 13 采纳 crossplat 的建议，见
 #                            docs/CROSS_PLATFORM.md §6）。两点说明：
 #                            · 本项目所有文件读写都**显式**带 encoding="utf-8"
-#                              （state.py:90/95、memory.py:35/40/43、citation_quality.py:153/175、
-#                               llm.py:414、app.py:24、common.py:224），所以即使不设也不会乱码；
+#                              （state.py:193/198、memory.py:35/40/43、citation_quality.py:153/175、
+#                               llm.py:414、app.py:24、common.py:471），所以即使不设也不会乱码；
 #                              设它是为了覆盖**没有显式声明编码**的那几处——中文文件名的上传
-#                              落盘（library.py:777 的 `(UPLOAD_DIR / filename).write_bytes`）
+#                              落盘（library.py:903 的 `(UPLOAD_DIR / filename).write_bytes`）
 #                              与 `docker compose logs` 里的中文输出。
 #                            · 只给 LANG，**不给 LC_ALL**：Debian slim 不设任何 LC_* 时 LANG 即
 #                              为生效 locale，LC_ALL 在这里不提供额外信息，反而会**覆盖**将来
@@ -84,7 +84,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 # ⚠️ 这与上一层"Python 依赖能否编译"是两回事：Python 依赖全部有 wheel，不需要 gcc；
 #    这里装的是**运行时二进制**，给 services/writing.py 的 Graphviz 渲染用：
 #      services/writing.py:1496   dot_exe = shutil.which("dot") or ""
-#      services/writing.py:1517   subprocess.run([dot_exe, "-Tsvg"], ...)
+#      services/writing.py:1517-1519   subprocess.run([dot_exe, "-Tsvg"], ...)
 #    没有 dot → 写作页的 Graphviz 图跳过真实渲染，只走"零依赖"兜底。
 #
 # 【为什么故意不装 matplotlib —— 别再把它加回 requirements.txt】
@@ -113,21 +113,39 @@ COPY . .
 #   storage/ 同时被 .gitignore 与 .dockerignore 排除 → 全新克隆的宿主机上**不存在**这个目录。
 #
 #   ① 「目录/文件缺失」本身**不会**让代码崩（逐行核过，见 docs/review/round13_deploy_finish.md §2）：
-#        services/state.py:90   json.loads 包在 try/except 里 → 缺失/空文件/损坏 均回落默认字典
-#        core/memory.py:18      同上
+#        services/state.py:193  json.loads 包在 try/except 里 → 缺失/空文件/损坏 均回落默认字典
+#        core/memory.py:33-37   同上（`_load()` 的 try/except）
 #        citation_quality.py:152 先 isfile 再 isinstance(data, dict) → 缺失/损坏都安全
 #      → 所以真正的崩溃源**不是空，而是不可写**：/app/storage 对 uid 10001 不可写时，
 #        config.py:42 的 `_d.mkdir(parents=True, exist_ok=True)` 抛 PermissionError，
 #        发生在 import 期 → 被 app.py:34 捕获后显示成「依赖未安装或版本不匹配」
 #        （**误导性文案**，真因是权限，app.py:44/45 那两行 caption 也是照着依赖问题写的）。
 #
-#   ② 真正会让应用在启动期崩溃的是「类型对不上的**合法** JSON」，种子必须规避：
-#        library.json 写成 `[]` → services/state.py:74 `lib.get("papers", {})` 抛
-#           AttributeError；这 4 行在 try 之外 → Container 构造失败 → 应用起不来
-#        memory.json 写成 `{}` → core/memory.py:30 `self.data["kv"][key]` KeyError
-#           （services/track.py:22 与 query_expansion.py:305 的 remember 均无兜底）
-#        user_profile.json 写成 `[]` → core/memory.py:54 `profiles.setdefault` AttributeError
-#      → 故下面的种子内容**按代码实际读取方式写死具体类型**，不能图省事写 `[]` 或 `{}`。
+#   ② 「类型对不上的**合法** JSON」才是启动期崩溃源（Round 13 早期实测，**现已被修复**）。
+#      按「修复前形态 → 修复后守卫」对照写，**修复前一律不挂行号**——
+#      那些行已经不存在，挂任何行号都是伪证。
+#
+#        [修复前] library.json 写成 `[]` → `lib.get("papers", {})` 抛 AttributeError，
+#                 且该处不在 try 内 → Container 构造失败 → 应用起不来
+#        [修复后] `_ensure_lib_dict()` 先把形状规整成 dict，再取字段：
+#                 services/state.py:177  `self.papers = lib.get("papers", {})`
+#                 （规整发生在 services/state.py:193 的 `_ensure_lib_dict(json.loads(...))`）
+#
+#        [修复前] memory.json 写成 `{}` → `self.data["kv"][key]` 抛 KeyError
+#        [修复后] `_normalize()` 兜住形状：core/memory.py:29-30
+#                 `if not isinstance(self.profiles, dict): self.profiles = {}`
+#
+#        [修复前] user_profile.json 写成 `[]` → `profiles.setdefault` 抛 AttributeError
+#        [修复后] 同一处 `_normalize()` 兜底，调用点在 core/memory.py:71
+#
+#      ⚠️ 更正（Round 13 行号对账时发现）：这里原写「services/track.py:22 与
+#         query_expansion.py:305 的 remember **均无兜底**」——**该断言不成立**。
+#         track.py:22 确实无兜底；但 query_expansion.py 的 remember 在 392-396
+#         已包 try/except（`except Exception: pass`），305 那行是无关的 import。
+#         引用与「均」这个量词一并更正。
+#
+#      → 即便如此，下面的种子仍**按代码实际读取方式写死具体类型**：种子是给
+#        copy-up 一个已知形状的起点，不是靠守卫去兜不该出现的东西。
 #      ⚠️ 反过来也成立：library.json 必须是 dict 而不是 list，memory.json 必须是
 #         带 "notes"/"kv" 两个键的 dict —— 改这里之前先看上面三行引用的读取点。
 #
@@ -190,6 +208,8 @@ EXPOSE 8501
 # Streamlit 1.63 官方健康端点：/_stcore/health
 #   来源：streamlit/web/server/starlette/starlette_routes.py:153 BASE_ROUTE_CORE="_stcore"
 #        streamlit/web/server/starlette/starlette_routes.py:161 ROUTE_HEALTH=f"{BASE_ROUTE_CORE}/health"
+#        ⚠️ 这两条是**第三方包内部路径**，随 streamlit 版本变动，仅作定位提示，
+#           不作为验收依据；验收看的是 curl /_stcore/health 返回 200。
 #   语义：runtime 就绪返回 200，未就绪返回 503（urlopen 抛 HTTPError → 非零退出）
 # start-period 给首次启动留出宽限：初始化 chroma 持久化库 + 载入已烤进镜像的 ONNX 模型
 # （模型已在第 5 层预热，运行期不再联网下载，故 120s 是相当宽裕的余量）
@@ -203,7 +223,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
 #                                     不给则容器只监听回环，容器外访问不到
 #   --server.headless=true            不开浏览器、不弹 "Welcome to Streamlit"
 #   --server.enableCORS=false         允许跨源访问（内网反代 / 非同源前端场景）
-#   --server.enableStaticServing=true 必须开：ui/page_writing.py:495 从 /app/static/mermaid.min.js
+#   --server.enableStaticServing=true 必须开：ui/page_writing.py:688 从 /app/static/mermaid.min.js
 #                                     本地加载 mermaid；该项默认 false，不开会退化到 CDN（离线即失效）
 #   --server.maxUploadSize=100        单位 MB。⚠️ **第八轮更正：此前的 200 是错的，且理由写反了**
 #                                     旧注释写"代码无自定义上限（streamlit 默认即 200）"——**这是事实错误**：
