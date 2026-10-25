@@ -1581,7 +1581,7 @@ def render(ctx):
         path = _resolve_doc(ctx, prefer)
         if not path:
             empty_state("请先在文献库导入论文，或临时上传 PDF。",
-                        hints=["点击左侧「🚀 一键加载演示数据（v1/v7/BERT）」",
+                        hints=["点击左侧「🚀 一键加载演示数据（6 篇）」",
                                "或到「📁 文献库管理」上传 PDF"])
             return
         try:

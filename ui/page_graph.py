@@ -492,7 +492,7 @@ def render(ctx):
                 except Exception as e:
                     friendly_error("演示模式示意图谱", e,
                                    reasons=["论文数量不足 2 篇", "embedding 推理失败"],
-                                   actions=["先加载演示数据（v1/v7/BERT）", "或上传至少 2 篇 PDF"])
+                                   actions=["先加载演示数据（6 篇）", "或上传至少 2 篇 PDF"])
 
     # ===== 区二：领域综述与前沿方向生成（与图谱可视化明确区分） =====
     # 原先这里有一条 st.markdown("---")：但紧跟其后的 _sec_head 本身已经是分区信号，

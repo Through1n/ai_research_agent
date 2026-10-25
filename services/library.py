@@ -212,7 +212,7 @@ def _version_relation(new_value, old_value):
 
 _BOILERPLATE_RE = re.compile(
     r"^(arxiv\s*:|provided proper attribution|preprint|under review|to appear|"
-    r"copyright|all rights reserved|permission to reproduce|abstract\b)",
+    r"published as a conference paper|copyright|all rights reserved|permission to reproduce|abstract\b)",
     re.IGNORECASE,
 )
 
@@ -915,6 +915,12 @@ def commit(ctx, prepared, title=None, authors=None, arxiv_id=None, version=None,
         "authors": authors or "", "year": year or "",
         "arxiv_id": arxiv_id, "version": version,
         "page_count": prepared["page_count"], "scanned": prepared["scanned"],
+        # corpus 标记来源："" = 真实 PDF 解析；"text" = 内置演示摘录语料。
+        # 为什么必须显式记：演示语料只有 1 个"页"，chunk 全落在 page=1，
+        # 与「PDF 解析失败只剩首页」在数据上完全同形——没有这个标记，
+        # library_health 只能把设计态的演示库误判成故障（实测：红色告警挂在
+        # 评审第一页）。见 library_health 的 demo_only 分支。
+        "corpus": prepared.get("corpus") or "",
         "added_at": time.strftime("%Y-%m-%d %H:%M"),
         "abstract": extract_abstract(prepared["full_text"]),
         "toc": prepared.get("toc") or [],
@@ -997,6 +1003,8 @@ def add_text_corpus(ctx, filename, full_text, meta=None):
         "page_texts": [full_text], "full_text": full_text, "embedding": embedding,
         "fingerprints": fingerprints, "minhash": minhash,
         "dup_name": dup_name, "dup_sim": dup_sim, "dup_evidence": dup_ev,
+        # 标记为摘录语料：见 commit 里的 "corpus" 字段说明
+        "corpus": "text",
     }
     return commit(ctx, prepared, title=meta.get("title"), authors=meta.get("authors"),
                   arxiv_id=meta.get("arxiv_id"), version=meta.get("version"), year=meta.get("year"))
@@ -1054,6 +1062,12 @@ def library_health(ctx):
     退化判定：有文献但每篇 chunk 数中位数 < 3，或超过一半 chunk 集中在第 1 页。
     典型成因是演示文本语料覆盖了真实 PDF 入库结果——用户只能检索到首页片段，
     问答/图谱/写作/对比质量极差。返回 dict 供 UI 展示醒目提示与一键重建入口。
+
+    **演示态豁免（2026-10-25）**：内置摘录语料（`paper["corpus"] == "text"`）本来
+    就只有 1 个合成"页"，必然 100% 落在 page 1，与「解析失败只剩首页」同形。当整库
+    都是摘录语料时那是**设计态**而不是故障，报 `demo_only=True` 且不判退化——否则
+    评审打开第一页就看到红色「文献库内容异常」。库里一旦混入任何真实 PDF 解析结果，
+    照旧按原规则判定（那时摘录语料确实会拉低检索质量）。
     """
     try:
         papers = list(getattr(ctx, "files", []) or [])
@@ -1077,10 +1091,20 @@ def library_health(ctx):
         median = counts[mid] if len(counts) % 2 else (counts[mid - 1] + counts[mid]) / 2.0
     else:
         median = 0.0
+
+    def _is_corpus(fn):
+        try:
+            return (ctx.papers.get(fn) or {}).get("corpus") == "text"
+        except Exception:
+            return False
+
+    corpus_papers = [fn for fn in papers if _is_corpus(fn)]
+    demo_only = bool(papers) and len(corpus_papers) == len(papers)
+
     reasons = []
     if not papers:
         reasons.append("文献库为空")
-    else:
+    elif not demo_only:
         if median < 3:
             reasons.append(f"每篇文献 chunk 数中位数仅 {median:g}（健康库应 ≥ 3）")
         if total_chunks and ratio1 > 0.5:
@@ -1089,6 +1113,7 @@ def library_health(ctx):
         "papers": len(papers), "chunks": total_chunks,
         "chunks_per_paper": per_paper, "median_chunks_per_paper": median,
         "page1_ratio": ratio1,
+        "corpus_papers": corpus_papers, "demo_only": demo_only,
         "empty": not papers, "degraded": bool(papers) and bool(reasons),
         "unhealthy": (not papers) or bool(reasons),
         "reasons": reasons,

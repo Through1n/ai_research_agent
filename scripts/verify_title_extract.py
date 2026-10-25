@@ -54,6 +54,10 @@ EXPECT = {
     "1810.04805v2.pdf": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
     "LongBook_540p_fixture.pdf": "Chapter 1 Deep Learning Foundations and Agent Systems",
     "UnderstandingDeepLearning_02_09_26_C.pdf": "Understanding Deep Learning",
+    # 2026-10 演示语料 3→6 篇时新增的三篇（原先本脚本对 pdf/ 全量断言，缺期望值会直接 AssertionError）
+    "1312.6114v10.pdf": "Auto-Encoding Variational Bayes",
+    "1412.6980v9.pdf": "Adam: A Method for Stochastic Optimization",
+    "1502.03167v3.pdf": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift",
 }
 
 

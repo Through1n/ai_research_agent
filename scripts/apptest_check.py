@@ -46,7 +46,7 @@ for r in at.sidebar.radio:
 btn = next((b for b in at.sidebar.button if "一键加载演示数据" in b.label), None)
 if btn:
     btn.click().run()
-    ok = show("加载演示数据 v1/v7/BERT", at) and ok
+    ok = show("加载演示数据 6 篇", at) and ok
 
 # 2) 各页面逐一渲染
 for label, tag in [

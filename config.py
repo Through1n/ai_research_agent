@@ -211,6 +211,126 @@ References
 [13] Ashish Vaswani, et al. Attention is all you need. In NIPS, 2017.
 [11] Sepp Hochreiter and Jurgen Schmidhuber. Long short-term memory. 1997.""",
     },
+    # ---- 以下 3 篇为「真公式」参考语料（2026-10-25 新增）----
+    # 旧 3 篇（v1/v7/BERT）的 text 是人工摘写的散文摘要，几乎不含数学表达式，
+    # 导致「🧮 提取 LaTeX 公式」只能靠模型从词里猜（实测抽出 sum / prod 这类词）。
+    # 这 3 篇的公式行逐条摘录自 PDF 文本层里**真实出现**的表达式，可回原文核对。
+    #
+    # 为什么公式写成 LaTeX 记号而不是 PDF 文本层原样（m̂ / v̂ 这类组合字符）：
+    # 实测三种写法喂同一个提示词，只有 LaTeX 记号能被逐字复现——
+    #   `m̂t`        → `m^{\hat{}}_t`（帽子挂空，渲染出悬空小帽）
+    #   `m̂_t`       → `m_t^{\hat}`（帽子变上标，位置错）
+    #   `\hat{m}_t` → `\hat{m}_t` ✅
+    # PDF 原样那种退化由 ui/page_library.py 的 _fix_latex_controls 兜底（用户上传的
+    # 真 PDF 走的就是那条路），演示语料这边则直接给无歧义写法，两不耽误。
+    "1412.6980v9.pdf": {
+        "arxiv_id": "1412.6980", "version": "v9", "title": "Adam: A Method for Stochastic Optimization",
+        "year": "2015", "authors": "Diederik P. Kingma; Jimmy Lei Ba",
+        "text": r"""Adam: A Method for Stochastic Optimization (v9 Latest)
+Diederik P. Kingma, Jimmy Lei Ba
+University of Amsterdam / OpenAI; University of Toronto
+
+Abstract: We introduce Adam, an algorithm for first-order gradient-based optimization of stochastic objective functions, based on adaptive estimates of lower-order moments. The method is straightforward to implement, is computationally efficient, has little memory requirements, is invariant to diagonal rescaling of the gradients, and is well suited for problems that are large in terms of data and/or parameters. The method is also appropriate for non-stationary objectives and problems with very noisy and/or sparse gradients.
+
+2 Algorithm
+Algorithm 1: Adam, our proposed algorithm for stochastic optimization. Good default settings for the tested machine learning problems are \alpha = 0.001, \beta_1 = 0.9, \beta_2 = 0.999 and \epsilon = 10^{-8}. All operations on vectors are element-wise.
+Require: \alpha: Stepsize
+Require: \beta_1, \beta_2 \in [0, 1): Exponential decay rates for the moment estimates
+Require: f(\theta): Stochastic objective function with parameters \theta
+Require: \theta_0: Initial parameter vector
+m_0 \leftarrow 0 (Initialize 1st moment vector)
+v_0 \leftarrow 0 (Initialize 2nd moment vector)
+t \leftarrow 0 (Initialize timestep)
+while \theta_t not converged do
+  t \leftarrow t + 1
+  g_t \leftarrow \nabla_\theta f_t(\theta_{t-1}) (Get gradients w.r.t. stochastic objective at timestep t)
+  m_t \leftarrow \beta_1 \cdot m_{t-1} + (1 - \beta_1) \cdot g_t (Update biased first moment estimate)
+  v_t \leftarrow \beta_2 \cdot v_{t-1} + (1 - \beta_2) \cdot g_t^2 (Update biased second raw moment estimate)
+  \hat{m}_t \leftarrow m_t / (1 - \beta_1^t) (Compute bias-corrected first moment estimate)
+  \hat{v}_t \leftarrow v_t / (1 - \beta_2^t) (Compute bias-corrected second raw moment estimate)
+  \theta_t \leftarrow \theta_{t-1} - \alpha \cdot \hat{m}_t / (\sqrt{\hat{v}_t} + \epsilon) (Update parameters)
+end while
+return \theta_t (Resulting parameters)
+
+2.1 Adam's update rule
+An important property of Adam's update rule is its careful choice of stepsizes. Assuming \epsilon = 0, the effective step taken in parameter space at timestep t is \Delta_t = \alpha \cdot \hat{m}_t / \sqrt{\hat{v}_t}. The effective stepsize has two upper bounds: |\Delta_t| \leq \alpha \cdot (1 - \beta_1) / \sqrt{1 - \beta_2} in the case (1 - \beta_1) > \sqrt{1 - \beta_2}, and |\Delta_t| \leq \alpha otherwise. In more common scenarios, we will have that \hat{m}_t / \sqrt{\hat{v}_t} \approx \pm 1 since |E[g] / \sqrt{E[g^2]}| \leq 1. The effective magnitude of the steps taken in parameter space at each timestep are approximately bounded by the stepsize setting \alpha, i.e., |\Delta_t| \lesssim \alpha. This can be understood as establishing a trust region around the current parameter value, beyond which the current gradient estimate does not provide sufficient information.
+
+3 Initialization bias correction
+We can also derive an alternative form of the update, where the bias correction is folded into the stepsize: \alpha_t = \alpha \cdot \sqrt{1 - \beta_2^t} / (1 - \beta_1^t) and \theta_t \leftarrow \theta_{t-1} - \alpha_t \cdot m_t / (\sqrt{v_t} + \hat{\epsilon}). For the exponential moving average v_t = \beta_2 \cdot v_{t-1} + (1 - \beta_2) \cdot g_t^2 with v_0 = 0 the expectation is E[v_t] = E[g^2] \cdot (1 - \beta_2^t) + \zeta, which explains why the estimate is biased towards zero during the initial timesteps, and especially when the decay rates are small.
+
+References
+[1] Yoshua Bengio, et al. A neural probabilistic language model. JMLR, 2003.
+[5] Diederik P. Kingma and Jimmy Lei Ba. Adam: A method for stochastic optimization. ICLR, 2015.
+[8] Yurii Nesterov. Introductory lectures on convex optimization: a basic course. 2004.""",
+    },
+    "1312.6114v10.pdf": {
+        "arxiv_id": "1312.6114", "version": "v10", "title": "Auto-Encoding Variational Bayes",
+        "year": "2014", "authors": "Diederik P. Kingma; Max Welling",
+        "text": r"""Auto-Encoding Variational Bayes (v10 Latest)
+Diederik P. Kingma, Max Welling
+Machine Learning Group, Universiteit van Amsterdam
+
+Abstract: How can we perform efficient inference and learning in directed probabilistic models, in the presence of continuous latent variables with intractable posterior distributions, and large datasets? We introduce a stochastic variational inference and learning algorithm that scales to large datasets and, under some mild differentiability conditions, even works in the intractable case. First, we show that a reparameterization of the variational lower bound yields a lower bound estimator that can be straightforwardly optimized using standard stochastic gradient methods. Second, we show that for i.i.d. datasets with continuous latent variables per datapoint, posterior inference can be made especially efficient by fitting an approximate inference model to the intractable posterior.
+
+2 Method
+Let us consider some dataset X = \{x^{(i)}\}_{i=1}^{N} consisting of N i.i.d. samples of some continuous or discrete variable x. We assume that the data are generated by some random process, involving an unobserved continuous random variable z. The true parameters \theta^{*} as well as the values of the latent variables z^{(i)} are unknown to us. The marginal likelihood is p_\theta(x) = \int p_\theta(z) p_\theta(x|z) dz, and the true posterior density is p_\theta(z|x) = p_\theta(x|z) p_\theta(z) / p_\theta(x).
+
+2.2 The variational bound
+The marginal likelihood is composed of a sum over the marginal likelihoods of individual datapoints: \log p_\theta(x^{(1)}, \ldots, x^{(N)}) = \sum_{i=1}^{N} \log p_\theta(x^{(i)}), which can each be rewritten as
+\log p_\theta(x^{(i)}) = D_{KL}(q_\phi(z|x^{(i)}) \Vert p_\theta(z|x^{(i)})) + \mathcal{L}(\theta, \phi; x^{(i)})
+The first RHS term is the KL divergence of the approximate posterior from the true posterior. Since the KL-divergence is non-negative, the second RHS term \mathcal{L}(\theta, \phi; x^{(i)}) is called the (variational) lower bound on the marginal likelihood of datapoint i, and can be written as
+\mathcal{L}(\theta, \phi; x^{(i)}) = \mathbb{E}_{q_\phi(z|x)}[-\log q_\phi(z|x) + \log p_\theta(x, z)]
+which can also be written as
+\mathcal{L}(\theta, \phi; x^{(i)}) = -D_{KL}(q_\phi(z|x^{(i)}) \Vert p_\theta(z)) + \mathbb{E}_{q_\phi(z|x^{(i)})}[\log p_\theta(x^{(i)}|z)]
+
+2.3 The SGVB estimator and AEVB algorithm
+We can reparameterize the random variable z \sim q_\phi(z|x) using a differentiable transformation z = g_\phi(\epsilon, x) of an auxiliary noise variable \epsilon \sim p(\epsilon). We can now form Monte Carlo estimates of expectations of some function f(z) w.r.t. q_\phi(z|x^{(i)}):
+\mathbb{E}_{q_\phi(z|x^{(i)})}[f(z)] = \mathbb{E}_{p(\epsilon)}[f(g_\phi(\epsilon, x^{(i)}))] \simeq \frac{1}{L} \sum_{l=1}^{L} f(g_\phi(\epsilon^{(l)}, x^{(i)})) where \epsilon^{(l)} \sim p(\epsilon)
+This yields the generic Stochastic Gradient Variational Bayes (SGVB) estimator
+\tilde{\mathcal{L}}(\theta, \phi; x^{(i)}) = \frac{1}{L} \sum_{l=1}^{L} \log p_\theta(x^{(i)}, z^{(i,l)}) - \log q_\phi(z^{(i,l)}|x^{(i)})
+where z^{(i,l)} = g_\phi(\epsilon^{(i,l)}, x^{(i)}) and \epsilon^{(l)} \sim p(\epsilon). We use settings M = 100 and L = 1 in experiments. The minibatch estimator of the lower bound is
+\mathcal{L}(\theta, \phi; X) \simeq \tilde{\mathcal{L}}(\theta, \phi; X^{M}) = \frac{N}{M} \sum_{i=1}^{M} \tilde{\mathcal{L}}(\theta, \phi; x^{(i)})
+where the minibatch X^{M} = \{x^{(i)}\}_{i=1}^{M} is a randomly drawn sample of M datapoints from the full dataset X.
+
+References
+[1] Yoshua Bengio, et al. A neural probabilistic language model. JMLR, 2003.
+[4] Diederik P. Kingma and Max Welling. Auto-encoding variational bayes. ICLR, 2014.""",
+    },
+    "1502.03167v3.pdf": {
+        "arxiv_id": "1502.03167", "version": "v3", "title": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift",
+        "year": "2015", "authors": "Sergey Ioffe; Christian Szegedy",
+        "text": r"""Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift (v3 Latest)
+Sergey Ioffe, Christian Szegedy
+Google Inc.
+
+Abstract: Training Deep Neural Networks is complicated by the fact that the distribution of each layer's inputs changes during training, as the parameters of the previous layers change. This slows down the training by requiring lower learning rates and careful parameter initialization. We refer to this phenomenon as internal covariate shift, and address the problem by normalizing layer inputs. Batch Normalization allows us to use much higher learning rates, achieves the same accuracy with 14 times fewer training steps, and in some cases eliminates the need for Dropout.
+
+3 Normalization via Mini-Batch Statistics
+Since the full whitening of each layer's inputs is costly and not everywhere differentiable, we normalize each scalar feature independently, by making it have zero mean and unit variance. For a layer with d-dimensional input x = (x^{(1)}, \ldots, x^{(d)}), we normalize each dimension
+\hat{x}^{(k)} = \frac{x^{(k)} - E[x^{(k)}]}{\sqrt{Var[x^{(k)}]}}
+where the expectation and variance are computed over the training data set. Note that simply normalizing each input of a layer may change what the layer can represent. To address this, we introduce, for each activation x^{(k)}, a pair of parameters \gamma^{(k)}, \beta^{(k)}, which scale and shift the normalized value:
+y^{(k)} = \gamma^{(k)} \hat{x}^{(k)} + \beta^{(k)}
+These parameters are learned along with the original model parameters, and restore the representation power of the network. Indeed, by setting \gamma^{(k)} = \sqrt{Var[x^{(k)}]} and \beta^{(k)} = E[x^{(k)}], we could recover the original activations, if that were the optimal thing to do.
+
+3.1 Training and Inference with Batch-Normalized Networks
+Since the statistics of activations depend on the mini-batch, we use mini-batches. The mean and variance are computed over each mini-batch of size m:
+\mu_B = \frac{1}{m} \sum_{i=1}^{m} x_i
+\sigma_B^2 = \frac{1}{m} \sum_{i=1}^{m} (x_i - \mu_B)^2
+\hat{x}_i = \frac{x_i - \mu_B}{\sqrt{\sigma_B^2 + \epsilon}}
+y_i = \gamma \hat{x}_i + \beta \equiv BN_{\gamma, \beta}(x_i)
+where \epsilon is a constant added to the mini-batch variance for numerical stability. The BN transform can be added to a network to manipulate any activation. In the batch setting, the normalization is applied to each activation independently.
+
+3.3 Batch Normalization enables higher learning rates
+In traditional deep networks, too-high learning rate may result in the gradients that explode or vanish, as well as getting stuck in poor local minima. By normalizing activations throughout the network, Batch Normalization prevents small changes in layer parameters from amplifying as the data propagates through a deeper network. For example, this enables training with the saturation of the sigmoid nonlinearity, which is known to be problematic.
+
+4 Experiments
+Applied to a state-of-the-art image classification model, Batch Normalization achieves 4.9% top-5 validation error and 4.8% test error on ImageNet, exceeding the accuracy of human raters.
+
+References
+[1] Jimmy Lei Ba, et al. Layer normalization. 2016.
+[2] Yoshua Bengio, et al. A neural probabilistic language model. JMLR, 2003.
+[5] Sergey Ioffe and Christian Szegedy. Batch normalization. ICML, 2015.""",
+    },
 }
 
 

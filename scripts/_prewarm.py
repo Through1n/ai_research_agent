@@ -24,7 +24,7 @@ chromadb/pandas/plotly/fitz 首次 import 约 2-4s，但它在**单独进程**�
 用法
 ----
     python scripts/_prewarm.py              # 预热 ONNX 模型（已就绪则秒退）
-    python scripts/_prewarm.py --demo       # 追加把 3 篇演示数据写进文献库
+    python scripts/_prewarm.py --demo       # 追加把 6 篇演示数据写进文献库
     python scripts/_prewarm.py --imports    # 追加预热 app 导入链（见上，默认关）
 
 环境变量
@@ -220,7 +220,7 @@ def _preload_demo() -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="AI4S 启动预热（ONNX 模型 / 演示数据 / 导入链）")
     ap.add_argument("--demo", action="store_true",
-                    help="追加预加载 3 篇演示数据进文献库（幂等）")
+                    help="追加预加载 6 篇演示数据进文献库（幂等）")
     ap.add_argument("--imports", action="store_true",
                     help="追加预热 app 导入链（默认关闭，见模块 docstring）")
     ap.add_argument("--model-timeout", type=float,

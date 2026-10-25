@@ -5,13 +5,13 @@
 # 是 22 MB 的受版权保护教材原著。随公开仓库分发它有法律风险，而它又是 541 页长文档
 # 压测用例的核心素材。取舍：仓库只保留生成/下载逻辑，PDF 本身不入库。
 #
-# 六件分三类，处理方式不同：
-#   ① arXiv 论文 3 件  → 直接下载（公开预印本，允许再分发）
+# 九件分三类，处理方式不同：
+#   ① arXiv 论文 6 件  → 直接下载（公开预印本，允许再分发）
 #   ② 本地夹具 2 件    → 由 scripts/make_scanned.py / make_longbook.py 生成，零外部依赖
 #   ③ 官方教材 1 件    → 受版权保护，**本脚本不代下载**，只打印获取方式
 #
 # 用法：
-#   sh scripts/fetch_pdfs.sh            # 拉齐全部可自动获取的 5 件
+#   sh scripts/fetch_pdfs.sh            # 拉齐全部可自动获取的 8 件
 #   sh scripts/fetch_pdfs.sh --check    # 只检查现状，不下载
 set -u
 
@@ -32,15 +32,22 @@ mkdir -p "$PDF_DIR"
 # arXiv 公开预印本：编号 → 目标文件名
 ARXIV="1706.03762v1:1706.03762v1.pdf
 1706.03762v7:1706.03762v7.pdf
-1810.04805v2:1810.04805v2.pdf"
+1810.04805v2:1810.04805v2.pdf
+1412.6980v9:1412.6980v9.pdf
+1312.6114v10:1312.6114v10.pdf
+1502.03167v3:1502.03167v3.pdf"
+
+# 全部 9 件的清单（顺序即报告顺序）；后 3 件是「真公式」参考语料，
+# 与 config.DEMO_PAPERS 的同名键一一对应
+ALL_PDFS="1706.03762v1.pdf 1706.03762v1_img.pdf 1706.03762v7.pdf
+1810.04805v2.pdf 1412.6980v9.pdf 1312.6114v10.pdf 1502.03167v3.pdf
+LongBook_540p_fixture.pdf UnderstandingDeepLearning_02_09_26_C.pdf"
 
 MISSING=0
 have() { [ -f "$PDF_DIR/$1" ]; }
 
 echo "=== pdf/ 现状 ==="
-for f in 1706.03762v1.pdf 1706.03762v1_img.pdf 1706.03762v7.pdf \
-         1810.04805v2.pdf LongBook_540p_fixture.pdf \
-         UnderstandingDeepLearning_02_09_26_C.pdf; do
+for f in $ALL_PDFS; do
     if have "$f"; then
         echo "  ✓ $f  ($(du -h "$PDF_DIR/$f" | cut -f1))"
     else
@@ -51,7 +58,7 @@ done
 
 if [ "${1:-}" = "--check" ]; then
     echo ""
-    [ "$MISSING" = "0" ] && echo "✅ 6 件齐全" || echo "⚠️ 缺 $MISSING 件（去掉 --check 可自动拉齐其中 5 件）"
+    [ "$MISSING" = "0" ] && echo "✅ 9 件齐全" || echo "⚠️ 缺 $MISSING 件（去掉 --check 可自动拉齐其中 8 件）"
     exit 0
 fi
 
@@ -121,14 +128,12 @@ fi
 echo ""
 echo "=== 汇总 ==="
 STILL=0
-for f in 1706.03762v1.pdf 1706.03762v1_img.pdf 1706.03762v7.pdf \
-         1810.04805v2.pdf LongBook_540p_fixture.pdf \
-         UnderstandingDeepLearning_02_09_26_C.pdf; do
+for f in $ALL_PDFS; do
     have "$f" || STILL=$((STILL + 1))
 done
 if [ "$STILL" = "0" ]; then
-    echo "✅ 6 件齐全，可跑 scripts/setup_real_library.py 重建官方文献库"
+    echo "✅ 9 件齐全，可跑 scripts/setup_real_library.py 重建官方文献库"
 else
-    echo "⚠️ 仍缺 $STILL 件。缺 arXiv 三件请检查网络后重跑；缺教材见上面第 ③ 节。"
+    echo "⚠️ 仍缺 $STILL 件。缺 arXiv 六件请检查网络后重跑；缺教材见上面第 ③ 节。"
 fi
 exit 0

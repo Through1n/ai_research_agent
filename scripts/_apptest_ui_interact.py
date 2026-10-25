@@ -101,7 +101,7 @@ def _click(at, label):
 
 def _load_demo(at):
     t0 = time.time()
-    if not _click(at, "🚀 一键加载演示数据（v1/v7/BERT）"):
+    if not _click(at, "🚀 一键加载演示数据（6 篇）"):
         _fail("演示数据", "未找到「一键加载演示数据」按钮")
         return False
     print("  （演示数据加载耗时 %.1fs）" % (time.time() - t0))

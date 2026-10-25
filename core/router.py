@@ -30,7 +30,7 @@ EXPERTS = {
                          "track_arxiv", "track_topic", "github_search", "citation_quality"]},
     "graph": {"label": "引用图谱与综述专家",
               "tools": ["build_citation_graph", "generate_review", "explore_future_work",
-                        "list_papers", "search_literature"]},
+                        "list_papers", "search_literature", "citation_insights"]},
     "writing": {"label": "学术写作与可视化专家",
                 "tools": ["write_outline", "draw_diagram", "translate_text", "run_python",
                           "list_papers", "search_literature"]},

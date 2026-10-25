@@ -1,5 +1,6 @@
 """页面 1：文献库管理。语义查重与版本决策、元数据/排版识别、细粒度结构（标题树/表格/图表/公式/参考文献/附录）、首跑自愈。"""
 import os
+import re
 import time
 
 import pandas as pd
@@ -177,9 +178,57 @@ def _struct_worker(ctx, pdf_path, filename, with_vision, progress):
 # 解析不报错，但公式渲染出来是乱码。改在公式字段上把这些控制字符还原成反斜杠+字母。
 _LATEX_CTRL_MAP = {"\x08": "\\b", "\x0c": "\\f", "\r": "\\r", "\n": "\\n", "\t": "\\t"}
 
+# --- LaTeX 结构修补（2026-10-25）---------------------------------------------
+# 语料里 m̂ / v̂ / x̂ 用的是 Unicode 组合字符（U+0302），模型转 LaTeX 时会退化：
+#   m̂t   → m^{\hat{}}_t   帽子挂在空组上，渲染成一个悬空小帽
+#   x̂(k) → x^\hat{(k)}    帽子套在角标上而不是字母上
+# 两者都在表达「这个字母带帽」，只是 \hat 的作用对象写错了位置——把它们扶正。
+# 同理，\sqrt{v̂_t + ϵ)} 这类漏括号/多括号也一并补齐或删掉。
+_HAT_EMPTY = re.compile(r"([A-Za-z])\^\{?\\hat\{\}\}?")
+_HAT_ARG = re.compile(r"([A-Za-z])\^\\hat\{([^{}]*)\}")
+_BAD_MINUS = re.compile(r"\\-")
+
+
+def _hat_fix(s):
+    """把帽子扶到字母上：`m^{\\hat{}}` → `\\hat{m}`，`x^\\hat{(k)}` → `\\hat{x}^{(k)}`。"""
+    s = _HAT_EMPTY.sub(r"\\hat{\1}", s)
+    return _HAT_ARG.sub(r"\\hat{\1}^{\2}", s)
+
+
+def _balance_parens(s):
+    """括号失衡时从最右端删掉多余的右括号。
+
+    `\\sqrt{\\hat{v}_t + \\epsilon)}` 是模型抄公式时的典型漏字符：`(` 一个都没写，
+    `)` 却写了一个。只处理「右括号多于左括号」这一种确定是坏的情况，从右边删，
+    保证删掉的是末尾那个游离的右括号，而不是公式主体里的成对括号。
+    """
+    diff = s.count(")") - s.count("(")
+    if diff <= 0:
+        return s
+    out = []
+    for ch in reversed(s):
+        if ch == ")" and diff > 0:
+            diff -= 1
+            continue
+        out.append(ch)
+    return "".join(reversed(out))
+
+
+def _balance_braces(s):
+    """花括号少了就补齐（多出来的不动）。
+
+    同一批实测样本里，模型抄 `\\frac{a}{\\sqrt{b + c}` 时普遍漏掉最后一个 `}`——
+    这条公式本身是截断的，补在末尾正好合上，而不是去猜中间缺在哪。
+    多出来的 `}` 不删：那通常是模型自造的字符，删掉也可能伤到 `\\{` 这类转义，
+    留给渲染层暴露问题更诚实。
+    """
+    diff = s.count("{") - s.count("}")
+    return s + "}" * diff if diff > 0 else s
+
 
 def _fix_latex_controls(items):
-    """还原公式字段里被 JSON 转义吃掉的反斜杠（`\\frac` 被读成换页符的经典坑）。"""
+    """还原公式字段里被 JSON 转义吃掉的反斜杠（`\\frac` 被读成换页符的经典坑），
+    并修补 hat / 括号两类结构性退化。"""
     if isinstance(items, dict):
         items = [items]
     if not isinstance(items, list):
@@ -189,11 +238,44 @@ def _fix_latex_controls(items):
             continue
         for k in ("latex", "formula"):
             v = it.get(k)
-            if isinstance(v, str) and any(c in v for c in _LATEX_CTRL_MAP):
+            if not isinstance(v, str) or not v:
+                continue
+            if any(c in v for c in _LATEX_CTRL_MAP):
                 for ctrl, rp in _LATEX_CTRL_MAP.items():
                     v = v.replace(ctrl, rp)
-                it[k] = v
+            v = _BAD_MINUS.sub("-", v)
+            v = _hat_fix(v)
+            v = _balance_parens(v)
+            v = _balance_braces(v)
+            it[k] = v
     return items
+
+
+# 公式抽取提示词（模块级常量：探针脚本 scripts/_probe_formula.py 直接复用同一份，
+# 避免"探针测的提示词"和"生产用的提示词"各写一份然后悄悄漂移）
+# 演进史（两次都是实测驱动的）：
+#  · 2026-10-24：旧版只说「提取数学公式」，实测 glm-4-flash 会把「attention
+#    mechanism」「BLEU」这类名词当公式返回（st.latex 渲染成一串斜体单词）→ 加
+#    「必须含运算符/上下标」的硬条件。
+#  · 2026-10-25：换成带真公式的语料后暴露第二类失败——模型把一条等式拆成碎片
+#    返回（`mt` / `vt` / `m^t` / `y(k)`），渲染出来只有一个光秃秃的符号。根因是
+#    「含运算符即可」的门槛太低，单个带下标的变量就满足。现在要求必须是**完整
+#    等式**（等号/箭头/不等号两侧都要在），并点名不要碎片。
+_FORMULA_PROMPT = (
+    "下面是一篇论文的正文摘录。请抽取其中真实出现的完整数学等式"
+    "（必须含 = 或 ← 或 ≥ 或 ≤，等号左右两侧都要完整），"
+    # name 必须是中文短名：语料本身是 LaTeX 记号，不提要求时模型会照抄成
+    # `hat{m}_t` / `Delta_t` 这种，展开器里的标题就变成一串变量名（实测）。
+    "每条给中文短名（例如「一阶动量更新」「参数更新」，不要用单个变量名或 LaTeX 记号）与 LaTeX。\n"
+    "要求：1) 每条必须是完整等式，不要只取单个符号、变量名"
+    "或上下标碎片；2) 最多 6 条，优先算法主体与核心定义式；"
+    "3) latex 不含 $，负号直接写半角减号，不要写成反斜杠加减号；"
+    "4) latex 里的反斜杠按 JSON 转义写成两个；"
+    "5) 原文能抽出的完整等式不足 6 条时，按实际条数返回，**不要编造原文没有的式子**"
+    "（实测模型凑不够条数时会凭空造 learning_rate、training_steps 这类词）；"
+    "6) 只输出 JSON 数组，每条 {name, latex}，"
+    "不要代码围栏与解释。\n---\n"
+)
 
 
 def _formula_worker(ctx, filename, progress):
@@ -206,16 +288,7 @@ def _formula_worker(ctx, filename, progress):
     if not text.strip():
         return {"items": None, "note": "该论文暂无可分析的正文文本，换一篇论文试试。"}
     progress("调用大模型抽取公式", 0.7)
-    # 提示词 2026-10-24 收紧：旧版只说「提取数学公式」，实测 glm-4-flash 会把
-    # 「attention mechanism」「BLEU」这类名词当公式返回（st.latex 渲染成一串斜体单词）。
-    # 现在要求必须含运算符/上下标，且条数收敛到 6，兼顾质量与 LLM_TIMEOUT=45s 窗口。
-    items = ctx.llm.json_chat([{"role": "user",
-                                "content": ("只提取原文中真实出现的数学表达式（必须含 = ^ _ / sqrt "
-                                            "softmax max min sum prod 等运算符或上下标），"
-                                            "不要提取普通名词短语；最多 6 条；"
-                                            "输出 JSON 数组，每条 {name,latex(不含$)}；"
-                                            "latex 里反斜杠按 JSON 转义写成两个；"
-                                            "只输出 JSON，不要代码围栏与解释。\n" + text)}])
+    items = ctx.llm.json_chat([{"role": "user", "content": _FORMULA_PROMPT + text}])
     return {"items": _fix_latex_controls(items), "note": ""}
 
 
@@ -386,29 +459,53 @@ def _render_library_health(ctx):
     异常判定在 services/library.py:library_health（每篇 chunk 中位数 < 3，
     或超过一半 chunk 集中在第 1 页即视为退化——典型成因是演示文本语料
     覆盖了真实 PDF 入库结果，用户只能检索到首页片段）。
+
+    2026-10-25：整库都是内置摘录语料时降级为**中性说明**而不是红色报错。
+    之前直接把设计态演示库判成「内容异常退化」，评审打开第一页就看到红条。
     """
     try:
         health = library.library_health(ctx)
     except Exception:
         return
-    if not health.get("unhealthy"):
+    # 只有「健康」才整块不渲染；demo_only 虽然不算 unhealthy，但需要给出
+    # 中性说明 + 重建入口，所以必须从提前返回里排掉（否则下面那段是死代码）
+    if not health.get("unhealthy") and not health.get("demo_only"):
         return
+
+    def _coverage_table():
+        if not health.get("chunks_per_paper"):
+            return
+        corpus = set(health.get("corpus_papers") or [])
+        rows = [{"文献": fn, "chunk 数": n,
+                 "状态": "📄 摘录语料" if fn in corpus else ("⚠️ 异常" if n < 3 else "✅ 正常")}
+                for fn, n in health["chunks_per_paper"].items()]
+        pretty_table(rows, title="🩺 当前库 chunk 覆盖明细", max_rows=MAX_FAILED_SHOW)
+
+    def _rebuild_entry():
+        st.caption("从 pdf/ 官方测试件完整重建（含扫描件 OCR），同名自动覆盖，不影响其它上传。")
+        if st.button("🔧 一键重建文献库（pdf/ 官方测试件，含 541 页教材）", key="lib_rebuild"):
+            _run_rebuild(ctx)
+
     if health.get("empty"):
         st.warning("📭 文献库为空：问答/图谱/写作/对比页将无可检索内容。"
                    "可上传 PDF，或用下方按钮一键重建官方测试文献库。")
-    else:
-        st.error("⚠️ 检测到文献库内容异常退化（不是空库，但几乎检索不到正文）："
-                 + "；".join(health["reasons"]) + "。")
-        st.caption("典型成因：「一键加载演示数据」的示例文本覆盖了真实 PDF 的入库结果，"
-                   "每篇只剩首条片段，问答/图谱/对比页只能基于这些片段作答。")
-        if health.get("chunks_per_paper"):
-            rows = [{"文献": fn, "chunk 数": n,
-                     "状态": "⚠️ 异常" if n < 3 else "✅ 正常"}
-                    for fn, n in health["chunks_per_paper"].items()]
-            pretty_table(rows, title="🩺 当前库 chunk 覆盖明细", max_rows=MAX_FAILED_SHOW)
-    st.caption("从 pdf/ 官方测试件完整重建（含扫描件 OCR），同名自动覆盖，不影响其它上传。")
-    if st.button("🔧 一键重建文献库（pdf/ 官方测试件，含 541 页教材）", key="lib_rebuild"):
-        _run_rebuild(ctx)
+        _rebuild_entry()
+        return
+    if health.get("demo_only"):
+        # 设计态：整库都是内置摘录语料。用 caption 而不是报错框——红色横幅出现在
+        # 评审打开的第一页，会让人以为系统坏了（2026-10-25 实测就是这个观感）。
+        st.caption(f"📄 当前为内置演示语料态：{health['papers']} 篇摘录文本 / "
+                   f"{health['chunks']} 个片段。演示语料只含摘要级摘录，问答/图谱/对比"
+                   "的结果深度受限；要按页检索请从真实 PDF 重建。")
+        _coverage_table()
+        _rebuild_entry()
+        return
+    st.error("⚠️ 检测到文献库内容异常退化（不是空库，但几乎检索不到正文）："
+             + "；".join(health["reasons"]) + "。")
+    st.caption("典型成因：「一键加载演示数据」的示例文本覆盖了真实 PDF 的入库结果，"
+               "每篇只剩首条片段，问答/图谱/对比页只能基于这些片段作答。")
+    _coverage_table()
+    _rebuild_entry()
 
 
 def _show_rebuild_report(report):
@@ -754,7 +851,7 @@ def render(ctx):
     with tab_lib:
         # ---------------- 当前库 & 删除 ----------------
         if not ctx.files:
-            empty_state("文献库为空。", hints=["点击左侧「🚀 一键加载演示数据（v1/v7/BERT）」",
+            empty_state("文献库为空。", hints=["点击左侧「🚀 一键加载演示数据（6 篇）」",
                                            "或在「上传与解析」页签上传 PDF"])
         else:
             # 库概览指标条（Round 17 UI/UX，借鉴 Stripe KPI 卡：hero 指标先行、

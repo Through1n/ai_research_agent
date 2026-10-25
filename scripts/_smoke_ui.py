@@ -292,7 +292,7 @@ def phase_fault(problems):
             if not _drain_tasks():
                 problems.append((btn, "上一 case 的后台任务 30s 未排空，闸门断言可能假失败"))
             at, _ = _new()
-            _click(at, "🚀 一键加载演示数据（v1/v7/BERT）")
+            _click(at, "🚀 一键加载演示数据（6 篇）")
             if not _goto(at, page, problems):
                 continue
             _seed_inputs(at, input_seed)
@@ -378,7 +378,7 @@ def main():
     print("\n[2] 加载演示数据后逐页渲染")
     try:
         at, dt = _new()
-        if not _click(at, "🚀 一键加载演示数据（v1/v7/BERT）"):
+        if not _click(at, "🚀 一键加载演示数据（6 篇）"):
             _miss(problems, "sidebar", "未找到「一键加载演示数据」按钮")
         else:
             print(f"  加载耗时 {dt:.1f}s")
@@ -408,7 +408,7 @@ def main():
                 continue
             try:
                 at, _ = _new()
-                if not _click(at, "🚀 一键加载演示数据（v1/v7/BERT）"):
+                if not _click(at, "🚀 一键加载演示数据（6 篇）"):
                     _miss(problems, "sidebar", "演示数据按钮未找到")
                     continue
                 if not _goto(at, page, problems):

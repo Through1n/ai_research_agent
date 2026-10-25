@@ -460,9 +460,12 @@ def render(ctx):
         # 分组弱化说明：演示/维护属低频操作，放在底部并加次要文案，
         # 不与上方核心导航争夺注意力（Notion "less is more" 原则）。
         st.caption("🧪 演示与维护 · 无 Key 也能体验离线功能")
-        if st.button("🚀 一键加载演示数据（v1/v7/BERT）",
+        if st.button("🚀 一键加载演示数据（6 篇）",
                      use_container_width=True,
-                     help="向文献库写入 3 篇内置示例论文，用于离线演示各项功能（不覆盖已有论文）"):
+                     help="向文献库写入 6 篇内置示例论文（Transformer v1/v7、BERT、Adam、VAE、"
+                          "BatchNorm），用于离线演示各项功能（不覆盖已有论文）。后三篇的正文里"
+                          "带真实公式，「🧮 提取 LaTeX 公式」可直接抽出 α = 0.001、"
+                          "θt ← θt−1 − α · m̂t/(√v̂t + ϵ) 这类原文表达式"):
             items = list(DEMO_PAPERS.items())
             done, fails = 0, []
             # 逐项进度：st.status 的 label 可随循环更新，用户能看到 1/3 → 2/3 → 3/3
