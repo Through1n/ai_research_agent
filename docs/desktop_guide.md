@@ -1,4 +1,4 @@
-# AI4S 科研助手 · Windows 桌面版指南
+# MoreHand · Windows 桌面版指南
 
 本软件以「壳层 exe + 可热更新业务包」的方式分发：双击 `AI4SResearchAgent.exe` 即在原生窗口（WebView2 / Edge Chromium）中运行，无需安装 Python，也不弹出浏览器。
 
@@ -148,6 +148,18 @@ C:\Users\Administrator\anaconda3\envs\ai_research\python.exe scripts\release.py 
 - 看 `logs\updater.log`；
 - 手动回滚：退出程序 → 把 `%APPDATA%\AI4SResearchAgent\app\` 删除，把 `app.backup-<旧版本>\` 改名为 `app\`，重启即可；
 - 也可以直接删整个 `app\` 目录，下次启动会从安装目录的 `app_bundle\` 重新复制一份出厂版本。
+
+### 6.5.1 重新打包了 exe，但界面还是旧的？
+
+从 v1.0 起，打包时会在业务包里写一个 `.build_id`（构建时刻），桌面版启动时比较
+「exe 自带的那份」与「`%APPDATA%\AI4SResearchAgent\app\` 里正在跑的那份」：
+
+- 自带更新 → **自动替换**，旧目录留成 `app.backup-<时间>`，所以重装/重新打包后
+  打开就是新界面；
+- 两边都有 `.build_id` 但相同、或旧安装没有 `.build_id`（v1.0 之前的版本）→ 保持现状。
+
+老安装（没有 `.build_id`）想强制换成 exe 自带的那份，退出程序后删掉
+`%APPDATA%\AI4SResearchAgent\app\` 再启动即可（文献库在 `storage\`，不受影响）。
 
 ### 6.6 我想改业务代码自己用
 

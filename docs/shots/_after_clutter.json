@@ -1,0 +1,72 @@
+[
+  {
+    "elements": 213,
+    "chars": 5415,
+    "blocks": 10,
+    "controls": 10,
+    "bigHeads": 1,
+    "sideItems": 13,
+    "sideEmoji": 0,
+    "page": "p0_agent"
+  },
+  {
+    "elements": 217,
+    "chars": 4740,
+    "blocks": 21,
+    "controls": 16,
+    "bigHeads": 1,
+    "sideItems": 13,
+    "sideEmoji": 0,
+    "page": "p1_library"
+  },
+  {
+    "elements": 135,
+    "chars": 3594,
+    "blocks": 11,
+    "controls": 13,
+    "bigHeads": 1,
+    "sideItems": 13,
+    "sideEmoji": 0,
+    "page": "p2_qa"
+  },
+  {
+    "elements": 207,
+    "chars": 2717,
+    "blocks": 14,
+    "controls": 14,
+    "bigHeads": 1,
+    "sideItems": 13,
+    "sideEmoji": 0,
+    "page": "p3_reading"
+  },
+  {
+    "elements": 152,
+    "chars": 2451,
+    "blocks": 12,
+    "controls": 20,
+    "bigHeads": 1,
+    "sideItems": 13,
+    "sideEmoji": 0,
+    "page": "p4_search"
+  },
+  {
+    "elements": 98,
+    "chars": 4042,
+    "blocks": 7,
+    "controls": 6,
+    "bigHeads": 1,
+    "sideItems": 13,
+    "sideEmoji": 0,
+    "page": "p5_graph"
+  },
+  {
+    "elements": 134,
+    "chars": 3881,
+    "blocks": 12,
+    "controls": 11,
+    "bigHeads": 1,
+    "sideItems": 13,
+    "sideEmoji": 0,
+    "page": "p6_writing"
+  }
+]

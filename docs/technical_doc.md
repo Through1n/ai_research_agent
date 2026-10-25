@@ -1,4 +1,4 @@
-# AI4S 科研助手 Agent · 技术文档
+# MoreHand · 技术文档
 
 > **提交版本说明**
 >
@@ -49,7 +49,7 @@
 ## 1.2 目标用户与使用场景
 
 - **研究生 / 科研人员**：需要快速读懂一批英文论文、跨文献对比方法与结果、追踪方向最新进展、起草开题或论文框架。系统的「跨文献问答」「图谱综述」「写作 Copilot」直接服务这一主线。
-- **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:93` 演示图谱兜底）。
+- **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:97` 演示图谱兜底）。
 - **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑（**三者都会清空文献库**：库非空时直接拒绝运行，备份后加 `--force` 才执行）；单元测试 230 项（全套 `tests/`，其中 `test_core.py` 23 项）。
 
 ## 1.3 赛题定位
@@ -116,7 +116,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.2 功能需求（按五大类逐条）
 
-**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1253 group_versions`、`services/library.py:1337 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:80 detect_scanned`、`services/parsing.py:383 ocr_page_text`）；标题树（书签优先 `services/parsing.py:659 extract_toc`，无书签走 `services/parsing.py:597 infer_headings_from_text`）；表格抽取（`services/parsing.py:677 extract_tables`）；插图↔图注关联（`services/parsing.py:765 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:734 _nearest_caption`）；公式识别与 LaTeX 转换（提示词要求「完整等式」而非碎片，模板 `ui/page_library.py:264 _FORMULA_PROMPT`；输出经 `ui/page_library.py:192-227` 结构修补 `\hat{}` 挂空/套错位与括号失衡）；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
+**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1253 group_versions`、`services/library.py:1337 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:80 detect_scanned`、`services/parsing.py:383 ocr_page_text`）；标题树（书签优先 `services/parsing.py:659 extract_toc`，无书签走 `services/parsing.py:597 infer_headings_from_text`）；表格抽取（`services/parsing.py:677 extract_tables`）；插图↔图注关联（`services/parsing.py:765 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:734 _nearest_caption`）；公式识别与 LaTeX 转换（提示词要求「完整等式」而非碎片，模板 `ui/page_library.py:268 _FORMULA_PROMPT`；输出经 `ui/page_library.py:192-227` 结构修补 `\hat{}` 挂空/套错位与括号失衡）；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
 
 **② 抗幻觉 RAG**：单篇问答（超参数/硬件/BLEU 类细粒度问题）；多篇跨文献对比（2–5 篇，`MAX_COMPARE_PAPERS=5`）；单篇范围锁定；查询扩展（中文问英文文献）；内联【n】溯源与可点击页码锚点；引用一致性逐句校验；拒答与自动修复。
 
@@ -136,7 +136,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.4 非功能需求
 
-- **可复现**：Streamlit 锁定 1.63.x；检索/切块/去重参数全部环境变量可覆盖（`config.py:134-140`，均走 `_env_int`）。
+- **可复现**：Streamlit 锁定 1.63.x；检索/切块/去重参数全部环境变量可覆盖（`config.py:141-147`，均走 `_env_int`）。
 - **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:793`）。
 - **长文档工程化**：20 页一批解析建块（`services/library.py:19 PDF_BATCH_SIZE = 20`）、单页 30s 守护线程超时跳过（`services/library.py:544 _extract_page_with_timeout`）、每 50 页进度回调、psutil 内存探针（`scripts/_memory_probe.py :: peak_mb`）。
 - **安全**：API Key 只经环境变量/会话注入；输出侧密钥正则脱敏（`core/guardrails.py:130 redact_secrets`）；Python 工具经 AST 白名单沙箱（`core/sandbox.py:27 validate_code`）；`.env` 同时被 `.gitignore` 与 `.dockerignore` 排除，不入仓库、不入镜像。
@@ -182,7 +182,7 @@ flowchart TD
     CHK -- 是 --> OUT["UI：答案 + 可点击【n】溯源卡片"]
 ```
 
-> 图中方框均标真实模块与符号名；`MAX_VARIANT_DENSE=5`、`RELEVANCE_FLOOR=0.35`、`DENSE_K/SPARSE_K/FINAL_K=12/12/6` 均取自 `services/rag.py:46-55` 与 `config.py:134-140` 当前值，非示意数字。
+> 图中方框均标真实模块与符号名；`MAX_VARIANT_DENSE=5`、`RELEVANCE_FLOOR=0.35`、`DENSE_K/SPARSE_K/FINAL_K=12/12/6` 均取自 `services/rag.py:46-55` 与 `config.py:141-147` 当前值，非示意数字。
 
 ## 3.3 调用主线与依赖规则
 
@@ -208,7 +208,26 @@ flowchart TD
 
 ## 3.4 界面与导航
 
-9 个页面由 `_PAGES@app.py:130` 注册，侧边栏菜单（`ui/sidebar.py:13 MENU`）与 query_params 双通道跳转；主体区顶部统一渲染跨 rerun 存活的 flash 提示（`app.py:143-145` 调 `ui/sidebar.py:58 render_flash`，写入侧走 `ui/sidebar.py:47 set_flash`）。
+9 个页面由 `_PAGES@app.py:134` 注册，侧边栏菜单（`ui/sidebar.py:13 MENU`）与 query_params 双通道跳转；主体区顶部统一渲染跨 rerun 存活的 flash 提示（`app.py:168-171` 调 `ui/sidebar.py:60 render_flash`，写入侧走 `ui/sidebar.py:49 set_flash`）。
+
+**品牌与内部标识是两条线**（2026-10-25 改名时定）：用户可见名称统一取
+`config.py:12 BRAND`（MoreHand）与 `config.py:13 BRAND_TAGLINE`；而
+`AI4SResearchAgent` 这个**内部标识**（exe 名 / `%APPDATA%` 目录 /
+`AI4S_DESKTOP` 环境变量前缀 / 更新包定位）**保持不变**——改它会搬走用户已有的
+文献库与配置，属于数据迁移，不随品牌改名一起做。桌面壳不导入业务包，
+`desktop/about.py` 自带一份 `APP_NAME`。
+
+**导航文案即标识**：菜单项不再用「emoji + 序号」当前缀（侧栏曾有 20 个 emoji），
+侧栏文案、`_PAGES` 的键、页面大标题三处用同一串中文，少一层「显示名 vs 值」的
+翻译，也少一处会漂的地方。旧会话里残留的旧串由 `app.py:148 _LEGACY_KEYWORDS`
+按关键词归位，不把用户甩到首页。
+
+**首屏减法口径**（每页统一）：页头（无装饰 emoji）→ 一行状态 caption →
+一个主操作 → 其余收进默认收起的折叠区。`st.subheader` 全站归零（22px 会绕过
+18px 字阶造成一页两套层级），分区标题一律走 `section_header()`。
+度量用 `scripts/_measure_clutter.py`（首屏可见元素 / 文字 / 色块 / 控件数 +
+侧栏 emoji 数）与 `scripts/_shot_pages.py`（首屏快照 + 屏数），
+改版前后对照见 `shots/_before/` 与 `shots/_after/`。
 
 ![Agent 总助手页](shots/p1.png)
 
@@ -396,14 +415,14 @@ flowchart TD
 
 要点：①扩展变体在 dense 路取**各变体最大分**，缓解中文查询对英文 embedding 的低余弦；②`annotate_paragraphs`（`services/rag.py:399`）为每条来源补页内段号；③多篇对比走 `retrieve_per_paper`（`services/rag.py:666`，每篇保底 3 条，防止单篇饿死）+ `build_grouped_context`（`services/rag.py:722`，【P1-1】【P2-1】分组角标）。
 
-**检索参数一览**（切块与召回参数在 `CHUNK_SIZE@config.py:134`（DENSE_K/SPARSE_K/FINAL_K 见 `DENSE_K@config.py:136`），rag 自持阈值以 `RELEVANCE_FLOOR@services/rag.py:46` 为首）：
+**检索参数一览**（切块与召回参数在 `CHUNK_SIZE@config.py:141`（DENSE_K/SPARSE_K/FINAL_K 见 `DENSE_K@config.py:143`），rag 自持阈值以 `RELEVANCE_FLOOR@services/rag.py:46` 为首）：
 
 | 参数 | 默认值 | 作用 |
 |---|---|---|
-| `CHUNK_SIZE` / `CHUNK_OVERLAP`（`config.py:134-135`） | 1200 / 150 | 切块目标字符数与相邻块重叠 |
-| `DENSE_K`（`config.py:136 DENSE_K`） | 12 | Chroma 向量召回数（每个查询变体） |
-| `SPARSE_K`（`config.py:137 SPARSE_K`） | 12 | BM25Plus 召回数 |
-| `FINAL_K`（`config.py:138 FINAL_K`） | 6 | RRF 融合后进入上下文的条数 |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP`（`config.py:141-142`） | 1200 / 150 | 切块目标字符数与相邻块重叠 |
+| `DENSE_K`（`config.py:143 DENSE_K`） | 12 | Chroma 向量召回数（每个查询变体） |
+| `SPARSE_K`（`config.py:144 SPARSE_K`） | 12 | BM25Plus 召回数 |
+| `FINAL_K`（`config.py:145 FINAL_K`） | 6 | RRF 融合后进入上下文的条数 |
 | `RELEVANCE_FLOOR`（`services/rag.py:46`） | 0.35 | 拒答闸门阈值 |
 | `MAX_REPAIR`（`services/rag.py:47`） | 1 | 修复环最大重跑次数 |
 | `COMPARE_PER_PAPER`（`services/rag.py:49`） | 3 | 多篇对比每篇保底片段数 |
@@ -544,7 +563,7 @@ Round 7 首次接真实 Key 时，这一"核心卖点"在实测中当场崩掉�
 
 **为什么旧校验器没拦住占位符**：占位行 `[1-40] (…)` 既不匹配 `^\[(\d{1,4})\]\s*`、也不以项目符号开头，被整行忽略 → 解析出 **0 条** → 相似度循环一次都没进 → `ok=True`。**缺 Detection，不是阈值松。**
 
-反向验证：把 `_llm_text` 打桩成含 `[Placeholder]`/`TODO` 的垃圾输出，管线仍产出干净文本（故障注入，`round8_fixR6_references.md` §4.4），证明修的是管线结构而非运气。UI 侧 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:424`）把 40 条摊平成表格，让"没有编造空间"在界面上可被逐条核对。
+反向验证：把 `_llm_text` 打桩成含 `[Placeholder]`/`TODO` 的垃圾输出，管线仍产出干净文本（故障注入，`round8_fixR6_references.md` §4.4），证明修的是管线结构而非运气。UI 侧 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:426`）把 40 条摊平成表格，让"没有编造空间"在界面上可被逐条核对。
 
 ### 执行侧防护（Agent 工具）
 
@@ -655,13 +674,13 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 > **必须诚实说明的规模限制**：赛题要求的是"针对**批量文献（如 20 篇）**的引用图谱挖掘"，而本地 `pdf/` 语料共 **5 个文件**（`storage/library.json` 的 `paper_order`：`1706.03762v7/v1/v1_img`、`1810.04805v2`、`UnderstandingDeepLearning_02_09_26_C`），经版本合并后为 **3 个独立文档**（Transformer 三版合一、BERT、深度学习教材章节），其中**检出引用边并进入图节点的是 2 个**（教材章节未检出引用关系；节点由 `add_node@services/graph.py:242` 在 `build_graph` 检出引用边时添加，**按引用边而非文献类型**）。在 2 节点 1 边的图上：社区发现只能返回 1 个簇，而综述第二节标题是"主要方向（按主题簇）"；PageRank 是拓扑的必然结果，不构成"基石论文识别"的证据；`bridges`（跨簇边，赛题"分歧点"卖点）**恒为 0**，该分支根本没被执行到。因此本轮图谱三条用例**只证明链路通、输出质量达标，不证明"20 篇规模"能力**；本项目**不宣称已支持 20 篇**，补测已列入 8.3 Roadmap。
 
-演示兜底：无真实引用边时"🎭 演示模式示意图谱"（`_build_demo@ui/page_graph.py:93`）以向量相似度建图并**页面顶部明示非真实引用关系**。
+演示兜底：无真实引用边时"🎭 演示模式示意图谱"（`_build_demo@ui/page_graph.py:97`）以向量相似度建图并**页面顶部明示非真实引用关系**。
 
 ## 5.6 写作与可视化 Copilot（模块⑤）
 
 ![写作辅助页](shots/p5.png)
 
-四大能力：①**无幻觉框架**（4.6 防线四）——Round 8 真实 API 实测：References **40 条与白名单逐字一致 40/40**、占位串 **0 处**、输出 **14364 字**、耗时 **44.6s**（修复前是 4515 字但整章占位符、139.3s）；UI 侧新增 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:424`）把 40 条逐条摊平成表格（作者/标题/年份/出处/来路 PDF），使"无编造空间"可被逐条核对；②**拓扑图**——Mermaid 前端渲染、TikZ 编译（检测 tectonic/pdflatex/xelatex/lualatex，编译产物经 PyMuPDF 转 PNG 展示；无编译器时展示源码 + Overleaf/tikz.dev 链接；**当前部署镜像未装 TeX，实测即走此降级路径**）、Graphviz 三级降级（graphviz 包+dot → matplotlib+networkx → 纯标准库 DOT→SVG 分层布局 `services/wcopilot_dotrender.py`，界面明示"降级渲染（等价拓扑图）"）；③**CSV→图表**——列类型自动分类、最多 3 张推荐图（每张带中文推荐依据）、数值事实（min/max/趋势/Pearson r）注入 Caption prompt 且生成后校验必须含真实数字；④**中英学术互译**。全部模型调用经统一重试入口，伪响应不会被当正文展示。
+四大能力：①**无幻觉框架**（4.6 防线四）——Round 8 真实 API 实测：References **40 条与白名单逐字一致 40/40**、占位串 **0 处**、输出 **14364 字**、耗时 **44.6s**（修复前是 4515 字但整章占位符、139.3s）；UI 侧新增 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:426`）把 40 条逐条摊平成表格（作者/标题/年份/出处/来路 PDF），使"无编造空间"可被逐条核对；②**拓扑图**——Mermaid 前端渲染、TikZ 编译（检测 tectonic/pdflatex/xelatex/lualatex，编译产物经 PyMuPDF 转 PNG 展示；无编译器时展示源码 + Overleaf/tikz.dev 链接；**当前部署镜像未装 TeX，实测即走此降级路径**）、Graphviz 三级降级（graphviz 包+dot → matplotlib+networkx → 纯标准库 DOT→SVG 分层布局 `services/wcopilot_dotrender.py`，界面明示"降级渲染（等价拓扑图）"）；③**CSV→图表**——列类型自动分类、最多 3 张推荐图（每张带中文推荐依据）、数值事实（min/max/趋势/Pearson r）注入 Caption prompt 且生成后校验必须含真实数字；④**中英学术互译**。全部模型调用经统一重试入口，伪响应不会被当正文展示。
 
 ---
 
@@ -714,10 +733,10 @@ docker compose down         # 停止
 | `LLM_PROVIDER` | `zhipu` | zhipu/deepseek/qwen/openai/ollama |
 | `LLM_MODEL` / `VL_MODEL` | glm-4-flash / glm-4v | 文本 / 多模态模型 |
 | `LLM_TIMEOUT` | 45s（演示保险，可设 25） | 单次调用超时 |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1200 / 150 | 切块字符数与重叠（`config.py:134-135`） |
-| `DENSE_K` / `SPARSE_K` / `FINAL_K` | 12 / 12 / 6 | 两路召回与融合条数（`config.py:136-138`） |
-| `DEDUP_THRESHOLD` | 0.90 | 语义去重阈值（`config.py:139 DEDUP_THRESHOLD`） |
-| `AGENT_MAX_ITERS` | 8 | Agent 最大工具调用轮数（`config.py:140 AGENT_MAX_ITERS`） |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1200 / 150 | 切块字符数与重叠（`config.py:141-142`） |
+| `DENSE_K` / `SPARSE_K` / `FINAL_K` | 12 / 12 / 6 | 两路召回与融合条数（`config.py:143-145`） |
+| `DEDUP_THRESHOLD` | 0.90 | 语义去重阈值（`config.py:146 DEDUP_THRESHOLD`） |
+| `AGENT_MAX_ITERS` | 8 | Agent 最大工具调用轮数（`config.py:147 AGENT_MAX_ITERS`） |
 | `LLM_PROVIDERS_EXTRA` | 空 | JSON 追加自定义 OpenAI 兼容 Provider |
 
 ## 6.5 已知问题清单（评审发现、按优先级排列）
@@ -966,21 +985,21 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 | 变量 | 默认值 | 读取位置 | 说明 |
 |---|---|---|---|
 | `LLM_PROVIDER` | `zhipu` | `services/state.py:184` | 启动默认 Provider，可选 `zhipu`/`deepseek`/`qwen`/`openai`/`ollama` |
-| `ZHIPU_API_KEY` | 空 | `config.py:120` | 智谱 Key；`glm-4-flash` 文本 + `glm-4v` 视觉（唯一内置视觉模型） |
+| `ZHIPU_API_KEY` | 空 | `config.py:127` | 智谱 Key；`glm-4-flash` 文本 + `glm-4v` 视觉（唯一内置视觉模型） |
 | `DEEPSEEK_API_KEY` | 空 | `core/providers.py:46` | DeepSeek；无视觉模型，OCR 自动降级离线解析 |
 | `DASHSCOPE_API_KEY` | 空 | `core/providers.py:54` | 通义千问；含 `qwen-vl-plus` 视觉模型 |
 | `OPENAI_API_KEY` | 空 | `core/providers.py:62` | OpenAI；需国际网络环境 |
 | `OLLAMA_API_KEY` | 空 | `config.py` | 本地 Ollama，可留空 |
-| `LLM_API_KEY` | 空 | `config.py:120` | 通用兜底 Key（任意 OpenAI 兼容端点） |
+| `LLM_API_KEY` | 空 | `config.py:127` | 通用兜底 Key（任意 OpenAI 兼容端点） |
 | `LLM_BASE_URL` | 平台默认 | `config.py` | 自定义端点 Base URL（内网网关 / vLLM） |
-| `LLM_MODEL` | `glm-4-flash` | `config.py:121` | 文本 / 任务规划 / Function Calling 模型 |
-| `VL_MODEL` | `glm-4v` | `config.py:122` | 多模态 / 扫描件 OCR 视觉模型 |
-| `LLM_TIMEOUT` | `45` | `config.py:123` | 单次调用超时（秒）；演示保险，现场可设 `25` |
-| `LLM_RETRY_BUDGET_SEC` | `20` | `config.py:128` | 单次调用总预算（秒），超预算即放弃重试、人话降级 |
-| `MAX_UPLOAD_MB` | `100` | `config.py:144` | 单个上传 PDF 体积上限（解析前应用层闸门） |
+| `LLM_MODEL` | `glm-4-flash` | `config.py:128` | 文本 / 任务规划 / Function Calling 模型 |
+| `VL_MODEL` | `glm-4v` | `config.py:129` | 多模态 / 扫描件 OCR 视觉模型 |
+| `LLM_TIMEOUT` | `45` | `config.py:130` | 单次调用超时（秒）；演示保险，现场可设 `25` |
+| `LLM_RETRY_BUDGET_SEC` | `20` | `config.py:135` | 单次调用总预算（秒），超预算即放弃重试、人话降级 |
+| `MAX_UPLOAD_MB` | `100` | `config.py:151` | 单个上传 PDF 体积上限（解析前应用层闸门） |
 | `GITHUB_TOKEN` / `GITHUB_API_TOKEN` | 空 | `services/extern.py:16` | 提升开源代码可得性检出率；不配则匿名自动降级（二选一） |
-| `HF_ENDPOINT` | 云上留空 | `config.py:131` | **云平台务必留空**（走 huggingface.co）；仅桌面态（国内）启镜像 |
-| `AI4S_DESKTOP` | `0` | `config.py:10` | 桌面模式开关；**Web / 容器部署务必留空** |
+| `HF_ENDPOINT` | 云上留空 | `config.py:138` | **云平台务必留空**（走 huggingface.co）；仅桌面态（国内）启镜像 |
+| `AI4S_DESKTOP` | `0` | `config.py:17` | 桌面模式开关；**Web / 容器部署务必留空** |
 
 > 检索与切块参数（`CHUNK_SIZE` / `CHUNK_OVERLAP` / `DENSE_K` / `SPARSE_K` / `FINAL_K` / `DEDUP_THRESHOLD` / `AGENT_MAX_ITERS` / `AGENT_GLOBAL_MAX_ITERS`）已在 **6.4 关键配置项**列明，此处不重复。
 > ⚠️ 两条部署安全红线：`HF_ENDPOINT` 在境外云平台留空，`AI4S_DESKTOP` 不设。

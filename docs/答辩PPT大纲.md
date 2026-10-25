@@ -7,7 +7,7 @@
 
 ---
 
-## P1　封面：AI4S 科研助手
+## P1　封面：MoreHand
 
 1. 版面感知 RAG + 多 Agent + 引用图谱 + 学术写作，Streamlit 单进程交付
 2. 9 个页面（`_PAGES@app.py:121`）、22 个 Function Schema 工具、`build_registry@tools/definitions.py:371` 注册
