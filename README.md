@@ -280,6 +280,16 @@ Provider 名与环境变量名的对应（`core/providers.py` 的 `key_env` 字�
 > 如需最佳拓扑图渲染效果，请在执行 `pip install -r requirements.txt` 后追加
 > `pip install matplotlib graphviz`。
 
+**桌面版（可选，打包成独立 exe）**：构建期依赖与业务依赖分开放，见 `requirements-desktop.txt`
+（`pywebview` / `PyInstaller` / `pythonnet`）——只装 `requirements.txt` 是打不了包的。
+
+```bash
+pip install -r requirements.txt -r requirements-desktop.txt
+build_desktop.bat          # 双击即可；产物在 dist\AI4SResearchAgent\AI4SResearchAgent.exe
+```
+
+产物约 40 MB（exe 本体）/ 504 MB（整包 3766 个文件），目标机器**无需安装 Python**，双击即用。
+
 ---
 
 ## 🧪 测试数据

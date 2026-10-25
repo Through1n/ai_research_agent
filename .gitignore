@@ -56,7 +56,9 @@ desktop.ini
 
 # PyInstaller
 build/
+build_new/
 dist/
+dist_old_*/
 dist-release/
 *.pyc
 version_info.txt

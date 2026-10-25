@@ -1,0 +1,20 @@
+# 桌面版专用依赖（PyInstaller 打包 + pywebview 原生窗口）。
+#
+# 为什么单独一个文件：`requirements.txt` 是**业务运行时**依赖，云端 / Docker / 源码直跑
+# 都只需要它；直接跑 `pip install -r requirements.txt` 的人是装不出桌面版的——
+# 缺 webview 模块，`pythonw -m desktop` 与 PyInstaller 打包都会失败。
+#
+# 装法：
+#     pip install -r requirements.txt -r requirements-desktop.txt
+# 打包：
+#     build_desktop.bat        （或 python -m PyInstaller AI4SResearchAgent.spec --clean --noconfirm）
+#
+# 版本口径与 requirements.txt 一致：上界取「当前实测版本的下一个大版本」，
+# 不锁死小版本，但挡住没测过的跨大版本组合。
+# 本地实测基准（2026-10-25）：pywebview 5.4 / PyInstaller 6.22.3 / pythonnet 3.1.0 / Python 3.11.16
+
+pywebview>=5.4,<6.0
+PyInstaller>=6.22,<7.0
+# Windows 下 pywebview 的 edgechromium 走 winforms 后端，必须有 pythonnet（import clr）；
+# spec 的 hiddenimports 里也点名了 "clr" / "pythonnet"，不装会在冻结态 import 期崩。
+pythonnet>=3.1,<4.0
