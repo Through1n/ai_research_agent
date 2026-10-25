@@ -12,7 +12,7 @@
 > 文档内部版 v5.0（2026-10-12 Round 8 定稿）：首次接入真实 API Key 完成全链路实测，全文 AI 类指标由"推断值"刷新为真跑实减值；新增第 9 章「AI 协同说明」（赛题 3.4 硬性要求）。
 > 定位：全国高校 AI 大模型挑战赛参赛作品 · 全流程科研助手 Agent
 > 运行环境：Python 3.11.16 / Streamlit 1.63.0（conda 环境 `ai_research`）
-> 本文档与当前代码一一对应，所有引用一律写成 **`符号名@文件:行号`** 形式（符号名是稳定锚点，行号是当下快照），均可直接在仓库中定位，并可由随附脚本 `scripts/_check_doc_refs.py` **一键复跑校验**（逐条打开目标文件、读到该行、比对该行是否真含上下文提到的符号，输出「正确 / 疑似错误 / 无法判定」三列清单）。**全文当前校验结果：215 条引用，0 条疑似错误、0 条无法判定**（修复前 1–4 章抽样 103 条中 86 条对不上）。
+> 本文档与当前代码一一对应，所有引用一律写成 **`符号名@文件:行号`** 形式（符号名是稳定锚点，行号是当下快照），均可直接在仓库中定位，并可由随附脚本 `scripts/_check_doc_refs.py` **一键复跑校验**（逐条打开目标文件、读到该行、比对该行是否真含上下文提到的符号，输出「正确 / 疑似错误 / 无法判定」三列清单）。**全文当前校验结果：231 条引用，0 条疑似错误、0 条无法判定**（修复前 1–4 章抽样 103 条中 86 条对不上）。
 > **关于行号漂移**：代码仍在演进，行号会漂；故凡涉及实现位置的引用一律给出符号名，行号仅作快照，请以同一脚本复跑结果为准。凡本文未能核实的一律标注"待确认"，不以推断填充。
 > **数据来源优先级**：①Round 7/8 真实 API 实测（`round7_judgeG.md`、`round8_fixR6_references.md`、`round8_fixR7_title.md`、`round8_fixR8_frontier.md`、`round7_fixR5_citations.md`）→ ②`round4_worker9_official.md` 官方用例端到端实测 → ③Round 3 修复实测。凡未实测的一律标注"未实测/待补充"，不沿用推断值。
 
@@ -50,7 +50,7 @@
 
 - **研究生 / 科研人员**：需要快速读懂一批英文论文、跨文献对比方法与结果、追踪方向最新进展、起草开题或论文框架。系统的「跨文献问答」「图谱综述」「写作 Copilot」直接服务这一主线。
 - **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:93` 演示图谱兜底）。
-- **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑；单元测试 18 项（`tests/test_core.py`）。
+- **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑；单元测试 230 项（全套 `tests/`，其中 `test_core.py` 23 项）。
 
 ## 1.3 赛题定位
 
@@ -60,7 +60,7 @@
 |---|---|
 | ① 多模态与细粒度文档感知 | 双栏几何判定（4 条必要条件）、扫描件 OCR、图↔图注关联、标题树/表格/参考文献抽取、541 页长文档分批工程化 |
 | ② 抗幻觉 RAG | 混合检索 + 拒答闸门 + 逐句引用一致性校验 + 修复环 + 可点击页码溯源 |
-| ③ 自主工具调用 | 21 个 Function Schema 工具、6 专家路由白名单、Python AST 沙箱、arXiv 定时增量追踪 |
+| ③ 自主工具调用 | 22 个 Function Schema 工具、6 专家路由白名单、Python AST 沙箱、arXiv 定时增量追踪 |
 | ④ 图谱挖掘 | 真实引用建图、PageRank/社区发现/frontier 五维打分、图谱驱动综述、Future Work 可达性过滤 |
 | ⑤ 学术 Copilot | 无幻觉 References 白名单生成、TikZ/Graphviz 拓扑图（TikZ **需本机有 LaTeX 编译器才真实编译**，否则展示源码 + 编辑器链接；当前部署镜像未装 TeX）、CSV 自动出图 + 数值事实注入 Caption、中英对照同步阅读 |
 
@@ -76,16 +76,16 @@
 
 ## 1.5 当前状态一句话总结
 
-Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有真跑才会暴露"的缺陷后：9 页面 UI 冒烟 0 未捕获异常、190/190 单元测试、阅读页专项 61/61、**AI 链路端到端 21/21 PASS**；541 页官方教材 537 页提取 / 0 失败页 / 25.32s；双栏误判 0%；抗幻觉四道防线**全部在真实 LLM 下实测生效**（OCR 首次实测通过、细粒度三问全命中真值、References 40/40 逐字一致）。
+Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有真跑才会暴露"的缺陷后：9 页面 UI 冒烟 0 未捕获异常、230/230 单元测试、阅读页专项 62/62、**AI 链路端到端 21/21 PASS**；541 页官方教材 537 页提取 / 0 失败页 / 25.32s；双栏误判 0%；抗幻觉四道防线**全部在真实 LLM 下实测生效**（OCR 首次实测通过、细粒度三问全命中真值、References 40/40 逐字一致）。
 
-在此之上仍有三条诚实声明（详见 8.2 / 9.4）：①本地 `pdf/` 语料共 5 个文件，经版本合并后为 **3 个独立文档**，其中**检出引用边并进入图节点的是 2 个**（教材章节未检出引用关系），赛题"批量文献（如 20 篇）"规模**未在本次实测中覆盖**；②OpenAlex / Semantic Scholar 在实测期间处于 IP 级 429 限流，被引数链路验证的是"诚实降级"而非真值获取；③"纯中文句的引用一致性校验盲区"与"沙箱为软隔离"仍是我们认知到的两项最重要的能力边界。
+在此之上仍有三条诚实声明（详见 8.2 / 9.4）：①本地 `pdf/` 语料规模有限（Round 8 实测 5 文件 / 3 独立文档 / 2 有引用边，教材章节无引用关系；2026-10 扩至 6 篇 arXiv 后为 9 文件），赛题"批量文献（如 20 篇）"规模**未覆盖**；②OpenAlex / Semantic Scholar 在实测期间处于 IP 级 429 限流，被引数链路验证的是"诚实降级"而非真值获取；③"纯中文句的引用一致性校验盲区"与"沙箱为软隔离"仍是我们认知到的两项最重要的能力边界。
 
 ## 1.6 项目成果速览
 
 | 指标 | 实测值 | 来源 |
 |---|---|---|
 | 代码规模 | 39 个 Python 模块文件（core 10 / services 14 / tools 3 / ui 12）+ `app.py` + `config.py`，9 个交互页面 | 仓库现状（`ls core/*.py services/*.py tools/*.py ui/*.py` = 39） |
-| 注册工具数 | 21 个 Function Schema，全部接入 6 专家白名单（无孤岛） | `tools/definitions.py:379 build_registry` |
+| 注册工具数 | 22 个 Function Schema，全部接入 6 专家白名单（无孤岛） | `tools/definitions.py:379 build_registry` |
 | 541 页长文档入库 | 537 页提取 / **1305 chunks** / 25.32s（46.8ms/页）/ 峰值 RSS **893.1MB** / **0 失败页** / 进度回调 11 次 | Round 4 官方用例实测（`round4_worker9_official.md` §3） |
 | 内容级语义去重 | v1↔v7 相似度 **0.963228**（阈值 0.90）；完全改名后仍命中 **1.000000** | Round 4 官方用例 C 实测 |
 | 双栏判定准确率 | 单栏语料 1111 页误判 0%；真双栏 BERT 正文页 10/10 识别 | Round 3 修复实测 |
@@ -108,7 +108,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 | P1 | 双栏 PDF 串读，上下文断裂 | 解析层需感知版面而非盲取文本流 | `_detect_two_columns@services/parsing.py:196`：横跨否决 + 空白带采样 + 栏宽平衡 + 两侧块数 4 条必要条件，不满足即回退单栏 |
 | P2 | 答案不给出处 / 给假出处 | 每条结论必须可定位到原文页码 | 上下文编号 `[n] 来源：《X》 第N页` → LLM 强制带【n】角标 → UI 渲染可点击页码徽章 |
 | P3 | 模型编造参考文献 | 生成内容必须对照真实文献白名单 | PDF References 段真实抽取 → 白名单校验 → 越界剔除 |
-| P4 | 检索工具与问答割裂 | Agent 能自主调用检索/追踪/解析工具 | 21 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 |
+| P4 | 检索工具与问答割裂 | Agent 能自主调用检索/追踪/解析工具 | 22 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 |
 | P5 | 新论文追踪靠人肉刷 arXiv | 定时增量检查 | `services/track.py:57 track_topic` + `services/track.py:25 diff_new` last-seen 检查点 + `scripts/watch_daemon.py:30 tick` |
 | P6 | 综述写作缺乏结构性依据 | 综述由图结构驱动而非摘要堆砌 | 社区发现聚簇 + PageRank 基石 + 骨干边注入 prompt，LLM 不可用时确定性生成 |
 | P7 | 科研图表制作繁琐 | CSV → 图表 → 规范 Caption 一条龙 | 列类型推断自动出六类图 + 实测数值事实注入 Caption prompt |
@@ -116,7 +116,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.2 功能需求（按五大类逐条）
 
-**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1228 group_versions`、`services/library.py:1312 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:80 detect_scanned`、`services/parsing.py:383 ocr_page_text`）；标题树（书签优先 `services/parsing.py:659 extract_toc`，无书签走 `services/parsing.py:597 infer_headings_from_text`）；表格抽取（`services/parsing.py:677 extract_tables`）；插图↔图注关联（`services/parsing.py:765 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:734 _nearest_caption`）；公式识别与 LaTeX 转换；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
+**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1253 group_versions`、`services/library.py:1337 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:80 detect_scanned`、`services/parsing.py:383 ocr_page_text`）；标题树（书签优先 `services/parsing.py:659 extract_toc`，无书签走 `services/parsing.py:597 infer_headings_from_text`）；表格抽取（`services/parsing.py:677 extract_tables`）；插图↔图注关联（`services/parsing.py:765 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:734 _nearest_caption`）；公式识别与 LaTeX 转换（提示词要求「完整等式」而非碎片，模板 `ui/page_library.py:264 _FORMULA_PROMPT`；输出经 `ui/page_library.py:192-227` 结构修补 `\hat{}` 挂空/套错位与括号失衡）；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
 
 **② 抗幻觉 RAG**：单篇问答（超参数/硬件/BLEU 类细粒度问题）；多篇跨文献对比（2–5 篇，`MAX_COMPARE_PAPERS=5`）；单篇范围锁定；查询扩展（中文问英文文献）；内联【n】溯源与可点击页码锚点；引用一致性逐句校验；拒答与自动修复。
 
@@ -128,7 +128,7 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.3 用户故事（端到端走查）
 
-**故事 A：版本去重（演示路径 2，离线可复现）。** `1706.03762v7.pdf` 与改名的 `1706.03762v1.pdf` 先后入库。系统对每篇算"前 4000 字向量 + 5 段指纹"（`services/library.py:100 _paper_fingerprints`），上传 v1 时查重命中 **0.963228**（阈值 0.90，取"分段指纹 top3 均值"；整篇相似度仅 0.891292 单独看会漏判），界面给出"⚠️ 语义查重命中"与三个决策按钮，选"保留两版"后可对比差异（`services/library.py:1312 version_diff`）。全程不依赖文件名。
+**故事 A：版本去重（演示路径 2，离线可复现）。** `1706.03762v7.pdf` 与改名的 `1706.03762v1.pdf` 先后入库。系统对每篇算"前 4000 字向量 + 5 段指纹"（`services/library.py:100 _paper_fingerprints`），上传 v1 时查重命中 **0.963228**（阈值 0.90，取"分段指纹 top3 均值"；整篇相似度仅 0.891292 单独看会漏判），界面给出"⚠️ 语义查重命中"与三个决策按钮，选"保留两版"后可对比差异（`services/library.py:1337 version_diff`）。全程不依赖文件名。
 
 **故事 B：抗幻觉问答（演示路径 3）。** 问"训练用了什么 GPU？数量和型号？"→ 查询扩展出英文变体 → Dense+Sparse 双路召回 → RRF 融合 6 条 → 上下文以 `[1] 来源：《1706.03762v7.pdf》 第8页第3段` 注入 → LLM 生成带【1】角标的答案 → 逐句校验通过 → 点溯源卡片"第 8 页"徽章页内跳转，或"📖 打开阅读页"直达原版式页面。若改问"量子纠缠"（库内无关），拒答闸门在**调用 LLM 之前**直接回复"未在文献库中找到可靠依据，为避免幻觉我不作答"。
 
@@ -154,7 +154,7 @@ flowchart TD
     UI["UI 交互层 ui/ · 9 页面<br/>ui/common.py 错误边界·锚点卡片·flash·长文折叠"] --> CORE
     CORE["Agent 内核层 core/<br/>llm 重试·agent ReAct·router 6 专家<br/>planner·memory·guardrails·sandbox·trace"] --> SVC
     SVC["服务层 services/<br/>parsing·library·rag·graph·writing·translate<br/>extern·track·citation_quality·state"] --> TOOL
-    TOOL["工具注册层 tools/<br/>21 个 Function Schema + Registry"] --> STO
+    TOOL["工具注册层 tools/<br/>22 个 Function Schema + Registry"] --> STO
     STO[("存储层 storage/<br/>Chroma·BM25·library.json<br/>memory·画像·检查点·uploads")]
     SVC --> EXT[外部 API<br/>arXiv·PubMed·Web·OpenAlex·S2·Crossref·GitHub]
 ```
@@ -227,7 +227,7 @@ flowchart TD
 | 项 | 结论 |
 |---|---|
 | 选了什么 | 全部 Provider 走 OpenAI 兼容 `/chat/completions` 协议（`core/providers.py:33-74` 声明 5 家）；默认文本模型 **glm-4-flash**、视觉模型 **glm-4v**（智谱） |
-| 为什么选 | ①**协议归一**：一套 `LLMClient` 零改动复用智谱 / DeepSeek / 通义 / OpenAI / 本地 Ollama，换模型只改 `ctx.llm`；②**可私有化**：`LLM_PROVIDERS_EXTRA` 追加自定义网关即可接内网模型；③**默认模型取成本与效果的交点**：glm-4-flash 有免费额度、Function Calling 完整，免费 Key 即可跑通含 OCR 的全流程（21 个工具 schema 调用均经其实测） |
+| 为什么选 | ①**协议归一**：一套 `LLMClient` 零改动复用智谱 / DeepSeek / 通义 / OpenAI / 本地 Ollama，换模型只改 `ctx.llm`；②**可私有化**：`LLM_PROVIDERS_EXTRA` 追加自定义网关即可接内网模型；③**默认模型取成本与效果的交点**：glm-4-flash 有免费额度、Function Calling 完整，免费 Key 即可跑通含 OCR 的全流程（22 个工具 schema 调用均经其实测） |
 | 放弃了什么 / 代价 |  ①放弃"单一最强模型"的效果上限；②放弃厂商私有长上下文等高级特性（长文档改由分批解析 + RAG 解决，见 4.3.3）；③放弃本地微调带来的领域特化 ；代价： 依赖外网与厂商配额、受模型版本迭代影响  |
 | 如何对冲 | 3 次指数退避重试 + 4 次仍失败返回结构化伪响应、**不向用户暴露异常**；无 Key 时全链路离线降级（见 4.7） |
 
@@ -312,13 +312,13 @@ flowchart TD
 
 ### 4.2.2 工具注册与执行（`tools/registry.py` + `tools/definitions.py`）
 
-`Registry.register(name, description, JSON Schema, func)` → `openai_schema()`（`tools/registry.py:11-19`）生成 OpenAI 规范 `tools` 数组 → `execute(name, args, ctx)`（`:39-49`）统一把 `TypeError` 与其余 `Exception` 转成 `{"error": ...}` 字符串回灌，**不让工具异常打断 Agent 主循环**。当前由 `tools/definitions.py:379 build_registry` 注册 **21 个工具**（注册语句集中在 `:381-457`）。
+`Registry.register(name, description, JSON Schema, func)` → `openai_schema()`（`tools/registry.py:11-19`）生成 OpenAI 规范 `tools` 数组 → `execute(name, args, ctx)`（`:39-49`）统一把 `TypeError` 与其余 `Exception` 转成 `{"error": ...}` 字符串回灌，**不让工具异常打断 Agent 主循环**。当前由 `tools/definitions.py:379 build_registry` 注册 **22 个工具**（注册语句集中在 `:381-459`）。
 
 ### 4.2.3 Function Calling 闭环（Agent）
 
 `core/agent.py:414 run()` → `core/router.py:104 route()` 选专家（LLM 不可用时 `keyword_route@core/router.py:85` 兜底）→ 按 `EXPERTS@core/router.py:22` 白名单过滤 `registry.schemas()` → `llm.chat(tools=schema, tool_choice="auto")` → 解析 tool_calls → `reg.execute(name, args, ctx)` 逐个执行 → 结果以 `role=tool` 回灌 → 循环至最终答案（`AGENT_MAX_ITERS=8`）；全过程写入 `core/trace.py`，在「Agent 总助手」页实时显示"思考—工具—观察"时间线。
 
-6 个专家为 qa / search / graph / writing / reading / parsing（21 个工具全部接入至少一个白名单，无孤岛）。
+6 个专家为 qa / search / graph / writing / reading / parsing（22 个工具全部接入至少一个白名单，无孤岛）。
 
 ### 4.2.4 外部学术 API 集成（`services/extern.py` + `services/citation_quality.py`）
 
@@ -671,12 +671,12 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 | 层 | 命令 | 本轮实测结果 |
 |---|---|---|
-| 单元测试 | `python -m unittest discover -s tests -v` | **190/190 OK** |
+| 单元测试 | `python -m unittest discover -s tests -v` | **230/230 OK** |
 | **AI 链路端到端实测（真实 Key）** | `python -u scripts/_verify_live_api.py` | **21/21 PASS**（严格化后的最新版本，原 19 条；分组：OCR / 细粒度问答 / 抗幻觉闸门 / 跨文献对比 / 写作 / 图谱 / 外部被引）。脚本自带"不污染 `storage/`"（跑在临时目录）与"Key 不可用即记 SKIP 不记 PASS"两条纪律 |
 | 离线端到端自检 | `python scripts/selftest.py` | 全链路冒烟通过（无需 Key） |
 | 官方数据集复跑 + 长文档专项 | `python scripts/_verify_official.py`（= A/B/C/D 四用例） | 扫描件离线降级 PASS；541 页 → **537 页提取 / 1305 chunks / 25.32s（解析 4.02s + 入库 21.30s）/ 峰值 RSS 893.1MB / 0 失败页 / 进度回调 11 次**；v1↔v7 去重 **0.963228**、完全改名仍命中 **1.000000**；3 篇连续入库 chunks 归属隔离（133 条，4.38s） |
 | UI 冒烟 + 全页面渲染检查 | `python scripts/_smoke_ui.py`、`python scripts/apptest_check.py` | 9 页面 + 9 项故障注入 **exception = 0**；9 页面渲染 0 未捕获异常 |
-| 阅读页专项 | `python scripts/_smoke_read.py` | **PASS 61 / FAIL 0** |
+| 阅读页专项 | `python scripts/_smoke_read.py` | **PASS 62 / FAIL 0** |
 | 图谱压测 | `python scripts/bench_graph.py` | n=20 建图 7.9s，n=40 建图 25.0s（脚本可复跑，近两轮未重复实测） |
 | 演示路径回归 | `streamlit.testing.v1.AppTest` | **7/7 条演示路径 0 未捕获异常**，含断网注入 7b 分支 |
 | LLM 重试专项 | `measure_call_counts@scripts/_degrade_drill_api.py:609`（必失败端口注入） | 恒定 ≤4 次调用，退避实测 [1.5, 3.0, 4.5]s |
@@ -802,18 +802,18 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 | 模块 | 交付了什么 | 关键实测（完整细节见第 5 章各节） |
 |---|---|---|
-| ① 多模态与细粒度文档感知 | PyMuPDF 版面感知解析：双栏几何判定、扫描件 OCR、图↔图注关联、表格 / 公式 LaTeX / 标题树 / 结构化参考文献抽取 | 541 页入库 **537 页提取 / 1305 chunks / 25.32s / 峰值 893.1MB / 0 失败页**；双栏误判 19.1% → **0%**（1111 页单栏语料）；OCR 单页 **2833 字符 / 9.3s**，词级准确率 **93.9%** / 召回 **98.5%**；标题抽取全量 **8/8** 对照符合预期；参考文献抽取 BERT **56 条**、`1706.03762v1.pdf` **36 条** |
+| ① 多模态与细粒度文档感知 | PyMuPDF 版面感知解析：双栏几何判定、扫描件 OCR、图↔图注关联、表格 / 公式 LaTeX / 标题树 / 结构化参考文献抽取 | 541 页入库 **537 页提取 / 1305 chunks / 25.32s / 峰值 893.1MB / 0 失败页**；双栏误判 19.1% → **0%**（1111 页单栏语料）；OCR 单页 **2833 字符 / 9.3s**，词级准确率 **93.9%** / 召回 **98.5%**；标题抽取全量 **11/11** 对照符合预期；参考文献抽取 BERT **56 条**、`1706.03762v1.pdf` **36 条** |
 | ② 抗幻觉 RAG | 查询扩展 + Dense/Sparse 双路 + RRF 融合，配「拒答闸门 / 逐句引用校验 / 修复环 / References 白名单」四道防线 + 可点击页码溯源 | 无关问题拒答且 **0 次 LLM 调用**（top=0.1820）；真实句覆盖率 **84.5%** 通过、编造句 **10%** 被标记；**细粒度三问（Adam 0.9/0.98、8×P100、BLEU 28.4/41.8）全命中真值、溯源 6/6 带页码** |
-| ③ 自主工具调用 | 21 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 + AST 白名单沙箱 + arXiv/PubMed/Web 检索 + 定时追踪 + GitHub 复现性 | **21/21 工具全部接入专家白名单，无孤岛**；沙箱子进程 `timeout=25`；被引数三级降级与真值一致（AlexNet **108512**） |
+| ③ 自主工具调用 | 22 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 + AST 白名单沙箱 + arXiv/PubMed/Web 检索 + 定时追踪 + GitHub 复现性 | **22/22 工具全部接入专家白名单，无孤岛**；沙箱子进程 `timeout=25`；被引数三级降级与真值一致（AlexNet **108512**） |
 | ④ 图谱挖掘 | 真实引用关系建图 + PageRank/入度/介数/特征向量 + 社区发现（三级降级）+ frontier 五维打分 + 四段式综述 + Future Work 三态判定 | 综述 **1928 字**含真实年份 2017/2018；Future Work **2/2** 有效状态；前沿分 14.3→3.3。**规模诚实声明：实测图谱仅 2 节点 1 边，「20 篇批量」未覆盖** |
 | ⑤ 学术 Copilot | 无幻觉 References 白名单写作、Mermaid/TikZ/Graphviz/Matplotlib 四类图、CSV 自动出图 + 数值事实注入 Caption、中英对照同步阅读、划词翻译、中文原位 PDF 输出 | References **40/40 与白名单逐字一致 / 0 处占位 / 14364 字 / 44.6s**（修复前：4515 字但整章占位符、139.3s）；引用↔参考文献双向跳转 **36/36 锚点、死链 0**；正文引用标记 **58 个**全部可反向回正文 |
-| ⑥ Agent 内核 | 任务规划 / 多专家路由（含关键词离线兜底）/ 长期记忆与画像 / 三层 Guardrails（注入检测·角标校验·密钥脱敏）/ Trace 思考可视化 | 9 页面 UI 冒烟 + 9 项故障注入 **exception=0**；7/7 条演示路径 0 未捕获异常；单测 **190/190**、阅读页专项 **61/61**、AI 链路 **21/21 PASS** |
+| ⑥ Agent 内核 | 任务规划 / 多专家路由（含关键词离线兜底）/ 长期记忆与画像 / 三层 Guardrails（注入检测·角标校验·密钥脱敏）/ Trace 思考可视化 | 9 页面 UI 冒烟 + 9 项故障注入 **exception=0**；7/7 条演示路径 0 未捕获异常；单测 **230/230**、阅读页专项 **62/62**、AI 链路 **21/21 PASS** |
 
 ### 8.1.2 工程规模
 
 - **代码**：39 个 Python 模块文件（core 10 / services 14 / tools 3 / ui 12）加 `app.py` 与 `config.py`；9 个交互页面；严格自上而下的四层依赖（`ui → services → core`、`tools → services`）。运行时数据集中在 `storage/`（路径由 `config.py` 定义为 `STORAGE_DIR` 并启动时自动建子目录）；另有 3 处直连落盘：`core/llm.py`（失败日志）、`services/citation_quality.py`（引用质量缓存）、`services/library.py`（上传目录与重建前备份）。
 - **能力面**：6 个专家、5 家可切换 Provider、7 张真实截图（`docs/shots/p0–p6`，一图一模块）。
-- **测试**：单元测试 190/190；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 61/61；其余复跑脚本（官方四用例、图谱压测、截图重定向、桌面版校验）全部留在 `scripts/`（附录 A）。
+- **测试**：单元测试 230/230；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 62/62；其余复跑脚本（官方四用例、图谱压测、截图重定向、桌面版校验）全部留在 `scripts/`（附录 A）。
 - **过程留痕**：`docs/review/` 下 Round 1–11 累计 **45 份**历史过程报告（含 `FINAL_SUMMARY.md`），Round 12 审计与部署报告 **13 份**，Round 13 **6 份**，均另列于附录 B。每份都交代了"改了哪些文件、实测数字是什么、哪些没修"。
 - **交付物**：技术文档（本文档）、README、演示视频脚本、在线演示部署指南、桌面版指南、团队信息与 Docker/桌面两条部署链路；另有答辩问答手册、录制工程化脚本、提交历史分析、一键复现包（`start.bat`/`start.sh`/`Dockerfile.quick`）与评委 FAQ。
 
@@ -919,7 +919,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 ## 9.4 AI 使用边界与诚实声明
 
 - **可追溯性**：本节每条经验都对应一次真实运行，证据落在 Round 7/8 各修复报告（路径见附录 B）。
-- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 190/190、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
+- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 230/230、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
 - **AI 未参与**：真实 API Key 的获取与管理、演示视频录制、`docs/团队信息.md` 署名内容。
 - **尚未做到**：AI 目前主要覆盖"修复已知缺陷"与"撰写文档"，**不足以独立判断哪些功能该做**（如是否自建 ≥20 篇图谱 fixture），优先级决策仍由人工承担。
 

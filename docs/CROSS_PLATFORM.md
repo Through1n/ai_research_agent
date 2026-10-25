@@ -314,9 +314,9 @@ streamlit run app.py --server.address=0.0.0.0 --server.port=8501
 ```bash
 PY=python3
 $PY -m compileall -q core services tools ui app.py config.py   # 期望 exit 0
-$PY -m unittest discover -s tests                               # 期望 Ran 18 tests ... OK
+$PY -m unittest discover -s tests                               # 期望 Ran 230 tests ... OK
 $PY scripts/_smoke_ui.py                                        # 期望 exit 0 + 9 页 0 异常
-$PY scripts/_smoke_read.py                                      # 期望 PASS 60 / FAIL 0
+$PY scripts/_smoke_read.py                                      # 期望 PASS 62 / FAIL 0
 ```
 
 > ⚠️ `_smoke_ui.py` 与 `_smoke_read.py` **必须串行**，不要并行跑
@@ -338,7 +338,7 @@ $PY scripts/_smoke_read.py                                      # 期望 PASS 60
   不需要浏览器/playwright；容器内无隐藏依赖。
 - `scripts/_smoke_read.py:384` 写死 `available = False`（显式模拟未填 Key），**不需要真 Key**。
 
-> 📌 `PASS 60` / `Ran 18 tests` 是**本机 Windows 实测数字，容器内未实测（本机无 docker）**。
+> 📌 `PASS 62` / `Ran 230 tests` 是**本机 Windows 实测数字，容器内未实测（本机无 docker）**。
 > 第一次在容器里跑时，请先看**有没有 FAIL 项**，不要只比对总数。
 
 ### 8.7 浏览器端三看（这是 Linux 与 Windows 差异真正会出现的地方）

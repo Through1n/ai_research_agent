@@ -6,7 +6,7 @@
 
 **在线演示**：**https://ai4s-research-agent.app.workbuddy.host/**
 - 系统为**开放式访问，无需注册登录**（代码中无任何登录鉴权逻辑）；该地址已部署，WebSocket 跨源与冷启动两项线上访问问题已定位并修复，**重部署后需复验打开效果**。
-- **无需自备 API Key**：打开后点侧边栏 `🚀 一键加载演示数据（v1/v7/BERT）`，即可体验文献解析 / 语义去重 / 版本管理 / 引用图谱等全部离线链路。
+- **无需自备 API Key**：打开后点侧边栏 `🚀 一键加载演示数据（6 篇）`，即可体验文献解析 / 语义去重 / 版本管理 / 引用图谱等全部离线链路。
 - 若想体验问答、翻译、写作等 LLM 功能，可在侧边栏「接入方式 → 🏢 预设平台」自选平台并填入自己的 Key（仅存于会话内存，不落盘、不回传）。
 - ⚠️ 该地址由应用发布服务托管，**未注入 API Key，默认即为离线演示态**；线上部署已将 embedding 模型随包预置（chroma 的跳过判据是 6 个文件齐全），正常情况下不发生下载。**本地自行运行**时若未预置模型，首次点「加载演示数据」会尝试从模型源站下载（该源站境内网络可能传输挂死；代码层已改为后台预热 + 有界等待 + 人话降级，不会堵死首帧）。如需 streamlit.io 官方域名，可按 `docs/部署操作手册.md` 五步另行部署。
 
@@ -68,7 +68,7 @@ docker compose logs -f ai4s-agent      # 等到出现 "You can now view your Str
 | 拒答闸门 + 引用一致性校验 + 自动修复环 | ❌ | ❌ | ❌ | ✅ 相关度 <0.35 拒答，重叠率逐句校验，修复环上限 1 次 |
 | 真实被引数 / 引用含金量评估 | ❌ | ❌ | ⚠️ Zotero 可查条目不评分 | ✅ OpenAlex→S2→Crossref 三级降级，宁缺毋假 |
 | 引用图谱挖掘 + 图谱驱动综述 | ❌ | ❌ | ⚠️ 有引用条目无图挖掘 | ✅ PageRank/社区发现/frontier 五维打分 |
-| arXiv/PubMed 检索 + 定时增量追踪 | ⚠️ 需手动粘贴 | ❌ | ⚠️ 手动抓取 | ✅ 21 个 Function Calling 工具 + last-seen 检查点 |
+| arXiv/PubMed 检索 + 定时增量追踪 | ⚠️ 需手动粘贴 | ❌ | ⚠️ 手动抓取 | ✅ 22 个 Function Calling 工具 + last-seen 检查点 |
 | 无幻觉 References 写作框架 | ❌ 高编造率 | ❌ | ⚠️ 仅文献管理 | ✅ PDF References 真实抽取白名单 + 生成后校验 |
 | 中英对照同步阅读 + 划词翻译 | ⚠️ 需上传全文 | ❌ | ⚠️ 插件体验割裂 | ✅ 比例+段落对齐同步滚动、后端代理零密钥暴露 |
 | 541 页长文档工程化入库 | ⚠️ 有长度限制 | ❌ 常超时 | ❌ | ✅ 25.32s / 1305 分块 / 峰值 RSS 893.1MB / 0 失败页（实测） |
@@ -78,7 +78,7 @@ docker compose logs -f ai4s-agent      # 等到出现 "You can now view your Str
 
 ## 🤖 Agent 内核
 
-任务规划（Task Planning）→ 多专家路由（6 专家 × 工具白名单）→ Function Calling 闭环（21 个注册工具）
+任务规划（Task Planning）→ 多专家路由（6 专家 × 工具白名单）→ Function Calling 闭环（22 个注册工具）
 → 短期/长期记忆与用户画像 → 三层 Guardrails（输入注入检测 / 输出角标校验 / Python AST 沙箱）
 → 全程思考过程（Trace）可视化与流式输出。
 大模型侧统一走 OpenAI 兼容协议：智谱 GLM / DeepSeek / 通义千问 / OpenAI / 本地 Ollama 随时切换，
@@ -98,7 +98,7 @@ LLM 调用 3 次退避重试（1.5/3.0/4.5s），失败落盘并返回友好伪�
         │
  服务层（services/）：PDF解析·OCR ｜ 混合RAG ｜ arXiv·PubMed·Web ｜ 图谱·图论 ｜ 写作·绘图·沙箱
         │
- 工具注册层（tools/）：21 个 Function Schema + Registry
+ 工具注册层（tools/）：22 个 Function Schema + Registry
         │
  存储层（storage/）：Chroma 向量库 ｜ BM25 索引 ｜ library.json ｜ 追踪检查点 ｜ 点赞账本 ｜ 原始 PDF
 ```
@@ -143,7 +143,7 @@ LLM 调用 3 次退避重试（1.5/3.0/4.5s），失败落盘并返回友好伪�
 |---|---|
 | Function Calling 闭环（ReAct） | `core/agent.py:56 run`（工具白名单过滤 `:87-88`，`AGENT_MAX_ITERS=8` 见 `config.py:80`） |
 | 多专家路由 | `core/router.py:4-23 EXPERTS`（6 专家 × 白名单）、`:44 route`、`:36 keyword_route` 离线兜底 |
-| 21 个注册工具 | `tools/definitions.py:355 build_registry`（`r.register` 共 21 处，`:357-430`） |
+| 22 个注册工具 | `tools/definitions.py:379 build_registry`（`r.register` 共 22 处，`:381-457`） |
 | 定时追踪（增量检查点） | `services/track.py:57 track_topic` + `tools/definitions.py:382`（已接入 qa/search 专家白名单 `core/router.py:8` / `:12`） |
 | arXiv/PubMed/Web/GitHub 检索 | `services/extern.py:25 search_arxiv`、`:61 search_pubmed`、`:84 web_search`、`:159 github_repo_info` |
 | 引用含金量（真实被引，不编造） | `services/citation_quality.py:409 fetch_citation_count`（OpenAlex→S2→Crossref 三级降级 `:402`）、`:211 _pick_best`（被引数优先选优）、`:647 assess_reference`（四维打分） |
@@ -196,7 +196,7 @@ LLM 调用 3 次退避重试（1.5/3.0/4.5s），失败落盘并返回友好伪�
 python scripts/verify_official.py          # 官方 PDF 去重/扫描件/长文档/图谱实测
 python scripts/bench_graph.py              # 20/40 篇图谱规模压测
 python scripts/selftest.py                 # 离线端到端自检（无需 Key）
-python -m unittest discover -s tests -v    # 190 项单元测试
+python -m unittest discover -s tests -v    # 230 项单元测试
 python scripts/apptest_check.py            # Streamlit 全页面渲染检查
 ```
 
@@ -302,9 +302,9 @@ ai_research_agent/
 ├── config.py                  # 路径 / 模型 / 检索参数（环境变量可覆盖）
 ├── core/                      # Agent 内核：llm / agent / planner / router / memory / guardrails / sandbox / trace / providers
 ├── services/                  # 业务服务：parsing / library / rag / query_expansion / graph / track / writing / translate / extern / citation_quality / state / wcopilot_dotrender
-├── tools/                     # 注册中心 + 21 个 Function Schema 工具
+├── tools/                     # 注册中心 + 22 个 Function Schema 工具
 ├── ui/                        # 9 个页面 + 公共组件（错误边界 / 空库守卫 / flash / 锚点卡片）
-├── tests/                     # 单元测试（190 项）
+├── tests/                     # 单元测试（230 项）
 ├── scripts/                   # verify_official / bench_graph / selftest / apptest_check / resnap(截图) / watch_daemon
 ├── pdf/ 与 demo_data/         # 赛题测试 PDF 与演示数据
 ├── docs/                      # 技术文档（md/html/pdf）、评审报告、界面截图 docs/shots/
@@ -313,7 +313,7 @@ ai_research_agent/
 └── storage/                   # 运行时数据（git 忽略）
 ```
 
-> ⚠️ **版权说明（赛题测试 PDF）**：`pdf/` 下的测试 PDF **不随本公开仓库分发**（已在 `.gitignore` 中以 `pdf/*.pdf` 排除）。其中 `UnderstandingDeepLearning_02_09_26_C.pdf`（541 页长文档压测用例）是《Understanding Deep Learning》官方免费教材（作者 Simon J.D. Prince 授权官网免费阅读，**但不允许第三方仓库再分发**）。评委如需复现该用例，请自行从官网 **https://udlbook.github.io/** 下载后放入 `pdf/`。其余 5 件测试 PDF（3 件 arXiv 公开预印本 + 2 件本地生成夹具）可通过 `sh scripts/fetch_pdfs.sh` 一键现拉现用；`demo_data/` 下随仓库提交的 2 件（`1706.03762v7.pdf`、`1810.04805v2.pdf`）均为 arXiv 公开预印本（允许再分发），无版权风险。
+> ⚠️ **版权说明（赛题测试 PDF）**：`pdf/` 下的测试 PDF **不随本公开仓库分发**（已在 `.gitignore` 中以 `pdf/*.pdf` 排除）。其中 `UnderstandingDeepLearning_02_09_26_C.pdf`（541 页长文档压测用例）是《Understanding Deep Learning》官方免费教材（作者 Simon J.D. Prince 授权官网免费阅读，**但不允许第三方仓库再分发**）。评委如需复现该用例，请自行从官网 **https://udlbook.github.io/** 下载后放入 `pdf/`。其余 8 件测试 PDF（6 件 arXiv 公开预印本 + 2 件本地生成夹具）可通过 `sh scripts/fetch_pdfs.sh` 一键现拉现用；`demo_data/` 下随仓库提交的 2 件（`1706.03762v7.pdf`、`1810.04805v2.pdf`）均为 arXiv 公开预印本（允许再分发），无版权风险。
 
 ---
 
@@ -386,7 +386,7 @@ ai_research_agent/
 | 类别 | 具体占比 | 说明 |
 |---|---|---|
 | 样板 / 胶水代码、表单与错误提示文案 | 高（约 60–70%） | 9 个页面的 `st.empty/spinner/expander` 骨架、统一的中文友好错误提示（`ui/common.py:friendly_error`） |
-| 单元测试与边界用例扩展 | 高（约 60%） | `tests/` 初始 18 项用例的草稿（现扩至 190 项），人工补充断言与真实数据 |
+| 单元测试与边界用例扩展 | 高（约 60%） | `tests/` 初始 18 项用例的草稿（现扩至 230 项），人工补充断言与真实数据 |
 | 文档初稿（README / 技术文档 / 脚本） | 中（约 40–50%） | 结构与措辞建议，实测数字一律由人工实跑填入 |
 | 算法与核心链路代码 | **低（< 20%）** | 仅用于局部实现建议与代码风格统一，核心逻辑由人工设计 |
 
