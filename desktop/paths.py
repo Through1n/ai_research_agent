@@ -15,6 +15,7 @@
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)
@@ -98,23 +99,38 @@ def _native_error_box(text: str) -> None:
     """复制失败等致命错误时弹原生框（windowed 模式唯一错误通道）。"""
     try:
         import ctypes
-        ctypes.windll.user32.MessageBoxW(None, text, "AI4S 科研助手初始化失败", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, text, "MoreHand 初始化失败", 0x10)
     except Exception:
         pass
 
 
-def ensure_app_copy() -> None:
-    """冻结态首次启动时把 app_bundle 复制到 app_dir。
+BUILD_ID_FILE = ".build_id"
 
-    - 开发态：直接 return（跑 project_root 源码）；
-    - 冻结态且 app_dir/app.py 已存在：视为已初始化，跳过；
-    - 否则递归复制（忽略 __pycache__/*.pyc），失败弹原生错误框并抛异常。
+
+def _read_build_id(folder: Path) -> str:
+    """读业务包的构建时间戳（打包脚本写入，ISO 8601，可直接字符串比较）。"""
+    try:
+        return (folder / BUILD_ID_FILE).read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def ensure_app_copy() -> None:
+    """把 app_bundle 复制到 app_dir（必要时）。
+
+    - 开发态：直接 return（跑 project_root 源码，永远是最新代码）；
+    - 冻结态且 app_dir 里的业务包**不比本次 exe 自带的新**：替换（旧目录留
+      `app.backup-<时间>` 备份）；
+    - 冻结态且已是最新（或热更新过更新版本）：跳过；
+    - 复制失败弹原生错误框并抛异常。
+
+    为什么要有「比新旧」这一步（2026-10-25 实测）：只判断 app.py 存在就跳过，
+    导致重装/重新打包后 exe 里是**新业务代码**、跑的却还是 `%APPDATA%` 里几个月前
+    那份旧代码——用户看到的界面永远不变，看起来像「改了没生效」。
     """
     if not FROZEN:
         return
     target = app_dir()
-    if (target / "app.py").exists():
-        return
     src = app_bundle_dir()
     if not (src / "app.py").exists():
         # 初始 bundle 缺失：打包异常，不静默继续
@@ -122,6 +138,20 @@ def ensure_app_copy() -> None:
             f"初始业务包缺失：{src}\\app.py 不存在。\n\n请重新安装本软件。"
         )
         raise FileNotFoundError(f"app_bundle missing: {src / 'app.py'}")
+
+    if (target / "app.py").exists():
+        bundled, installed = _read_build_id(src), _read_build_id(target)
+        # 只有「两边都有戳且新版更晚」才替换。任一方没戳（老版本安装 / 热更新包）
+        # 就保持原样——宁可跑旧代码，也不能把用户的业务包覆盖成更旧的。
+        if not (bundled and installed and bundled > installed):
+            return
+        backup = target.with_name("app.backup-" + time.strftime("%Y%m%d-%H%M%S"))
+        try:
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            target.rename(backup)
+        except Exception:                                  # pragma: no cover - 文件被占用
+            return                                          # 替换失败就别动，保持能启动
 
     ensure_dirs()
     try:

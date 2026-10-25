@@ -1,14 +1,20 @@
-"""关于页常量：应用名、版本、团队、主页与版权文案（纯字符串，无副作用）。"""
+"""关于页常量：应用名、版本、团队、主页与版权文案（纯字符串，无副作用）。
 
-APP_NAME = "AI4S 科研助手"
-APP_ENGLISH_NAME = "AI4SResearchAgent"
+注意：桌面壳不导入业务包（config.py），所以品牌名在这里**必须自带一份**。
+改品牌名要同时改：config.py 的 BRAND / BRAND_TAGLINE、本文件 APP_NAME。
+内部标识（AI4SResearchAgent，用于 exe 名 / %APPDATA% 数据目录 / 环境变量前缀）
+保持不变，避免搬走用户已有的文献库与配置。
+"""
+
+APP_NAME = "MoreHand"
+APP_ENGLISH_NAME = "MoreHand"
 APP_VERSION = "v1.0"
-TEAM = "AI4S 科研助手团队"
-HOMEPAGE_URL = "https://github.com/AI4SResearchAgent/AI4SResearchAgent"
+TEAM = "MoreHand 团队"
+HOMEPAGE_URL = "https://github.com/Through1n/ai_research_agent"
 LICENSE = "MIT"
 
 ABOUT_TEXT = (
-    f"{APP_NAME}（{APP_ENGLISH_NAME}）{APP_VERSION}\n"
+    f"{APP_NAME} {APP_VERSION}\n"
     f"{TEAM}\n"
     f"{HOMEPAGE_URL}\n"
     "\n"

@@ -30,7 +30,7 @@ def _about() -> None:
     为保证纯展示、无 Cancel 歧义，这里用原生 MessageBoxW（MB_ICONINFORMATION）。
     """
     import ctypes
-    ctypes.windll.user32.MessageBoxW(None, ABOUT_TEXT, "关于 AI4S 科研助手", 0x40)
+    ctypes.windll.user32.MessageBoxW(None, ABOUT_TEXT, "关于 MoreHand", 0x40)
 
 
 def _check_update() -> None:
@@ -46,7 +46,7 @@ def _check_update() -> None:
         meta, reason = updater.needs_update()
     except Exception as e:
         ctypes.windll.user32.MessageBoxW(
-            None, f"检查更新时出错：{e}", "AI4S 科研助手", MB_ICONERROR
+            None, f"检查更新时出错：{e}", "MoreHand", MB_ICONERROR
         )
         return
 
@@ -55,7 +55,7 @@ def _check_update() -> None:
             None,
             "无法连接到更新服务器。\n\n请检查网络后重试，或访问：\n"
             f"{updater.GITHUB_RELEASE_PAGE}",
-            "AI4S 科研助手", MB_ICONWARNING,
+            "MoreHand", MB_ICONWARNING,
         )
         return
 
@@ -63,7 +63,7 @@ def _check_update() -> None:
         cur = updater.current_business_version()
         ctypes.windll.user32.MessageBoxW(
             None, f"当前已是最新版本（业务版本 {cur}）。",
-            "AI4S 科研助手", MB_ICONINFORMATION,
+            "MoreHand", MB_ICONINFORMATION,
         )
         return
 
@@ -73,7 +73,7 @@ def _check_update() -> None:
             f"发现新业务版本 {meta.get('version')}，但需要运行时 "
             f">= {meta.get('min_runtime_version')}（当前壳层 {updater.RUNTIME_VERSION}）。\n\n"
             f"请下载完整安装包升级：\n{updater.GITHUB_RELEASE_PAGE}",
-            "AI4S 科研助手", MB_ICONWARNING,
+            "MoreHand", MB_ICONWARNING,
         )
         return
 
@@ -83,7 +83,7 @@ def _check_update() -> None:
         ctypes.windll.user32.MessageBoxW(
             None, f"发现新版本 {meta.get('version')}，但下载地址缺失。\n"
                   f"请手动前往 {updater.GITHUB_RELEASE_PAGE} 下载。",
-            "AI4S 科研助手", MB_ICONWARNING,
+            "MoreHand", MB_ICONWARNING,
         )
         return
 
@@ -96,12 +96,12 @@ def _check_update() -> None:
         None,
         f"发现新版本 {meta.get('version')}，正在下载…\n"
         f"下载与校验完成后将弹出结果，下次启动生效。",
-        "AI4S 科研助手", MB_ICONINFORMATION,
+        "MoreHand", MB_ICONINFORMATION,
     )
 
     if not updater.download_package(url, dst, timeout=120.0):
         ctypes.windll.user32.MessageBoxW(
-            None, "下载失败，请稍后重试。", "AI4S 科研助手", MB_ICONERROR
+            None, "下载失败，请稍后重试。", "MoreHand", MB_ICONERROR
         )
         return
 
@@ -111,7 +111,7 @@ def _check_update() -> None:
         min_runtime_version=meta.get("min_runtime_version", "0.0.0"),
     )
     flags = MB_ICONINFORMATION if ok else MB_ICONERROR
-    ctypes.windll.user32.MessageBoxW(None, msg, "AI4S 科研助手", flags)
+    ctypes.windll.user32.MessageBoxW(None, msg, "MoreHand", flags)
 
 
 def _ensure_webview2_gpu_fallback() -> None:
@@ -215,7 +215,7 @@ def _report_page_load_failure() -> None:
             "1. 关闭全屏游戏/占显卡的程序后重试；\n"
             "2. 更新显卡驱动；\n"
             "3. 查看日志目录：%APPDATA%\\AI4SResearchAgent\\logs\\",
-            "AI4S 科研助手",
+            "MoreHand",
             0x10,
         )
     except Exception:

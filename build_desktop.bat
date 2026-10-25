@@ -79,6 +79,11 @@ if errorlevel 1 (
 )
 
 echo [4/4] Size and artifact check...
+REM Stamp the bundled business code with a build timestamp. The desktop shell
+REM compares it with the copy in %APPDATA%\AI4SResearchAgent\app\.build_id and
+REM refreshes that copy when this exe carries newer business code (otherwise a
+REM rebuilt exe silently keeps running last month's app/ and nothing looks new).
+powershell -NoProfile -Command "$p='dist\AI4SResearchAgent\_internal\app_bundle\.build_id'; if (Test-Path (Split-Path $p)) { Set-Content -Path $p -Value ((Get-Date).ToString('o')) }; if (Test-Path $p) { Write-Host ('      bundle build id: ' + (Get-Content $p)) }"
 if exist dist\AI4SResearchAgent (
     powershell -NoProfile -Command "$s=(Get-ChildItem 'dist\AI4SResearchAgent' -Recurse -File | Measure-Object Length -Sum).Sum/1MB; Write-Host ('dist\AI4SResearchAgent total: {0:N1} MB' -f $s)"
     if exist dist\AI4SResearchAgent\AI4SResearchAgent.exe (

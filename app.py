@@ -1,4 +1,4 @@
-"""AI4S 科研助手 Agent —— Streamlit 入口。
+"""MoreHand —— Streamlit 入口。
 
 运行：streamlit run app.py   （或双击「启动科研助手.bat」）
 架构：交互层(ui) → Agent 内核(core) → 工具/服务层(tools/services) → 存储层(storage)。
@@ -28,7 +28,11 @@ def _log_error(what, exc):
     except Exception:
         pass
 
-st.set_page_config(page_title="AI4S 科研助手 Agent", page_icon="🔬", layout="wide")
+try:                                                     # 品牌名取自 config，导入失败也要能起
+    from config import BRAND as _BRAND
+except Exception:                                        # pragma: no cover
+    _BRAND = "MoreHand"
+st.set_page_config(page_title=_BRAND, page_icon="🖐️", layout="wide")
 
 # ---------- 依赖导入兜底：环境缺依赖时给中文提示而不是崩溃 ----------
 try:
@@ -125,19 +129,39 @@ except Exception as e:                                   # pragma: no cover
     _log_error("渲染侧边栏", e)
     st.sidebar.error("⚠️ 操作失败：渲染侧边栏。已回退到默认页面，主体功能仍可使用。")
     st.sidebar.caption("🛠️ 怎么办：已回退到默认页面，主体功能仍可使用。")
-    menu = "🤖 0. Agent 总助手"
+    menu = "智能总助手"
 
 _PAGES = {
-    "🤖": (page_agent.render, "Agent 总助手"),
-    "📁": (page_library.render, "文献库管理"),
-    "💬": (page_qa.render, "问答与溯源"),
-    "📖": (page_reading.render, "版式阅读与翻译"),
-    "🔍": (page_search.render, "检索与追踪"),
-    "🕸️": (page_graph.render, "引用图谱与综述"),
-    "✍️": (page_writing.render, "写作辅助与可视化"),
-    "🏗️": (page_misc.render_arch, "系统架构"),
-    "💡": (page_misc.render_innov, "创新亮点"),
+    "智能总助手": (page_agent.render, "智能总助手"),
+    "文献库管理": (page_library.render, "文献库管理"),
+    "跨文献问答与溯源": (page_qa.render, "问答与溯源"),
+    "版式阅读与智能翻译": (page_reading.render, "版式阅读与翻译"),
+    "论文检索与追踪": (page_search.render, "检索与追踪"),
+    "引用图谱与综述": (page_graph.render, "引用图谱与综述"),
+    "写作辅助与可视化": (page_writing.render, "写作辅助与可视化"),
+    "系统架构设计": (page_misc.render_arch, "系统架构"),
+    "技术创新亮点": (page_misc.render_innov, "创新亮点"),
 }
+
+# 旧会话兼容：导航文案从「🤖 0. 智能总助手」改成「智能总助手」后，
+# 浏览器里残留的 session_state 还可能是旧串。按关键词归位，别把用户甩到首页。
+_LEGACY_KEYWORDS = [
+    ("总助手", "智能总助手"), ("Agent", "智能总助手"), ("文献库", "文献库管理"),
+    ("问答", "跨文献问答与溯源"), ("阅读", "版式阅读与智能翻译"),
+    ("检索", "论文检索与追踪"), ("图谱", "引用图谱与综述"),
+    ("写作", "写作辅助与可视化"), ("架构", "系统架构设计"), ("创新", "技术创新亮点"),
+]
+
+
+def _resolve_menu(raw):
+    """把导航值规整成 _PAGES 的键（本级只兜旧值，不改写会话状态）。"""
+    s = str(raw or "")
+    if s in _PAGES:
+        return s
+    for kw, key in _LEGACY_KEYWORDS:
+        if kw in s:
+            return key
+    return next(iter(_PAGES))
 
 # ---------- flash 提示统一渲染（主体区顶部，跨 rerun 存活） ----------
 # 侧边栏/页面在 st.rerun() 前调用 set_flash()，rerun 后由这里重放，避免提示被吞。
@@ -146,20 +170,9 @@ try:
 except Exception:                                        # pragma: no cover
     pass
 
-_page_name = None
-for prefix, (fn, _n) in _PAGES.items():
-    if str(menu).startswith(prefix):
-        _page_name = _n
-        break
-
-_hit = False
-for prefix, (fn, name) in _PAGES.items():
-    if str(menu).startswith(prefix):
-        safe_render(fn, ctx, name)
-        _hit = True
-        break
-if not _hit:
-    st.info("📭 未匹配到页面路由，已在左侧导航重新选择。")
+_menu_key = _resolve_menu(menu)
+_page_name, _page_fn = _PAGES[_menu_key][1], _PAGES[_menu_key][0]
+safe_render(_page_fn, ctx, _page_name)
 _seq_after = _llm_err_seq()
 
 # ---------- LLM 失败横幅（框架层统一消费 core/llm.py 的 last_error） ----------

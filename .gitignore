@@ -62,6 +62,10 @@ dist_old_*/
 dist-release/
 *.pyc
 version_info.txt
+# 例外：AI4SResearchAgent.spec 里 version="version_info.txt" 硬依赖它，
+# 忽略掉等于「从新克隆的仓库打不出桌面版」（PyInstaller 直接因缺文件失败），
+# 品牌字段（ProductName / CompanyName = MoreHand）也随它丢失。必须入库。
+!version_info.txt
 build_log.txt
 
 # ---------- 应用发布标记文件（内部产物，非交付物）----------

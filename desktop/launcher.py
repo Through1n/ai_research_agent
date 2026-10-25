@@ -127,9 +127,9 @@ def acquire_single_instance():
 
     if port and _health_ok(port):
         _message_box(
-            "AI4S 科研助手已经在运行。\n\n如需打开已有窗口，请查看任务栏；"
+            "MoreHand 已经在运行。\n\n如需打开已有窗口，请查看任务栏；"
             "若窗口被关闭且无法恢复，请结束任务后重试。",
-            "AI4S 科研助手",
+            "MoreHand",
             MB_ICONINFORMATION,
         )
         _log(f"another healthy instance on port {port}, exiting")
@@ -218,7 +218,7 @@ def wait_for_server(port: int, timeout: float = 60.0) -> int:
 
     _message_box(
         f"Streamlit 服务在 {int(timeout)} 秒内未就绪。\n\n日志尾部：\n{tail[-1500:]}",
-        "AI4S 科研助手启动失败",
+        "MoreHand 启动失败",
         MB_ICONERROR,
     )
     _log(f"server wait timeout on port {port}")

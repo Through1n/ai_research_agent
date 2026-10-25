@@ -5,6 +5,13 @@ import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
+# ---------- 品牌（用户可见名称的唯一来源）----------
+# 改名只动这两行 + desktop/about.py 的 APP_NAME（桌面壳不导入业务包，需自带一份）。
+# 注意：AI4SResearchAgent 这个**内部标识**（exe 名 / %APPDATA% 目录 / 环境变量前缀）
+# 保持不变——改它会搬走用户已有的文献库与配置，属于数据迁移，不随品牌改名一起做。
+BRAND = "MoreHand"
+BRAND_TAGLINE = "研究流水线 · 文献 → 问答 → 图谱 → 写作"
+
 # ---------- 桌面 / 开发双模式判定（见 desktop/INTERFACE_CONTRACT.md §3） ----------
 FROZEN = getattr(sys, "frozen", False)
 DESKTOP_MODE = FROZEN or os.environ.get("AI4S_DESKTOP") == "1"

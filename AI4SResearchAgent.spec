@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for AI4S 科研助手（桌面壳 + 初始业务 bundle）。
+"""PyInstaller spec for MoreHand（桌面壳 + 初始业务 bundle）。
+
+注意：exe 名 / 目录名仍是 AI4SResearchAgent —— 它是**内部标识**（%APPDATA% 目录、
+环境变量前缀、更新包定位都靠它），改名会搬走用户已有文献库，不随品牌改名一起动。
 
 布局（PyInstaller 解包后 _MEIPASS 内）：
     AI4SResearchAgent.exe
