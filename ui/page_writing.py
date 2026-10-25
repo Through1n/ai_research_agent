@@ -269,7 +269,7 @@ def _render_plan_chart(df, plan):
         elif kind == "box":
             fig = px.box(df, x=x, y=y, template=tpl, title=plan.get("title", ""))
         else:
-            st.info(f"暂不支持自动渲染的图表类型：{kind}")
+            st.caption(f"暂不支持自动渲染的图表类型：{kind}")
             return
         st.plotly_chart(fig, width="stretch")
     except Exception as e:
@@ -279,7 +279,7 @@ def _render_plan_chart(df, plan):
 def _csv_section(ctx):
     section_header("CSV 数据可视化（自动出图）",
                    "上传 CSV 或载入示例后，系统按列类型自动推荐并渲染图表，无需手动选择；"
-                   "需要更精细控制时，用下方「🛠️ 自定义图表」手动调整。", icon="📊")
+                   "需要精细控制时展开下方「自定义图表」。")
     c_up, c_demo = st.columns([2, 1])
     cf = c_up.file_uploader("上传 CSV", type=["csv"], key="csv")
     with c_demo:
@@ -295,7 +295,7 @@ def _csv_section(ctx):
                     st.session_state.auto_captions = {}
                     st.session_state.caption = ""
                 else:
-                    st.warning("未找到示例 CSV。")
+                    st.caption("未找到示例 CSV。")
             except Exception as e:
                 show_error("载入示例数据", e)
     if cf:
@@ -313,7 +313,9 @@ def _csv_section(ctx):
         empty_state("尚未载入数据，暂无可可视化的内容。",
                     hints=["上传 CSV 文件", "或点击上方「📂 载入示例数据」"])
         return
-    st.write(df.head())
+    # 原始表只是核对用，默认折叠：首屏让位给真正的「自动推荐出的图」。
+    with st.expander("数据预览（前 5 行）", expanded=False):
+        st.write(df.head())
 
     # —— 自动推荐区（T4）——
     plan = st.session_state.get("chart_plan")
@@ -325,7 +327,7 @@ def _csv_section(ctx):
             plan = []
         st.session_state.chart_plan = plan
     if plan:
-        st.markdown(f"#### 🤖 自动推荐图表（{len(plan)} 个，基于列类型推断）")
+        st.markdown(f"#### 自动推荐图表（{len(plan)} 个，基于列类型推断）")
         for i, p in enumerate(plan):
             _render_plan_chart(df, p)
             st.caption("🧭 **推荐依据：** " + str(p.get("reason", "")))
@@ -351,10 +353,10 @@ def _csv_section(ctx):
             if cap_text:
                 st.info("**Figure Caption:** " + cap_text)
                 if not writing.caption_has_numbers(cap_text):
-                    st.warning("该 caption 未包含任何具体数值（可能未引用真实数据），可点击上方按钮重试一次。")
+                    st.caption("该 caption 未包含任何具体数值（可能未引用真实数据），可点击上方按钮重试一次。")
             st.markdown("")
     else:
-        st.info("未能从该表自动推断出合适图表，请在下方「自定义图表」中手动选择 X / Y / 图表类型。")
+        st.caption("未能从该表自动推断出合适图表，可展开下方「自定义图表」手动选择 X / Y / 类型。")
 
     # —— 手动自定义区（保留原有能力）——
     with st.expander("🛠️ 自定义图表（手动选择 X / Y / 类型）", expanded=False):
@@ -431,7 +433,7 @@ def _render_reference_provenance(refs, source):
     refs = refs or []
     if not refs:
         st.error("📭 本次没有可用的真实文献（文献库为空或 PDF 未抽出 References 段），"
-                 "系统**不会**生成任何占位/编造引用。请先到「📁 文献库管理」上传 PDF。")
+                 "系统**不会**生成任何占位/编造引用。请先到「文献库管理」上传 PDF。")
         return
     src_files = sorted({str(r.get("source_pdf") or "").strip() for r in refs
                         if str(r.get("source_pdf") or "").strip()})
@@ -464,22 +466,26 @@ def _render_reference_provenance(refs, source):
 
 
 def _outline_section(ctx):
-    section_header("无幻觉论文框架（References 确定性拼接 + 白名单校验）",
-                   "输入研究 Idea 并选择引用来源，系统生成正文框架；References 由入库 PDF "
-                   "确定性拼接（不经大模型），生成后自动做白名单校验，杜绝编造文献。", icon="✍️")
+    # 本页主操作（首屏只放这一块）：标题只留「做什么」，References 机制细节交给
+    # 生成后的溯源区展示，避免顶部说明与结果说明两处重复。
+    section_header("论文框架生成",
+                   "输入研究 Idea，生成带真实 References 的正文框架（白名单校验，不编造文献）。")
     files = list(getattr(ctx, "paper_order", []) or [])
     if not files:
         empty_state("文献库为空，无法生成框架（以免出现编造文献）。",
-                    hints=["到「📁 文献库管理」上传 PDF",
-                           "或左侧点击「🚀 一键加载演示数据」"])
+                    hints=["到「文献库管理」上传 PDF",
+                           "或左侧点击「一键加载演示数据（6 篇）」"])
         return
-    options = ["自动（文献库首篇）"] + files
-    src = st.selectbox("References 抽取来源", options, key="ref_source")
     idea = st.text_area("输入 Idea", key="idea")
+    options = ["自动（文献库首篇）"] + files
+    # 引用来源属二级参数：默认「自动」就对，收进折叠区，首屏只留「输入 → 生成」。
+    with st.expander("高级设置", expanded=False):
+        src = st.selectbox("References 抽取来源", options, key="ref_source")
+        st.caption("默认取文献库首篇的参考文献表；只有该 PDF 内的参考文献条目才进入白名单。")
     preferred = None if str(src).startswith("自动") else str(src)
 
     _outline_run = bg_running(kinds={_K_OUTLINE})
-    if st.button("🧱 生成框架（引用真实文献）", disabled=_outline_run,
+    if st.button("生成框架（引用真实文献）", disabled=_outline_run,
                  help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
         if not idea:
             st.warning("请先输入 Idea。")
@@ -525,7 +531,7 @@ def _outline_section(ctx):
     st.markdown(text)
 
     # —— T4：References 溯源展示 ——
-    st.markdown("#### 🔎 References 溯源（每条都能追到入库 PDF 的参考文献表）")
+    st.markdown("#### References 溯源（每条都能追到入库 PDF 的参考文献表）")
     if meta.get("empty_library"):
         _render_reference_provenance([], meta.get("source"))
         return
@@ -608,9 +614,9 @@ def _render_tikz(code):
             st.code((res.get("log") or "")[:500] or "（无日志输出）", language="text")
     reason = res.get("reason") or ""
     if not res.get("engine"):
-        st.info("🖇️ 本机未检测到 LaTeX 编译器（已依次查找 tectonic / pdflatex / xelatex / "
-                "lualatex），已降级为源码展示。可复制代码到在线编辑器渲染："
-                " [Overleaf](https://www.overleaf.com) · [tikz.dev](https://tikz.dev)")
+        st.caption("🖇️ 本机未检测到 LaTeX 编译器（已依次查找 tectonic / pdflatex / xelatex / "
+                   "lualatex），已降级为源码展示。可复制代码到在线编辑器渲染："
+                   " [Overleaf](https://www.overleaf.com) · [tikz.dev](https://tikz.dev)")
     else:
         st.warning(f"⚠️ TikZ 编译未成功：{reason}")
 
@@ -646,8 +652,7 @@ def _render_graphviz(code):
 
 def _diagram_section(ctx):
     section_header("架构拓扑图（真实渲染）",
-                   "选择类型并填写主题，生成 Mermaid / TikZ / Graphviz / Matplotlib 代码，"
-                   "并尽可能真实渲染（本地编译器优先，缺失时降级为源码 / 在线编辑器）。", icon="🏗️")
+                   "选择类型并填写主题，生成 Mermaid / TikZ / Graphviz / Matplotlib 代码并尽可能真实渲染。")
     c1, c2 = st.columns(2)
     kind = c1.selectbox("类型", ["mermaid", "tikz", "graphviz", "matplotlib"], key="dg_kind")
     topic = c2.text_input("主题", key="topic")
@@ -706,8 +711,7 @@ def _diagram_section(ctx):
 # ---------------------------------------------------------------- 翻译
 def _translate_section(ctx):
     section_header("学术翻译",
-                   "粘贴待翻译文本，选择中英方向，一键获得学术风格译文（需配置 API Key）。",
-                   icon="🌐")
+                   "粘贴待翻译文本，选择中英方向，一键获得学术风格译文。")
     direction = st.radio("方向", ["中→英", "英→中"], horizontal=True, key="trdir")
     text = st.text_area("粘贴文本", key="trtext", height=160)
     _tr_run = bg_running(kinds={_K_TRANSLATE})
@@ -745,11 +749,16 @@ def render(ctx):
                 _K_CAPTION_CUSTOM: _consume_caption_custom,
                 _K_DIAGRAM: _consume_diagram,
                 _K_TRANSLATE: _consume_translate})
-    page_header("✍️ 学术写作与可视化",
-                "CSV→自动出图+Figure Caption、无幻觉论文框架（白名单校验）、拓扑图真实渲染、中英学术翻译。")
-    # 不再用 container(border=True) 四连包框：全站统一「分区标题 + 留白」分段，
-    # 页面不再是四张并排卡片（那是"老后台模板"的强信号，与去装饰目标相反）。
-    _csv_section(ctx)
+    page_header("学术写作与可视化",
+                "先写正文框架（References 白名单校验），CSV 出图、拓扑图与翻译收在下方页签。")
+    # 首屏信息预算（2026-10-25 降杂乱）：只铺「写作主操作」一块——输入 Idea + 生成按钮；
+    # 其余三类工具收进 tabs，同一时刻只展开一类，避免 4 个同级区块并列铺满第一屏。
     _outline_section(ctx)
-    _diagram_section(ctx)
-    _translate_section(ctx)
+    _t_csv, _t_dia, _t_tr = st.tabs(["CSV 自动出图", "架构拓扑图", "学术翻译"],
+                                    key="writing_tools_tabs")
+    with _t_csv:
+        _csv_section(ctx)
+    with _t_dia:
+        _diagram_section(ctx)
+    with _t_tr:
+        _translate_section(ctx)

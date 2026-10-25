@@ -159,9 +159,12 @@ body{margin:0;padding:0;background:var(--bg-page);color:var(--text);
 
 
 def render_arch(ctx):
-    page_header("🏗️ 系统架构设计",
-                "四层架构：交互层 → Agent 内核 → 工具/服务层 → 存储层，数据流与 Function Calling 闭环。",
-                icon="🏗️")
+    page_header("系统架构设计",
+                "四层架构：交互层 → Agent 内核 → 工具/服务层 → 存储层，数据流与 Function Calling 闭环。")
+    # 首屏先给结论，长文分层说明收进折叠区
+    st.caption("结论：交互层只承载入口、不做业务；Agent 内核负责任务规划、专家路由与工具闭环；"
+               "工具层沉淀 PDF 解析、混合检索、引用图谱与写作绘图；"
+               "存储层统一向量库、稀疏索引与文献元数据。四层自上而下单向依赖，任一层可独立替换。")
     try:
         # height="content"：让 Streamlit 1.63 前端启用 iframe 内容自适应高度（与本文件
         # <head> 内自带的上报 JS 双保险），不再写死 620px 裁掉内容；scrolling=True 兜底。
@@ -171,7 +174,7 @@ def render_arch(ctx):
                        reasons=["内嵌 HTML 组件不可用"],
                        actions=["刷新页面重试", "下方文字版分层说明不受影响"])
     # 分层结论与闭环流程已由上方架构图 + 页头副标题表达，此处不再重复色块，只保留完整版折叠
-    with st.expander("📐 分层与数据流（完整版）", expanded=False):
+    with st.expander("分层与数据流（完整版）", expanded=False):
         st.markdown(_ARCH_DETAIL)
 
 
@@ -217,19 +220,23 @@ _INNOV = [
 
 
 def render_innov(ctx):
-    page_header("💡 技术创新亮点",
-                "12 项工程与算法创新：Agent 闭环、多模型 Provider、混合检索抗幻觉、图论挖掘等。",
-                icon="💡")
-    # 卡片化：两列网格（行优先，编号从左到右读），每卡「标题 + 一句话」
-    for _i in range(0, len(_INNOV), 2):
-        for _col, _idx in zip(st.columns(2), (_i, _i + 1)):
-            if _idx >= len(_INNOV):
-                continue
-            _t, _s, _ = _INNOV[_idx]
-            with _col:
-                with st.container(border=True):
-                    st.markdown(f"**{_idx + 1}. {_t}**\n\n{_s}")
+    page_header("技术创新亮点",
+                "12 项工程与算法创新：Agent 闭环、多模型 Provider、混合检索抗幻觉、图论挖掘等。")
+    # 首屏只留结论性摘要（3 行），12 项卡片与完整说明各收进折叠区
+    st.caption("结论：Agent 侧是可观测的「规划 → 路由 → 工具」闭环，不是按钮式脚本；"
+               "检索侧用查询扩展 + 混合召回 + 角标页码锚点压制幻觉；"
+               "图谱侧用图论区分基石与边缘工作，最终都落到可复现工程（版本锁定、Docker、密钥隔离）。")
+    with st.expander(f"创新点速览（标题 + 一句话 · 共 {len(_INNOV)} 项）", expanded=False):
+        # 卡片化：两列网格（行优先，编号从左到右读），每卡「标题 + 一句话」
+        for _i in range(0, len(_INNOV), 2):
+            for _col, _idx in zip(st.columns(2), (_i, _i + 1)):
+                if _idx >= len(_INNOV):
+                    continue
+                _t, _s, _ = _INNOV[_idx]
+                with _col:
+                    with st.container(border=True):
+                        st.markdown(f"**{_idx + 1}. {_t}**\n\n{_s}")
     # 完整说明不丢，只从首屏收进折叠区
-    with st.expander(f"📋 完整说明（{len(_INNOV)} 项）", expanded=False):
+    with st.expander(f"完整说明（{len(_INNOV)} 项）", expanded=False):
         rows = [{"#": i, "创新点": t, "说明": d} for i, (t, _s, d) in enumerate(_INNOV, 1)]
         pretty_table(pd.DataFrame(rows))

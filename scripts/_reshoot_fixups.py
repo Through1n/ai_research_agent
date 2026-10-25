@@ -115,12 +115,12 @@ def fix_p2(pg, out):
     print("→ [修复] p2 问答与溯源（硬拒答 + 调试区展开）")
     nav(pg, "💬 2. 跨文献问答与溯源")
     fill_text_by_label(pg, "请输入问题", "对比 Transformer 与 BERT 的架构（表格）")
-    btn(pg, "🔎 提问").first.click()
+    btn(pg, "提问").first.click()
     print("  第 1 问（正常问答）…")
     wait_text(pg, "📚 答案来源", timeout=480)
     wait_idle(pg, timeout=60)
     fill_text_by_label(pg, "请输入问题", "红烧肉怎么做才好吃？")
-    btn(pg, "🔎 提问").first.click()
+    btn(pg, "提问").first.click()
     print("  第 2 问（库外问题 → 拒答闸门）…")
     wait_text(pg, "拒答", timeout=300, must=False)
     wait_idle(pg, timeout=60)
@@ -221,7 +221,7 @@ def fix_p6(pg, out):
     fill_text_by_label(pg, "标题 / 关键词 / ID", "graph neural network")
     got = False
     for i in range(6):
-        btn(pg, "🔍 搜索 arXiv").first.click()
+        btn(pg, "搜索 arXiv").first.click()
         print(f"  arXiv 检索第 {i + 1} 次…")
         t0 = time.time()
         while time.time() - t0 < 120:

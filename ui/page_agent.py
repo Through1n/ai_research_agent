@@ -28,15 +28,15 @@ _SRC_ITEM_RE = re.compile(r"\{[^{}]*\"(?:ref|file|source)\"\s*:\s*\"[^\"]+\"[^{}
 # goal 为真实提交给后台的自然语言文本（不含 emoji 前缀），
 # 保证提交内容仍是中文自然语言，_submit_goal / task_center.submit 逻辑不变。
 SUGGEST = [
-    {"icon": "🤖", "title": "对比架构承袭", "desc": "Transformer vs BERT 架构关系，用表格",
+    {"title": "对比架构承袭", "desc": "Transformer vs BERT 架构关系，用表格",
      "goal": "对比 Transformer 和 BERT 的架构承袭关系，用表格"},
-    {"icon": "🧮", "title": "训练算力与指标", "desc": "用了什么 GPU？BLEU 是多少？",
+    {"title": "训练算力与指标", "desc": "用了什么 GPU？BLEU 是多少？",
      "goal": "Transformer 训练用了什么 GPU？BLEU 是多少？"},
-    {"icon": "🕸️", "title": "引用图谱", "desc": "构建引用图谱并找出基石论文",
+    {"title": "引用图谱", "desc": "构建引用图谱并找出基石论文",
      "goal": "帮我构建引用图谱并找出基石论文"},
-    {"icon": "🔍", "title": "最新论文检索", "desc": "检索 arXiv cs.AI 并推荐开源代码",
+    {"title": "最新论文检索", "desc": "检索 arXiv cs.AI 并推荐开源代码",
      "goal": "检索最新的 arXiv cs.AI 论文并推荐有开源代码的"},
-    {"icon": "✍️", "title": "论文框架生成", "desc": "根据 Idea 出框架 + Mermaid 架构图",
+    {"title": "论文框架生成", "desc": "根据 Idea 出框架 + Mermaid 架构图",
      "goal": "根据 Idea 生成论文框架和 Mermaid 架构图"},
 ]
 
@@ -299,26 +299,18 @@ def _submit_goal(ctx, goal):
 
 
 def render(ctx):
-    page_header("🤖 智能总助手（Agent）",
-                "说一句需求，自动完成任务规划、多智能体路由、工具调用闭环，答案带内联引用与溯源。",
-                icon="🤖")
+    page_header("智能总助手（Agent）",
+                "一句需求，自动完成规划、路由与工具调用，答案带内联引用与溯源。")
     ensure_state({"agent_runs": list})
 
-    # 新手引导：只在「还没跑过任何任务」时出现。
-    # 常驻的话，一个用熟了的用户每次进首页都要先读一大段蓝框说明——主流 Agent
-    # 的做法是「空状态才引导，有内容就闭嘴」。
+    # 新手引导：只在「还没跑过任何任务」时出现，且压缩成一行——详细步骤
+    # 已在页面底部空状态卡片里逐条给出，这里不再重复整段说明（首屏减法）。
     if not st.session_state.get("agent_runs"):
-        st.info(
-            "**三步上手**：① 点左侧「🚀 一键加载演示数据（6 篇）」把 6 篇经典论文装入本地库 "
-            "→ ② 点下方任意**示例任务**，会真实调用大模型在本地库检索并生成**带【n】引用的答案**"
-            "（结果出现在本页下方「历史记录」，实时进度见左侧任务中心） "
-            "→ ③ 在底部输入框换成你自己的科研任务，提交后后台运行、可随时切去其他页面。",
-            icon="🧭",
-        )
+        st.caption("三步上手：左侧一键加载演示数据 → 点下方任意示例任务 → 底部输入框提交自己的任务。")
     # 库为空时的针对性提示：检索/图谱类示例在空库下答案会很有限，先引导加载演示数据
     if not getattr(ctx, "files", None):
-        st.caption("💡 文献库为空：示例里的检索 / 图谱类任务将返回有限结果，"
-                   "建议先点左侧「🚀 一键加载演示数据」再试。")
+        st.caption("文献库为空：示例里的检索 / 图谱类任务将返回有限结果，"
+                   "建议先点左侧「一键加载演示数据（6 篇）」再试。")
 
     # --- 示例任务：紧凑卡片（图标 + 短标题 + 一行灰字描述），点击即提交后台执行 ---
     st.markdown("**💡 试试这些示例任务**（点击即后台运行，约 10–30 秒返回带引用答案）")
@@ -327,7 +319,7 @@ def render(ctx):
         try:
             with cols[i % SUGGEST_COLS]:
                 with st.container(border=True):
-                    st.markdown(f"**{_e(s['icon'])} {_e(s['title'])}**")
+                    st.markdown(f"**{_e(s['title'])}**")
                     st.caption(s["desc"])
                     if st.button("用此任务 ▶", key=f"sug{i}", use_container_width=True):
                         # 提交的是纯中文自然语言目标（已无 emoji 前缀），后台逻辑不变
@@ -335,13 +327,13 @@ def render(ctx):
         except Exception:
             continue
     # 全站能力速览（评委视角：让新用户一屏看懂整个产品能做什么，明确"使用起来怎么样"）
-    with st.expander("🗺️ 全站能力速览：这 7 大功能分别能帮你做什么？", expanded=False):
+    with st.expander("全站能力速览：这 7 大功能分别能帮你做什么？", expanded=False):
         st.markdown(
             "左侧导航对应 7 个工作页，一句话能力地图：\n\n"
             "| 功能 | 你给它什么 | 它产出什么 |\n"
             "|---|---|---|\n"
             "| 🤖 智能总助手 | 一句科研需求 | 自动规划→路由→调工具，带【n】引用的答案 |\n"
-            "| 📁 文献库管理 | PDF | 语义查重 / 扫描件 OCR / 结构解析 / 版本对比 |\n"
+            "| 文献库管理 | PDF | 语义查重 / 扫描件 OCR / 结构解析 / 版本对比 |\n"
             "| 💬 跨文献问答 | 一个问题 | 基于本地库的答案 + 可点开的溯源卡片 |\n"
             "| 📖 版式阅读 | PDF | 双栏原生渲染 / 中英对照 / 划词翻译 / 引用双向跳转 |\n"
             "| 🔍 检索与追踪 | 关键词 / 话题 | arXiv·PubMed·网页检索 + 增量订阅推送 |\n"

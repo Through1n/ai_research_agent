@@ -56,7 +56,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 
-from ui.common import (embed_html, page_header, show_error, empty_state,
+from ui.common import (embed_html, page_header, section_header, show_error, empty_state,
                        is_llm_degraded, llm_degraded_banner,
                        bg_submit, bg_consume, bg_running)
 from ui.sidebar import set_flash
@@ -1546,8 +1546,8 @@ def _find_citation(doc, cit, tps):
 
 # ============================ 主渲染 ============================
 def render(ctx):
-    page_header("📖 版式阅读与智能翻译",
-                "原生渲染 · 中英对照 · 原位 PDF · 引用跳转 · 划词翻译 · 标题树")
+    page_header("版式阅读与智能翻译",
+                "原生版式渲染 · 中英对照 · 原位 PDF · 引用与划词翻译")
     # 注意：只初始化「非 widget」key；widget key（np/sp/pp/hp/cit/hl_frag/ld_*）
     # 若在这里预设会触发 Streamlit 的 "default value + session_state" 警告。
     _ensure_state({"read_tr_cache": {}, "read_jump_page": 1, "read_jump_para": None, "hl": "",
@@ -1581,20 +1581,20 @@ def render(ctx):
         path = _resolve_doc(ctx, prefer)
         if not path:
             empty_state("请先在文献库导入论文，或临时上传 PDF。",
-                        hints=["点击左侧「🚀 一键加载演示数据（6 篇）」",
-                               "或到「📁 文献库管理」上传 PDF"])
+                        hints=["点击左侧「一键加载演示数据（6 篇）」",
+                               "或到「文献库管理」上传 PDF"])
             return
         try:
             doc = parsing.open_doc(path)
         except Exception as e:
             show_error("打开 PDF", e)
-            st.caption("🛠️ 怎么办：确认文件未损坏；或改用「📁 文献库管理」重新上传。")
+            st.caption("🛠️ 怎么办：确认文件未损坏；或改用「文献库管理」重新上传。")
             return
         tps = int(getattr(doc, "page_count", 0) or 0)
         if tps <= 0:
             st.warning("⚠️ 该 PDF 没有可读取的页面。")
             return
-        st.caption(f"📄 {os.path.basename(path)}（{tps} 页）")
+        st.caption(f"{os.path.basename(path)} · 共 {tps} 页")
         # T1/T2 缓存键：文件名 + 页数（切换 PDF 时自动失效）
         doc_id = "%s|%d" % (os.path.basename(path), int(tps))
 
@@ -1637,75 +1637,76 @@ def render(ctx):
         default_page = min(max(1, int(default_page)), tps)
 
         # key=：翻页/划词/翻译都会重跑，无 key 时页签被重置回「原生渲染」
-        tabs = st.tabs(["📄 原生渲染", "🌐 中英同步滚动", "📑 原位 PDF",
-                        "🔗 引用跳转", "🖱️ 划词翻译", "📚 标题树"], key="read_tab")
+        tabs = st.tabs(["原生渲染", "中英同步滚动", "原位 PDF",
+                        "引用跳转", "划词翻译", "标题树"], key="read_tab")
 
         # ---------- 1 原生渲染（A1） ----------
         with tabs[0]:
             try:
                 p = st.number_input("页码", 1, tps, value=default_page, key="np")
-                st.markdown("**🖼️ 单页操作**")
-                c_a, c_b = st.columns([1, 1])
-                with c_a:
-                    if st.button("🎨 渲染该页", key="np_go"):
+                section_header("单页操作", "渲染当前页的原生版式（不重排）；栏数等解析诊断收在下方折叠区。")
+                if st.button("渲染该页", key="np_go", use_container_width=True):
+                    try:
+                        # T2：标题树跳转命中的那页，把标题文字高亮出来
+                        hl_word = ""
                         try:
-                            # T2：标题树跳转命中的那页，把标题文字高亮出来
+                            hlv = st.session_state.get("read_hl")
+                            if isinstance(hlv, dict) and int(hlv.get("page", 0)) == int(p):
+                                hl_word = str(hlv.get("title") or "")
+                        except Exception:
                             hl_word = ""
-                            try:
-                                hlv = st.session_state.get("read_hl")
-                                if isinstance(hlv, dict) and int(hlv.get("page", 0)) == int(p):
-                                    hl_word = str(hlv.get("title") or "")
-                            except Exception:
-                                hl_word = ""
-                            h, pw, ph = native_page_html(doc, int(p), highlight=hl_word or None)
-                            # 结果落会话态：Streamlit 每次重跑都重建元素树，若只在按钮
-                            # 分支里 embed_html，用户点任意其他控件（如「检测本页栏数」）
-                            # 渲染结果就整块消失（2026-10-24 真机复现，见
-                            # scripts/_verify_read_render_persist.py）。
-                            st.session_state["read_np_render"] = {
-                                "page": int(p), "html": h,
-                                "height": min(int(ph * 1.18) + 60, 900), "hl": hl_word or ""}
-                        except Exception as e:
-                            st.session_state["read_np_render"] = {"err": str(e)[:160]}
-                with c_b:
-                    if st.button("🔍 检测本页栏数", key="np_col"):
+                        h, pw, ph = native_page_html(doc, int(p), highlight=hl_word or None)
+                        # 结果落会话态：Streamlit 每次重跑都重建元素树，若只在按钮
+                        # 分支里 embed_html，用户点任意其他控件（如「检测本页栏数」）
+                        # 渲染结果就整块消失（2026-10-24 真机复现，见
+                        # scripts/_verify_read_render_persist.py）。
+                        st.session_state["read_np_render"] = {
+                            "page": int(p), "html": h,
+                            "height": min(int(ph * 1.18) + 60, 900), "hl": hl_word or ""}
+                    except Exception as e:
+                        st.session_state["read_np_render"] = {"err": str(e)[:160]}
+                # ---- 结果区（会话态驱动：跨重跑保留，宽度占满整行）----
+                _r = st.session_state.get("read_np_render")
+                if _r:
+                    if _r.get("err"):
+                        st.warning(f"该页渲染失败：{_r['err']}")
+                    else:
+                        st.caption(f"已渲染第 {_r.get('page')} 页（原生版式，不重排）")
+                        embed_html(_r["html"], height=_r.get("height") or 900, scrolling=True)
+                        if _r.get("hl"):
+                            st.caption(f"已高亮标题：{str(_r['hl'])[:60]}")
+
+                # 解析诊断（栏数检测等）从首屏收起：主操作区只留「页码 + 渲染」
+                with st.expander("解析与版式诊断", expanded=False):
+                    if st.button("检测本页栏数", key="np_col"):
                         try:
                             info = detect_columns(doc[int(p) - 1])
                             if info.get("n_cols") == 2:
                                 g = info.get("gap") or (0, 0)
                                 st.session_state["read_np_cols"] = {
                                     "tone": "success", "page": int(p),
-                                    "msg": (f"📑 双栏：左 {info.get('left')} 块 / 右 {info.get('right')} 块，"
+                                    "msg": (f"双栏：左 {info.get('left')} 块 / 右 {info.get('right')} 块，"
                                             f"中缝 {g[0]:.0f}–{g[1]:.0f}pt")}
                             else:
                                 st.session_state["read_np_cols"] = {
                                     "tone": "info", "page": int(p),
-                                    "msg": (f"📄 单栏（文本块 {info.get('n_blocks')} 个，"
+                                    "msg": (f"单栏（文本块 {info.get('n_blocks')} 个，"
                                             f"未发现 ≥ {12:g}pt 中缝）")}
                         except Exception as e:
                             st.session_state["read_np_cols"] = {
                                 "tone": "warning", "page": int(p),
-                                "msg": f"⚠️ 栏数检测失败：{str(e)[:160]}"}
-                # ---- 结果区（会话态驱动：跨重跑保留，宽度占满整行）----
-                _cols = st.session_state.get("read_np_cols")
-                if _cols:
-                    _show = {"success": st.success, "info": st.info,
-                             "warning": st.warning}.get(_cols.get("tone"), st.info)
-                    _show(_cols.get("msg", ""))
-                _r = st.session_state.get("read_np_render")
-                if _r:
-                    if _r.get("err"):
-                        st.warning(f"⚠️ 该页渲染失败：{_r['err']}")
-                    else:
-                        st.caption(f"🖼️ 已渲染第 {_r.get('page')} 页（原生版式，不重排）")
-                        embed_html(_r["html"], height=_r.get("height") or 900, scrolling=True)
-                        if _r.get("hl"):
-                            st.caption(f"🔎 已高亮标题：{str(_r['hl'])[:60]}")
+                                "msg": f"栏数检测失败：{str(e)[:160]}"}
+                    _cols = st.session_state.get("read_np_cols")
+                    if _cols:
+                        _show = {"success": st.success, "info": st.info,
+                                 "warning": st.warning}.get(_cols.get("tone"), st.info)
+                        _show(_cols.get("msg", ""))
+                    st.caption("栏数决定原生渲染用单栏还是双栏容器，属诊断信息，不影响正文阅读。")
             except Exception as e:
                 st.warning(f"⚠️ 原生渲染区异常：{str(e)[:160]}")
 
             st.divider()
-            with st.expander("📚 长文档批量扫描（性能 / 内存加固）", expanded=False):
+            with st.expander("长文档批量扫描（性能 / 内存加固）", expanded=False):
                 try:
                     c1, c2, c3 = st.columns([1, 1, 1])
                     with c1:

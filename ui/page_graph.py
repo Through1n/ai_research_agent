@@ -45,7 +45,7 @@ def _metrics_rows(ctx, nodes, metrics):
     ind = (metrics or {}).get("indegree", {}) or {}
     bet = (metrics or {}).get("betweenness", {}) or {}
     eig = (metrics or {}).get("eigenvector", {}) or {}
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "论文": [_title(ctx, n) for n in nodes],
         "文件名": list(nodes),
         "年份": [g._node_year(ctx, n) or "未知" for n in nodes],
@@ -54,6 +54,10 @@ def _metrics_rows(ctx, nodes, metrics):
         "中介中心性": [round(float(bet.get(n, 0)), 3) for n in nodes],
         "特征向量": [round(float(eig.get(n, 0)), 4) for n in nodes],
     }).sort_values("PageRank", ascending=False)
+    # 整列同值的列没有信息量（单节点时的「文件名」、年份全缺时的「未知」），
+    # 一律删掉——首屏不摆死列；「论文」是行标识，始终保留。
+    return df[[c for c in df.columns
+               if c == "论文" or df[c].nunique(dropna=False) > 1]]
 
 
 def _build_worker(ctx, progress):
@@ -305,7 +309,7 @@ def _consume_future(ctx, kind, t):
     if t["state"] == "error":
         set_flash("error", "⚠️ 前沿扫描失败：%s"
                            "\n\n🩺 可能原因：大模型返回超时 / 额度不足；图谱为空"
-                           "\n\n🛠️ 怎么办：先点「🕸️ 构建引用图谱」；或重试一次"
+                           "\n\n🛠️ 怎么办：先点「构建引用图谱」；或重试一次"
                    % str(t.get("error") or "")[:150])
         return
     res = t.get("result")
@@ -328,9 +332,15 @@ def _consume_future(ctx, kind, t):
 
 
 def _render_pack(ctx, pack):
-    """渲染图谱 + 指标表 + 基石/边缘结论（HTML 生成失败不影响其余展示）。"""
+    """渲染图谱 + 指标表 + 基石/边缘结论（HTML 生成失败不影响其余展示）。
+
+    首屏信息预算（2026-10-25 降杂乱）：只留「图 + KPI 指标条」。图论指标大表、
+    基石/边缘论文名单、引用边清单、时间线全部收进折叠区；诊断类提示降级为
+    caption——打开本页第一眼是图谱本身，而不是 7 列表格与色块。
+    """
+    # 演示模式是唯一保留的 warning（内容真实性必须显式声明，不能只做灰字）
     if pack.get("demo"):
-        st.warning("🎭 当前为**演示模式示意图谱**：依据主题相似度生成，**不代表真实引用关系**。"
+        st.warning("当前为**演示模式示意图谱**：依据主题相似度生成，**不代表真实引用关系**。"
                    "需真实引用请上传含 References 章节的完整 PDF。")
         if pack.get("degrade_note"):
             # 语义向量不可用 → 关键词重合度建边的口径说明（随包持久化，跨 rerun 仍可见）
@@ -341,7 +351,7 @@ def _render_pack(ctx, pack):
         if _hint:
             # 后台化改造：HTML 生成失败在 worker 内置空 + 带标记（线程内禁 st.*），
             # 这里随 pack 持久化展示，话术沿用原 friendly_error 的原因/动作要点
-            st.warning("⚠️ 图谱可视化 HTML 生成失败（下方表格版图论指标不受影响）。")
+            st.caption("⚠️ 图谱可视化 HTML 生成失败（下方表格版图论指标不受影响）。")
             st.caption(f"🩺 可能原因：lib/vis-9.1.2 可视化库文件缺失；{_hint[:160]}")
             st.caption("🛠️ 怎么办：检查 lib/ 目录完整性；表格版图论指标仍可正常使用。")
         else:
@@ -351,7 +361,7 @@ def _render_pack(ctx, pack):
 
     nodes = pack.get("nodes") or []
     if not nodes:
-        empty_state("图谱为空节点。", hints=["点击左侧「🚀 一键加载演示数据」", "或在📁文献库上传 PDF"])
+        empty_state("图谱为空节点。", hints=["点击左侧「一键加载演示数据（6 篇）」", "或在文献库上传 PDF"])
         return
 
     # KPI 指标条先行（Round 17 UI/UX，借鉴 Stripe/Vercel 仪表盘：hero 指标先行、
@@ -366,23 +376,27 @@ def _render_pack(ctx, pack):
     ])
 
     # 语料规模坦诚说明：逻辑节点远低于赛题「20 篇批量文献」时明确标注，
-    # 不把 2-3 节点小图上的社区/PageRank 结果冒充成大规模能力
+    # 不把 2-3 节点小图上的社区/PageRank 结果冒充成大规模能力。
+    # 属说明性信息（不阻断操作），从 warning 色块降级为一行灰字。
     if len(nodes) < g.SMALL_CORPUS_NODES:
-        st.warning(
-            f"⚠️ **语料规模坦诚说明**：本地语料经版本合并后仅 **{len(nodes)} 个逻辑节点**"
-            f"（同一 arXiv 号的多版本 PDF 会合并为 1 个节点），未达赛题『20 篇批量文献』规模。"
-            f"社区发现 / PageRank / 时间线在极小图上区分度有限——此处只证明"
-            f"『解析→建图→分析→综述』链路可用，不代表 20 篇规模下的效果。")
-    pretty_table(_metrics_rows(ctx, nodes, pack.get("metrics") or {}), title="📊 图论指标")
+        st.caption(
+            f"语料规模说明：版本合并后仅 {len(nodes)} 个逻辑节点（同一 arXiv 号的多版本 PDF"
+            f"合并为 1 个），未达『20 篇批量文献』规模——社区/PageRank 在极小图上区分度有限，"
+            f"此处只证明『解析→建图→分析→综述』链路可用。")
 
-    if pack.get("corner"):
-        st.success("🏆 基石论文：" + "、".join(f"《{_title(ctx, n)}》" for n in pack["corner"]))
-    if pack.get("edge"):
-        st.info("🌿 边缘衍生（暂未被他文引用）：" + "、".join(f"《{_title(ctx, n)}》" for n in pack["edge"]))
+    # 数字明细默认收起：首屏不摊开 7 列表。
+    with st.expander("图谱指标明细", expanded=False):
+        pretty_table(_metrics_rows(ctx, nodes, pack.get("metrics") or {}), title="图论指标")
+        if pack.get("corner"):
+            st.markdown("**基石论文（PageRank 领先）**："
+                        + "、".join(f"《{_title(ctx, n)}》" for n in pack["corner"]))
+        if pack.get("edge"):
+            st.markdown("**边缘衍生（暂未被他文引用）**："
+                        + "、".join(f"《{_title(ctx, n)}》" for n in pack["edge"]))
 
     edges = pack.get("edges") or []
     if edges:
-        with st.expander(f"🔗 引用关系（{len(edges)} 条）", expanded=False):
+        with st.expander(f"引用关系（{len(edges)} 条）", expanded=False):
             for item in edges[:MAX_EDGE_SHOW]:
                 try:
                     a, b, ev = item
@@ -393,9 +407,10 @@ def _render_pack(ctx, pack):
             if len(edges) > MAX_EDGE_SHOW:
                 st.caption(f"ℹ️ 共 {len(edges)} 条，已展示前 {MAX_EDGE_SHOW} 条。")
     else:
-        st.info("📭 未检测到引用边（孤立节点图谱仅展示图论指标）。")
+        st.caption("📭 未检测到引用边（孤立节点图谱仅展示图论指标）。")
 
-    # 时间线 + 主题簇：纯 networkx 确定性计算（非 LLM 生成），让小图谱也有信息量
+    # 时间线 + 主题簇：纯 networkx 确定性计算（非 LLM 生成），让小图谱也有信息量。
+    # 默认折叠：它是"补充读物"，不该在首屏与主图争夺注意力。
     G = pack.get("G")
     if G is not None and not pack.get("demo") and G.number_of_nodes() > 0:
         try:
@@ -403,7 +418,7 @@ def _render_pack(ctx, pack):
         except Exception:
             stx = None
         if stx:
-            with st.expander("🗓️ 时间线与主题簇（networkx 确定性计算，非 LLM 生成）", expanded=True):
+            with st.expander("时间线与主题簇（networkx 确定性计算，非 LLM 生成）", expanded=False):
                 if stx["timeline"]:
                     for y, papers in stx["timeline"]:
                         st.markdown(f"- **{y}**：" + "、".join(f"《{_title(ctx, p)}》" for p in papers))
@@ -424,18 +439,29 @@ def render(ctx):
         _GRAPH_REVIEW_KIND: lambda k, t: _consume_review(ctx, k, t),
         _GRAPH_FUTURE_KIND: lambda k, t: _consume_future(ctx, k, t),
     })
-    page_header("🕸️ 引用图谱与综述",
-                "自动解析论文间真实引用关系，PageRank/中心性挖掘基石论文，结合时间线过滤已被解决的旧 idea。",
-                icon="🕸️")
+    page_header("引用图谱与综述",
+                "自动解析论文间真实引用关系，PageRank/中心性挖掘基石论文，结合时间线过滤已被解决的旧 idea。")
 
     if not require_library(ctx):
         return
 
+    # 首屏信息预算：页头 → 一行状态 caption → 主按钮/主视图。
+    # 指标表、引用边、时间线、演示设置全部进折叠区，打开本页不再被多段说明铺满。
+    _pack = st.session_state.get("graph_pack")
+    _nodes0 = list(_pack.get("nodes") or []) if isinstance(_pack, dict) else []
+    _n_papers = len(getattr(ctx, "paper_order", []) or [])
+    if _nodes0:
+        st.caption(f"{_n_papers} 篇文献 · 图谱已构建：{len(_nodes0)} 个节点 · "
+                   f"{len(_pack.get('edges') or [])} 条引用边")
+    else:
+        st.caption(f"{_n_papers} 篇文献 · 尚未构建图谱")
+
     # ===== 区一：引用图谱可视化（构建 / 结果 / 演示，均属图谱范畴） =====
-    section_header("引用图谱可视化", icon="🕸️")
+    # 不再单独起 section_header：页头已表明本页主体是图谱，这里直接给主按钮，
+    # 避免「页头 28px + 分区 18px」两级标题连排、把主操作挤到第二屏。
     with st.container(border=True):
         _gr_build = bg_running(kinds={_GRAPH_BUILD_KIND})
-        if st.button("🕸️ 构建引用图谱", disabled=_gr_build,
+        if st.button("构建引用图谱", disabled=_gr_build,
                      help="后台构建：提交后可切换其他页面，实时进度见左侧任务中心"):
             # 后台化改造（2026-10 R19）：原内联流程跑主线程，跑时整个 UI 冻结。
             # worker 内完成建图 + HTML + pack 组装并返回 pack，交付处理器写回
@@ -463,41 +489,44 @@ def render(ctx):
             empty_state_card(
                 "尚未构建图谱",
                 desc="构建后，这里会展示引用关系网络图、KPI 指标与图论指标表、基石/边缘论文结论。",
-                actions=["点上方「🕸️ 构建引用图谱」，解析文献间的真实引用关系",
+                actions=["点上方「构建引用图谱」，解析文献间的真实引用关系",
                          "演示数据加载后可一键生成 BERT→Transformer 关系",
-                         "无真实引用边时可用「🎭 演示模式示意图谱」兜底"],
+                         "无真实引用边时，展开下方「渲染设置」用演示模式示意图谱兜底"],
                 footer="⚠️ 本地演示语料经版本合并后仅 2-3 个逻辑节点，未达赛题『20 篇』规模；"
                        "图谱指标在小语料下仅供参考，上传更多含 References 的 PDF 效果更佳。",
             )
 
-        st.markdown("---")
-        if st.button("🎭 演示模式示意图谱"):
-            with st.spinner(step_text("🎭 正在生成演示模式示意图谱")):
-                try:
-                    G, edges, metrics, corner, edge, degrade_note = _build_demo(ctx)
+        # 演示模式属于「兜底渲染方式」，不是主路径：收进渲染设置，避免与主按钮并列
+        # 抢注意力（按钮文案/key 不变，功能仍直达）。
+        with st.expander("渲染设置", expanded=False):
+            st.caption("无真实引用边时，可按主题相似度生成示意关系（示意，非真实引用）。")
+            if st.button("🎭 演示模式示意图谱"):
+                with st.spinner(step_text("🎭 正在生成演示模式示意图谱")):
                     try:
-                        html = g.graph_html(G, metrics, corner)
-                    except Exception:
-                        html = ""
-                    pack = _make_pack(G, edges, metrics, corner, edge, demo=True)
-                    pack["html"] = html
-                    pack["degrade_note"] = degrade_note
-                    st.session_state.graph_pack = pack
-                    # 本按钮位于「图谱结果读取」之后，若不 rerun，本轮页面上方的
-                    # 「尚未构建图谱」空状态会与新生成的图谱并存，自相矛盾。
-                    # 提示写进 flash 以跨 rerun 存活（直接 st.success 会被吞）。
-                    set_flash("success", f"✅ 演示图谱已生成：{len(pack['nodes'])} 节点 · "
-                                         f"{len(edges)} 条示意关系")
-                    st.rerun()
-                except Exception as e:
-                    friendly_error("演示模式示意图谱", e,
-                                   reasons=["论文数量不足 2 篇", "embedding 推理失败"],
-                                   actions=["先加载演示数据（6 篇）", "或上传至少 2 篇 PDF"])
+                        G, edges, metrics, corner, edge, degrade_note = _build_demo(ctx)
+                        try:
+                            html = g.graph_html(G, metrics, corner)
+                        except Exception:
+                            html = ""
+                        pack = _make_pack(G, edges, metrics, corner, edge, demo=True)
+                        pack["html"] = html
+                        pack["degrade_note"] = degrade_note
+                        st.session_state.graph_pack = pack
+                        # 本按钮位于「图谱结果读取」之后，若不 rerun，本轮页面上方的
+                        # 「尚未构建图谱」空状态会与新生成的图谱并存，自相矛盾。
+                        # 提示写进 flash 以跨 rerun 存活（直接 st.success 会被吞）。
+                        set_flash("success", f"✅ 演示图谱已生成：{len(pack['nodes'])} 节点 · "
+                                             f"{len(edges)} 条示意关系")
+                        st.rerun()
+                    except Exception as e:
+                        friendly_error("演示模式示意图谱", e,
+                                       reasons=["论文数量不足 2 篇", "embedding 推理失败"],
+                                       actions=["先加载演示数据（6 篇）", "或上传至少 2 篇 PDF"])
 
     # ===== 区二：领域综述与前沿方向生成（与图谱可视化明确区分） =====
     # 原先这里有一条 st.markdown("---")：但紧跟其后的 _sec_head 本身已经是分区信号，
     # 横线 + 标题 = 双重视觉打断，删掉横线用留白分区更干净。
-    section_header("领域综述与前沿方向生成", icon="📝")
+    section_header("领域综述与前沿方向生成")
     with st.container(border=True):
         c2, c3 = st.columns([1, 1])
         _gr_review = bg_running(kinds={_GRAPH_REVIEW_KIND})
@@ -548,7 +577,7 @@ def render(ctx):
         review_txt = st.session_state.get("review", "") or ""
         future_txt = st.session_state.get("future", "") or ""
         if review_txt:
-            st.markdown("##### 📖 领域综述")
+            st.markdown("##### 领域综述")
             # 降级内容先给可见标识，再展示正文（覆盖后续所有 rerun）
             if is_llm_degraded(review_txt):
                 llm_degraded_banner()
@@ -556,7 +585,7 @@ def render(ctx):
                 llm_offline_generated_banner("领域综述")
             long_block(review_txt, title="领域综述全文", limit=200)
         if future_txt:
-            st.markdown("##### 🚀 前沿方向")
+            st.markdown("##### 前沿方向")
             if is_llm_degraded(future_txt):
                 llm_degraded_banner()
             elif is_llm_offline_generated(future_txt):

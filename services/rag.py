@@ -768,11 +768,11 @@ def _library_hint(ctx):
     except Exception:
         n = 0
     if n == 0:
-        return ("；当前文献库为空，请先到「📁 文献库管理」上传 PDF，"
-                "或点击左侧「🚀 一键加载演示数据」后再提问")
+        return ("；当前文献库为空，请先到「文献库管理」上传 PDF，"
+                "或点击左侧「一键加载演示数据（6 篇）」后再提问")
     if n < SMALL_LIBRARY_CHUNKS:
         return (f"；当前文献库仅 {n} 个片段（{len(getattr(ctx, 'files', []) or [])} 篇），"
-                f"覆盖面有限，建议补充文献或到「📁 文献库管理」重建索引后重试")
+                f"覆盖面有限，建议补充文献或到「文献库管理」重建索引后重试")
     return ""
 
 

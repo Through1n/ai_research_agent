@@ -98,9 +98,9 @@ def _library_guidance(ctx):
     if n == 0:
         return None  # require_library 已给出空库引导
     if n < SMALL_LIBRARY_CHUNKS:
-        return (f"📌 **当前文献库仅 {n} 个片段**（{len(getattr(ctx, 'files', []) or [])} 篇），"
-                f"检索覆盖面有限，答案可能不完整。建议：① 到「📁 文献库管理」上传更多 PDF；"
-                f"② 或点击左侧「🚀 一键加载演示数据」；③ 或在该页重建索引后重试。")
+        return (f"当前文献库仅 {n} 个片段（{len(getattr(ctx, 'files', []) or [])} 篇），"
+                f"检索覆盖面有限，答案可能不完整。建议：① 到「文献库管理」上传更多 PDF；"
+                f"② 或点击左侧「一键加载演示数据（6 篇）」；③ 或在该页重建索引后重试。")
     return None
 
 
@@ -142,13 +142,13 @@ def anchor_card(source, page, score=0.0, para_idx=None, n=None):
     1) 卡片顶部 <a id="p{page}"> 页内锚点落点（source_card 无，本页独有）；
     2) 页码徽章 <a href="#p{page}"> 页内锚点跳转（source_card 的徽章是**跨页** href，
        语义不同，故保留本页的页内语义）；
-    3) 徽章旁的「📖 打开阅读页」<a href="?p=3&jump_page=N&paper=X"> 跨页跳阅读页
+    3) 徽章旁的「打开阅读页」<a href="?p=3&jump_page=N&paper=X"> 跨页跳阅读页
        —— 这正是 common.source_card 的跨页能力，本卡把它保留在自己独有的入口上
        （ui/page_reading.py 已消费 jump_page / paper 两个 query 参数）。
 
     💡 建议后续收敛：给 ui/common.py 的 source_card 加两个开关参数
     ``anchor_id=True``（生成 <a id="p{N}"> + 徽章 href 改页内）与
-    ``reading_entry=True``（追加「📖 打开阅读页」入口），本函数即可退化为一次调用。
+    ``reading_entry=True``（追加「打开阅读页」入口），本函数即可退化为一次调用。
     本轮不改 common.py（他人并行在改），故在此内联保留，能力一个都不少。
     """
     try:
@@ -164,7 +164,7 @@ def anchor_card(source, page, score=0.0, para_idx=None, n=None):
     badge = (f'<a href="#p{int(page)}" style="color:var(--c-on-accent);text-decoration:none;'
              f'display:inline-block;">第 {int(page)} 页</a>')
     cross = (f'<a href="?p={READING_PAGE_IDX}&jump_page={int(page)}&paper={name}" target="_self" '
-             f'style="color:var(--c-accent);text-decoration:none;">📖 打开阅读页</a>')
+             f'style="color:var(--c-accent);text-decoration:none;">打开阅读页</a>')
     return (
         f'<a id="p{int(page)}"></a>'
         f'<div class="ai-card" style="border-left:3px solid var(--c-accent);">'
@@ -198,7 +198,7 @@ def _set_jump(source, page, para_idx=None):
         st.caption(f"（写入 URL 参数失败，已仅用会话状态记录：{str(e)[:80]}）")
     st.success(f"已定位到《{payload['source']}》第 {payload['page']} 页"
                + (f"（第 {payload['para_idx']} 段）" if payload["para_idx"] else "")
-               + "，可到📖版式阅读页查看。")
+               + "，可到版式阅读页查看。")
 
 
 def _render_source(rid, i, c):
@@ -272,7 +272,7 @@ def _render_debug(run):
 
 
 def render(ctx):
-    page_header("💬 跨文献问答与溯源",
+    page_header("跨文献问答与溯源",
                 "Dense+Sparse 混合检索（多查询变体 RRF）→ 可选 LLM 重排 → 引用校验 + 一次自动修复；"
                 "每个结论带【n】内联引用与可点击的原文出处锚点。")
     _inject_qa_css()
@@ -288,12 +288,21 @@ def render(ctx):
         st.session_state["qa_input"] = ""
         st.session_state["qa_q"] = ""
 
+    # ---------- 一行状态带（首屏唯一的说明性文字，其余提示收进折叠区 / 答案区） ----------
+    try:
+        _n_chunks = len(getattr(ctx, "chunks", []) or [])
+    except Exception:
+        _n_chunks = 0
+    st.caption(f"文献库 {len(getattr(ctx, 'files', []) or [])} 篇 · {_n_chunks} 个片段 ｜ "
+               f"混合检索 + 引用校验 + 自动修复（检索范围与重排见下方折叠区）")
+
     # ---------- 缺陷 C：库内内容极少时的可操作引导 ----------
+    # 非阻断信息，降级为 caption：不与「主操作」抢首屏（原为 st.info 整块色条）
     guidance = _library_guidance(ctx)
     if guidance:
-        st.info(guidance)
+        st.caption(guidance)
 
-    # 跨页联动提示：本页写入，📖版式阅读页消费（见报告"跨文件约定"）
+    # 跨页联动提示：本页写入，版式阅读页消费（见报告"跨文件约定"）
     # 从「只说不做」的文字提示升级为一键操作条（Round 17 UI/UX）：用户点过
     # 「📖 定位第 N 页」后意图已经明确，不该再让他去侧边栏 9 个菜单里找阅读页。
     _jump_action_bar()
@@ -310,9 +319,9 @@ def render(ctx):
     #      同一轮里写输入框的显式 key 即可带入，无需二次 rerun。
     # 解法：影子键 _qa_ex_prev 只在选项值**发生变化**时写入 qa_input（输入框的显式
     # key，实例化前写入即默认值），不变化就不写——防止用户手改输入框后被选中态覆盖。
-    # 说明：点击仅「填入」输入框（与改造前示例按钮语义一致），需用户再点「🔎 提问」才真正
+    # 说明：点击仅「填入」输入框（与改造前示例按钮语义一致），需用户再点「提问」才真正
     # 发起检索——避免误触就直接打真实模型。
-    _sel = st.pills("💡 试试这些问题（点击填入下方输入框，再点「🔎 提问」）",
+    _sel = st.pills("试试这些问题（点击填入下方输入框，再点「提问」）",
                     EX, key="qa_ex_pills", selection_mode="single", default=None)
     if _sel:
         _val = _sel if isinstance(_sel, str) else (_sel[0] if _sel else "")
@@ -321,36 +330,40 @@ def render(ctx):
             st.session_state["qa_input"] = _val   # 输入框显式 key：实例化前写入即默认值
             st.session_state["_qa_ex_prev"] = _val   # 影子键：非 widget key，可安全写
 
-    # ---------- 范围选择（单篇锁定 / 多篇对比） ----------
-    scope = st.radio("检索范围", ["全部文献", "单篇"], horizontal=True, key="qa_scope_mode")
-    source_filter = None
-    if scope == "单篇" and ctx.files:
-        cur = st.session_state.get("qa_single_paper")
-        if cur not in ctx.files:
-            st.session_state["qa_single_paper"] = ctx.files[0]
-        source_filter = st.selectbox("锁定论文（只在该篇内检索）", ctx.files, key="qa_single_paper")
-
-    st.session_state["qa_compare_papers"] = [p for p in st.session_state.get("qa_compare_papers", [])
-                                             if p in ctx.files]
-    compare_papers = st.multiselect(
-        f"多篇对比：勾选 2~{MAX_COMPARE_PAPERS} 篇（走按论文分组的对比流程，输出分论文陈述 + 对比表格）",
-        ctx.files, key="qa_compare_papers")
-    if len(compare_papers) > MAX_COMPARE_PAPERS:
-        st.warning(f"最多勾选 {MAX_COMPARE_PAPERS} 篇，已自动截取前 {MAX_COMPARE_PAPERS} 篇。")
-        compare_papers = compare_papers[:MAX_COMPARE_PAPERS]
-    if scope == "单篇" and compare_papers:
-        st.caption("ℹ️ 已选择单篇锁定，多篇对比勾选本次不生效（两种模式互斥）。")
-        compare_papers = []
-    if len(compare_papers) == 1:
-        st.caption("ℹ️ 多篇对比至少需要 2 篇，本次按普通问答处理。")
-        compare_papers = []
-
-    use_rerank = st.checkbox("启用 LLM 重排（更精准，耗额度）", key="qa_use_rerank")
-
+    # ---------- 主操作区：问题输入 + 提交（首屏第一视线） ----------
     with st.form("qa_form", clear_on_submit=True):
         q = st.text_input("请输入问题", key="qa_input",
                           placeholder="例如：这篇论文提出了什么模型？（支持中文提问，自动做中英检索扩展）")
-        go = st.form_submit_button("🔎 提问")
+        go = st.form_submit_button("提问")
+
+    # ---------- 检索范围与高级设置（首屏不铺开；功能逐项保留） ----------
+    # 顺序说明：范围 / 对比 / 重排的值在下方 `if go` 之前完成计算，提交当轮即可读到，
+    # 只是把「设置类」控件从首屏挪进折叠区，不改任何取值逻辑与 session_state 键。
+    with st.expander("检索范围与高级设置", expanded=False):
+        scope = st.radio("检索范围", ["全部文献", "单篇"], horizontal=True, key="qa_scope_mode")
+        source_filter = None
+        if scope == "单篇" and ctx.files:
+            cur = st.session_state.get("qa_single_paper")
+            if cur not in ctx.files:
+                st.session_state["qa_single_paper"] = ctx.files[0]
+            source_filter = st.selectbox("锁定论文（只在该篇内检索）", ctx.files, key="qa_single_paper")
+
+        st.session_state["qa_compare_papers"] = [p for p in st.session_state.get("qa_compare_papers", [])
+                                                 if p in ctx.files]
+        compare_papers = st.multiselect(
+            f"多篇对比：勾选 2~{MAX_COMPARE_PAPERS} 篇（走按论文分组的对比流程，输出分论文陈述 + 对比表格）",
+            ctx.files, key="qa_compare_papers")
+        if len(compare_papers) > MAX_COMPARE_PAPERS:
+            st.caption(f"最多勾选 {MAX_COMPARE_PAPERS} 篇，已自动截取前 {MAX_COMPARE_PAPERS} 篇。")
+            compare_papers = compare_papers[:MAX_COMPARE_PAPERS]
+        if scope == "单篇" and compare_papers:
+            st.caption("ℹ️ 已选择单篇锁定，多篇对比勾选本次不生效（两种模式互斥）。")
+            compare_papers = []
+        if len(compare_papers) == 1:
+            st.caption("ℹ️ 多篇对比至少需要 2 篇，本次按普通问答处理。")
+            compare_papers = []
+
+        use_rerank = st.checkbox("启用 LLM 重排（更精准，耗额度）", key="qa_use_rerank")
 
     # 无问答历史时的教学式空状态（Round 17 UI/UX）：提问前先讲清「答案会长什么样」，
     # 避免首屏只有输入框、用户不确定提交后会发生什么（Notion/Linear 式空状态教学）。
@@ -358,8 +371,7 @@ def render(ctx):
         empty_state_card(
             "还没有问答记录",
             desc="提问后，答案会出现在这里：内联【n】引用标注来源，下方附可点击定位原文的溯源卡片。",
-            actions=["点上方「💡 试试这些问题」胶囊自动填入输入框，再点「🔎 提问」",
-                     "检索范围支持「全部文献 / 单篇锁定 / 多篇对比」，可开启 LLM 重排提升精度"],
+            actions=["点上方「试试这些问题」胶囊自动填入输入框，再点「提问」"],
             icon="💬",
         )
 

@@ -47,9 +47,9 @@ import httpx2._exceptions as _h2exc                     # noqa: E402
 import core.llm as _llm                                 # noqa: E402
 from ui.sidebar import MENU                             # noqa: E402
 
-PAGE_SEARCH = [m for m in MENU if m.startswith("🔍")][0]
-PAGE_LIB = [m for m in MENU if m.startswith("📁")][0]
-PAGE_QA = [m for m in MENU if m.startswith("💬")][0]
+PAGE_SEARCH = next(m for m in MENU if "检索" in m)
+PAGE_LIB = next(m for m in MENU if "文献库" in m)
+PAGE_QA = next(m for m in MENU if "问答" in m)
 
 ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 TB_MARKS = ("Traceback (most recent call last)", 'File "', "line ")
@@ -174,7 +174,7 @@ def _row(sid, probe, n_call, dt_wall):
 
 
 def _probe_qa_e2e(at, exc_factory):
-    """附加实测 H：💬 问答页**端到端**（真实点击「🔎 提问」，不是直接调 rag.answer）。
+    """附加实测 H：💬 问答页**端到端**（真实点击「提问」，不是直接调 rag.answer）。
 
     为什么能做成了：AppTest.button 包含 st.form_submit_button；真正的前提是
     **文献库非空**，所以先点「🚀 一键加载演示数据（6 篇）」装库。
@@ -186,7 +186,7 @@ def _probe_qa_e2e(at, exc_factory):
       3. 是否出现「✅ 引用校验通过」这类成功态（应为 False）
       4. 自动修复次数是否为 0（验证 F4 修复环守卫）
     """
-    _hr("附加实测 H：💬 问答页端到端（装演示数据后真实点击「🔎 提问」，401 注入）")
+    _hr("附加实测 H：💬 问答页端到端（装演示数据后真实点击「提问」，401 注入）")
     _goto(at, PAGE_QA)
     demo = [b for b in at.button if "一键加载演示数据" in getattr(b, "label", "")]
     if not demo:
@@ -195,9 +195,9 @@ def _probe_qa_e2e(at, exc_factory):
     demo[0].click().run()
     _goto(at, PAGE_QA)
     ti = [t for t in at.text_input if getattr(t, "label", "") == "请输入问题"]
-    ask = [b for b in at.button if getattr(b, "label", "") == "🔎 提问"]
+    ask = [b for b in at.button if getattr(b, "label", "") == "提问"]
     if not (ti and ask):
-        print("  ✗ 未找到问题输入框或「🔎 提问」按钮（断言未执行）")
+        print("  ✗ 未找到问题输入框或「提问」按钮（断言未执行）")
         return
     ti[0].set_value("Transformer 训练用了什么 GPU？").run()
     counter = []
@@ -427,7 +427,7 @@ def _probe_rag(at, exc_factory, title, on_token=None, tag="C"):
     ⚠️ 订正（2026-10-14，degrade-fix 指出并经我核实）：我原先写「AppTest 不暴露
     form_submit_button，故只能直接调 rag.answer」——**这句是错的**。
     streamlit/testing/v1/app_test.py:613 的 docstring 写明 `AppTest.button`
-    **同时包含 `st.button` 和 `st.form_submit_button`**；实测「🔎 提问」确实在
+    **同时包含 `st.button` 和 `st.form_submit_button`**；实测「提问」确实在
     at.button 里。真正卡住端到端的是**问答页需要非空文献库**（chunks/chroma 有货），
     不是 API。已补**探针 H** 装演示数据后真实点击走端到端；本探针保留，
     因为只有它能单独测 rag.answer 的调用次数与内部分支（H 测不到这些）。
@@ -910,7 +910,7 @@ def main():
     scenario_llm(at, "S3", "智谱 API 超时（读取超时）", _exc_timeout)
     scenario_llm(at, "S4", "智谱 API 完全不可达（断网）", _exc_network)
     scenario_extern(at, "S5", "arXiv API 不可达", _patch_arxiv,
-                    "aq", "transformer", "🔍 搜索 arXiv")
+                    "aq", "transformer", "搜索 arXiv")
     scenario_extern(at, "S6", "PubMed API 不可达", _patch_pubmed,
                     "pq", "protein", "🔍 PubMed")
 

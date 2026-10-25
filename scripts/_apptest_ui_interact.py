@@ -101,7 +101,7 @@ def _click(at, label):
 
 def _load_demo(at):
     t0 = time.time()
-    if not _click(at, "🚀 一键加载演示数据（6 篇）"):
+    if not _click(at, "一键加载演示数据（6 篇）"):
         _fail("演示数据", "未找到「一键加载演示数据」按钮")
         return False
     print("  （演示数据加载耗时 %.1fs）" % (time.time() - t0))
@@ -309,7 +309,7 @@ def case_library_bg_parse():
         _fail("选文件", "file_uploader.set_value 失败：%s" % str(e)[:150])
         return
     at.run()
-    if "🔍 解析并查重" not in [b.label for b in at.button]:
+    if "解析并查重" not in [b.label for b in at.button]:
         _fail("按钮渲染", "选文件后未出现「解析并查重」按钮")
         return
     _ok("按钮渲染", "选文件后「解析并查重」出现")
@@ -348,7 +348,7 @@ def case_library_bg_parse():
     at.run()
 
     # --- 真实提交（从任务中心按名字找 tid，兼容"已秒完成并被消费"的竞态） ---
-    if not _click(at, "🔍 解析并查重"):
+    if not _click(at, "解析并查重"):
         _fail("提交", "点击「解析并查重」失败")
         return
     at.run()
@@ -453,8 +453,8 @@ def case_search_background():
             return
         ti.set_value("attention is all you need").run()
         at.run()
-        if not _click(at, "🔍 搜索 arXiv"):
-            _fail("提交", "点击「🔍 搜索 arXiv」失败")
+        if not _click(at, "搜索 arXiv"):
+            _fail("提交", "点击「搜索 arXiv」失败")
             return
         at.run()
         ids = _ss_get(at, "_bg_task_ids") or []
@@ -767,7 +767,7 @@ def case_library_meta_background():
     orig_llm = ctx.llm
     ctx.llm = _StubLLM()
     try:
-        if not _click(at, "🤖 抽取标题/作者/机构/摘要 + 判断排版"):
+        if not _click(at, "抽取标题/作者/机构/摘要 + 判断排版"):
             _fail("提交", "点击元数据抽取按钮失败")
             return
         at.run()
@@ -882,7 +882,7 @@ def case_library_struct_background():
     orig_llm = ctx.llm
     ctx.llm = _StubLLM()
     try:
-        if not _click(at, "🧩 全方位解析（标题树/表格/图表）"):
+        if not _click(at, "全方位解析（标题树/表格/图表）"):
             _fail("提交", "点击全方位解析按钮失败")
             return
         at.run()

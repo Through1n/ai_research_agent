@@ -312,7 +312,7 @@ def page_header(title: str, subtitle: str = "", icon: str = ""):
     12px 三级灰副文案、底部 1px 发丝线分隔主区，强调色只留给交互控件与选中态。
     字号/间距全部走令牌（--fs-display / --fs-caption / --s-4 / --s-5）。
 
-    向后兼容：旧调用 `page_header("📁 文献库管理", "说明")` 仍可用（positional）。
+    向后兼容：旧调用 `page_header("文献库管理", "说明")` 仍可用（positional）。
     """
     head = _head_text(title, icon)
     sub = str(subtitle or "").strip()
@@ -577,7 +577,7 @@ def friendly_error(what: str, exc, reasons=(), actions=()):
 
 
 _NET_REASONS = ["演示现场外网不可达或被代理拦截", "arXiv / PubMed 接口限流或临时不可用"]
-_NET_ACTIONS = ["重试一次", "点击左侧「🚀 一键加载演示数据」使用离线数据继续演示",
+_NET_ACTIONS = ["重试一次", "点击左侧「一键加载演示数据（6 篇）」使用离线数据继续演示",
                 "检查网络/代理后再试"]
 
 
@@ -682,7 +682,7 @@ def llm_degraded_banner():
     """
     st.warning("⚠️ 离线占位响应：LLM 不可用，以下内容不是模型生成，请勿作为答案引用。")
     st.caption("🛠️ 怎么办：在左侧「接入方式」检查 API Key / 平台额度 / 网络后重试；"
-               "无 Key 时可点「🚀 一键加载演示数据」用本地离线链路继续演示。")
+               "无 Key 时可点「一键加载演示数据（6 篇）」用本地离线链路继续演示。")
 
 
 def is_llm_degraded(content) -> bool:
@@ -800,7 +800,7 @@ def safe_render(fn, ctx, what="该功能"):
     except Exception as e:
         show_error("渲染「%s」页面" % what, e,
                    reasons=["该项依赖的外部服务未就绪 / 数据尚未加载 / 网络受限"],
-                   actions=["点击左侧「🚀 一键加载演示数据」后重试",
+                   actions=["点击左侧「一键加载演示数据（6 篇）」后重试",
                             "或切换到其他页面继续演示，其余功能不受影响"])
 
 
@@ -816,8 +816,8 @@ def require_library(ctx):
         empty_state_card(
             "文献库为空，暂无内容可展示",
             desc="装入文献后，这里会展示基于本地文献库的问答、图谱与写作结果。",
-            actions=["点击左侧「🚀 一键加载演示数据（6 篇）」，秒级装入 6 篇经典论文",
-                     "或到「📁 文献库管理」上传 PDF（自动解析 + 语义查重 + 入库）"],
+            actions=["点击左侧「一键加载演示数据（6 篇）」，秒级装入 6 篇经典论文",
+                     "或到「文献库管理」上传 PDF（自动解析 + 语义查重 + 入库）"],
             icon="📭",
         )
         return False
@@ -853,7 +853,7 @@ def jump_banner(show_goto: bool = True):
             if c1.button("🗺️ 前往该页", key="jump_go"):
                 try:
                     from ui.sidebar import MENU
-                    target = at(MENU, READING_MENU_IDX, MENU[0] if MENU else "🤖 0. Agent 总助手")
+                    target = at(MENU, READING_MENU_IDX, MENU[0] if MENU else "智能总助手")
                     st.session_state["menu"] = target
                     st.query_params["p"] = str(READING_MENU_IDX)
                     st.query_params["jump_page"] = str(page)

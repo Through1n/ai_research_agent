@@ -334,13 +334,13 @@ def do_p2(pg, out):
     nav(pg, "💬 2. 跨文献问答与溯源")
     # ① 正常问答：答案 + 【n】角标 + 溯源卡片（页码徽章 + 定位按钮）
     fill_text_by_label(pg, "请输入问题", "对比 Transformer 与 BERT 的架构（表格）")
-    btn(pg, "🔎 提问").first.click()
+    btn(pg, "提问").first.click()
     print("  第 1 问（正常问答）…")
     wait_text(pg, "📚 答案来源", timeout=480)
     wait_idle(pg, timeout=60)
     # ② 拒答：库外问题触发拒答闸门 + 调试区（top 分数 / LLM 调用次数）
     fill_text_by_label(pg, "请输入问题", "2031 年诺贝尔物理学奖得主是谁？")
-    btn(pg, "🔎 提问").first.click()
+    btn(pg, "提问").first.click()
     print("  第 2 问（触发拒答闸门 + 检索调试区）…")
     wait_text(pg, "🛑", timeout=300, must=False)
     wait_idle(pg, timeout=60)
@@ -392,7 +392,7 @@ def do_p6(pg, out):
     fill_text_by_label(pg, "标题 / 关键词 / ID", "graph neural network")
     got = False
     for i in range(6):
-        btn(pg, "🔍 搜索 arXiv").first.click()
+        btn(pg, "搜索 arXiv").first.click()
         print(f"  arXiv 检索第 {i + 1} 次…")
         t0 = time.time()
         while time.time() - t0 < 120:
@@ -433,7 +433,7 @@ def do_p4(pg, out):
     """5. 引用图谱与综述：5c 图谱驱动综述（含图谱结构明细）。"""
     print("→ p4 引用图谱与综述（5c 图谱驱动综述）")
     nav(pg, "🕸️ 5. 引用图谱与综述")
-    btn(pg, "🕸️ 构建引用图谱").first.click()
+    btn(pg, "构建引用图谱").first.click()
     print("  构建真实引用图谱…")
     wait_text(pg, "图谱构建完成", timeout=300, must=False)
     wait_idle(pg, timeout=60)

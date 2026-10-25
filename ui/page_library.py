@@ -30,9 +30,9 @@ _LIB_REF_KIND = "library_ref"
 # corrupt / truncated；_empty_prepared 调用处(:584) 另写 encrypted。
 _PDF_ERR_TIPS = {
     "empty": (["文件是 0 字节，或没有任何可读页面", "下载中断 / 网盘同步不全"],
-              ["换一个完整的 PDF 重试", "或点击左侧「🚀 一键加载演示数据」继续演示"]),
+              ["换一个完整的 PDF 重试", "或点击左侧「一键加载演示数据（6 篇）」继续演示"]),
     "truncated": (["文件不完整：下载中断 / 网盘同步不全 / 磁盘坏块导致对象流丢失"],
-                  ["重新下载完整版后重试", "或点击左侧「🚀 一键加载演示数据」继续演示"]),
+                  ["重新下载完整版后重试", "或点击左侧「一键加载演示数据（6 篇）」继续演示"]),
     "corrupt": (["PDF 结构损坏 / 非标准排版", "扫描件但未配置可用的多模态模型 Key"],
                 ["换一个 PDF 重试", "或先加载演示数据继续演示"]),
     "scanned_no_ocr": (["是扫描件，但当前未启用 / 不可用的视觉模型 Key，全部页面都提取不到文本"],
@@ -71,24 +71,28 @@ def _section(title, desc=""):
 
 
 def _show_prepare_warnings(prepared):
-    """入库前如实展示解析告警：失败页清单、截断警示、扫描件 OCR 状态（R9 T4）。"""
+    """入库前如实展示解析告警：失败页清单、截断警示、扫描件 OCR 状态（R9 T4）。
+
+    这些是「已入库但有瑕疵」的说明，不是阻断性错误，统一用 caption 呈现，
+    避免一屏堆多个色块（色块只留给真正阻断的场景，如空库）。
+    """
     failed = prepared.get("failed_pages") or []
     if failed:
         pages = "、".join(f"p{fp.get('page')}" for fp in failed[:12])
-        st.warning(f"⚠️ 有 {len(failed)} 页解析失败（其余页正常入库）：{pages}"
+        st.caption(f"⚠️ 有 {len(failed)} 页解析失败（其余页正常入库）：{pages}"
                    + ("…" if len(failed) > 12 else ""))
         with st.expander("🔧 失败页原因（供排查）", expanded=False):
             for fp in failed[:MAX_FAILED_SHOW]:
                 st.caption(f"第 {fp.get('page')} 页：{str(fp.get('error', ''))[:160]}")
     if prepared.get("truncated"):
-        st.warning(f"⚠️ PDF 疑似不完整：声称 {prepared.get('expected_pages', '?')} 页，"
+        st.caption(f"⚠️ PDF 疑似不完整：声称 {prepared.get('expected_pages', '?')} 页，"
                    f"成功提取 {prepared.get('extracted_pages', '?')} 页；已按可提取部分入库，"
                    f"建议核对原文件是否完整。")
     if prepared.get("scanned"):
         if prepared.get("ocr_error"):
-            st.warning(f"🧾 检测为扫描件；OCR 存在失败：{str(prepared['ocr_error'])[:120]}")
+            st.caption(f"🧾 检测为扫描件；OCR 存在失败：{str(prepared['ocr_error'])[:120]}")
         else:
-            st.info("🧾 检测为扫描件，已通过多模态 OCR 提取文本。")
+            st.caption("🧾 检测为扫描件，已通过多模态 OCR 提取文本。")
 
 
 def _parse_worker(ctx, data, filename, progress):
@@ -454,7 +458,7 @@ def _consume_ref(ctx, kind, t):
 
 
 def _render_library_health(ctx):
-    """首跑自愈（R9 T2）：库空或 chunk 覆盖异常时给醒目提示 + 一键重建入口。
+    """首跑自愈（R9 T2）：库空或 chunk 覆盖异常时给提示 + 一键重建入口。
 
     异常判定在 services/library.py:library_health（每篇 chunk 中位数 < 3，
     或超过一半 chunk 集中在第 1 页即视为退化——典型成因是演示文本语料
@@ -462,50 +466,72 @@ def _render_library_health(ctx):
 
     2026-10-25：整库都是内置摘录语料时降级为**中性说明**而不是红色报错。
     之前直接把设计态演示库判成「内容异常退化」，评审打开第一页就看到红条。
+
+    2026-10-25 首屏减法：健康库只留一行状态 caption；逐篇 chunk 覆盖明细与
+    重建入口全部收进默认折叠的 expander。此前整块明细表顶在首屏最上方，
+    把「上传 PDF」主操作挤到第三屏，是这一页杂乱度最高的部分。
     """
     try:
         health = library.library_health(ctx)
     except Exception:
         return
-    # 只有「健康」才整块不渲染；demo_only 虽然不算 unhealthy，但需要给出
-    # 中性说明 + 重建入口，所以必须从提前返回里排掉（否则下面那段是死代码）
-    if not health.get("unhealthy") and not health.get("demo_only"):
-        return
 
     def _coverage_table():
+        """逐篇 chunk 覆盖明细。
+
+        「状态」列在所有行取值相同时直接删掉——演示态整库都是内置语料，
+        该列每行都写「内置语料」，只是重复信息。
+        """
         if not health.get("chunks_per_paper"):
             return
         corpus = set(health.get("corpus_papers") or [])
         rows = [{"文献": fn, "chunk 数": n,
-                 "状态": "📄 摘录语料" if fn in corpus else ("⚠️ 异常" if n < 3 else "✅ 正常")}
+                 "状态": "内置语料" if fn in corpus else ("偏少（<3）" if n < 3 else "正常")}
                 for fn, n in health["chunks_per_paper"].items()]
-        pretty_table(rows, title="🩺 当前库 chunk 覆盖明细", max_rows=MAX_FAILED_SHOW)
+        if rows and len({r["状态"] for r in rows}) == 1:
+            for r in rows:
+                r.pop("状态", None)
+        pretty_table(rows, max_rows=MAX_FAILED_SHOW)
 
     def _rebuild_entry():
         st.caption("从 pdf/ 官方测试件完整重建（含扫描件 OCR），同名自动覆盖，不影响其它上传。")
         if st.button("🔧 一键重建文献库（pdf/ 官方测试件，含 541 页教材）", key="lib_rebuild"):
             _run_rebuild(ctx)
 
+    def _diag(details=()):
+        """诊断折叠区：说明 + 逐篇覆盖明细（默认收起，不占首屏）。"""
+        with st.expander("库诊断 · chunk 覆盖明细", expanded=False):
+            for d in details:
+                st.caption(d)
+            _coverage_table()
+
+    def _maint():
+        """维护折叠区：重建入口（默认收起，功能可达）。"""
+        with st.expander("维护 · 重建文献库", expanded=False):
+            _rebuild_entry()
+
+    if not health.get("unhealthy") and not health.get("demo_only"):
+        st.caption(f"当前库：{health['papers']} 篇文献 / {health['chunks']} 个片段")
+        return
     if health.get("empty"):
-        st.warning("📭 文献库为空：问答/图谱/写作/对比页将无可检索内容。"
-                   "可上传 PDF，或用下方按钮一键重建官方测试文献库。")
-        _rebuild_entry()
+        st.warning("文献库为空：问答 / 图谱 / 写作 / 对比页将无可检索内容。"
+                   "请在下方上传 PDF，或展开「维护 · 重建文献库」重建官方测试文献库。")
+        _maint()
         return
     if health.get("demo_only"):
         # 设计态：整库都是内置摘录语料。用 caption 而不是报错框——红色横幅出现在
         # 评审打开的第一页，会让人以为系统坏了（2026-10-25 实测就是这个观感）。
-        st.caption(f"📄 当前为内置演示语料态：{health['papers']} 篇摘录文本 / "
-                   f"{health['chunks']} 个片段。演示语料只含摘要级摘录，问答/图谱/对比"
-                   "的结果深度受限；要按页检索请从真实 PDF 重建。")
-        _coverage_table()
-        _rebuild_entry()
+        st.caption(f"当前库：{health['papers']} 篇内置演示语料 / {health['chunks']} 个片段"
+                   "——只含摘要级摘录，问答 / 图谱 / 对比的结果深度受限。")
+        _diag([f"演示语料态：{health['papers']} 篇摘录文本 / {health['chunks']} 个片段；"
+               "要按页检索正文，请从真实 PDF 重建。"])
+        _maint()
         return
     st.error("⚠️ 检测到文献库内容异常退化（不是空库，但几乎检索不到正文）："
              + "；".join(health["reasons"]) + "。")
-    st.caption("典型成因：「一键加载演示数据」的示例文本覆盖了真实 PDF 的入库结果，"
-               "每篇只剩首条片段，问答/图谱/对比页只能基于这些片段作答。")
-    _coverage_table()
-    _rebuild_entry()
+    _diag(["典型成因：「一键加载演示数据」的示例文本覆盖了真实 PDF 的入库结果，"
+           "每篇只剩首条片段，问答/图谱/对比页只能基于这些片段作答。"])
+    _maint()
 
 
 def _show_rebuild_report(report):
@@ -532,7 +558,7 @@ def _show_rebuild_report(report):
             all_failed.append({"文献": r.get("filename", "?"), "页": fp.get("page"),
                                "原因": str(fp.get("error", ""))[:80]})
     if all_failed:
-        st.warning(f"⚠️ 共 {len(all_failed)} 页解析失败（不影响其它页入库）：")
+        st.caption(f"⚠️ 共 {len(all_failed)} 页解析失败（不影响其它页入库）：")
         pretty_table(all_failed[:MAX_FAILED_SHOW], title="失败页清单", max_rows=MAX_FAILED_SHOW)
     else:
         st.success("✅ 全部页面解析成功，无失败页。")
@@ -601,9 +627,8 @@ def render(ctx):
                 _LIB_STRUCT_KIND: lambda k, t: _consume_struct(ctx, k, t),
                 _LIB_FORMULA_KIND: lambda k, t: _consume_formula(ctx, k, t),
                 _LIB_REF_KIND: lambda k, t: _consume_ref(ctx, k, t)})
-    page_header("📁 文献库管理",
-                "基于内容 embedding 的语义去重（识别 arXiv v1/v7）、版本管理、细粒度多模态解析。",
-                icon="📁")
+    page_header("文献库管理",
+                "上传 PDF 即解析入库，自动语义查重、版本决策与结构化解析。")
 
     # embedding 降级原因透出：services/library.py 的 _paper_embedding /
     # _paper_fingerprints 失败时会把人话原因写到 ctx.embed_degraded_reason。
@@ -621,23 +646,24 @@ def render(ctx):
                                        key="lib_tab")
 
     with tab_up:
-        # ---------------- 首跑自愈：库空/退化检测 + 一键重建（R9 T2） ----------------
+        # 首屏顺序（2026-10-25 减法）：一行库状态 → 上传主操作 → 其余明细。
+        # 首跑自愈的逐篇诊断表已收进「库诊断」折叠区，不再占用首屏。
         _render_library_health(ctx)
 
-        # ---------------- 上传 & 语义查重 ----------------
-        _section("⬆️ 上传 PDF", "自动解析并语义查重；命中已有论文会提示版本决策，扫描件走 OCR。")
+        # ---------------- 上传 & 语义查重（本页主操作，必须在首屏可见） ----------------
+        _section("上传 PDF", "自动解析并语义查重；命中已有论文会提示版本决策，扫描件走 OCR。")
         # 上一轮后台解析的告警（失败页/截断/OCR 状态）在这里展示后即清——
         # 独立于 flash 单槽位，避免被入库成功提示覆盖（R9 T4 的如实展示不能丢）。
         _w = st.session_state.get("_parse_warnings")
         if _w:
             st.session_state["_parse_warnings"] = None
-            st.warning(str(_w))
+            st.caption(str(_w))
         f = st.file_uploader("选择 PDF", type=["pdf"], key="lib_up")
         _parsing = bg_running(kinds={_LIB_PARSE_KIND})
-        if f and st.button("🔍 解析并查重", disabled=_parsing,
+        if f and st.button("解析并查重", disabled=_parsing,
                            help="后台解析：提交后可切换其他页面，实时进度见左侧任务中心"):
             if not f.name:
-                st.warning("⚠️ 未取得文件名，请重新选择文件。")
+                st.caption("⚠️ 未取得文件名，请重新选择文件。")
             else:
                 data = f.read()
                 # 应用层体积闸门（Round 12 场景 9）：超限在**提交之前**友好拒绝，
@@ -647,11 +673,11 @@ def render(ctx):
                 except Exception:
                     _mb = 0.0
                 if _mb > MAX_UPLOAD_MB:
-                    st.warning(f"⚠️ 这个文件有 {_mb:.0f} MB，超过 {MAX_UPLOAD_MB} MB 上限，"
+                    st.caption(f"⚠️ 这个文件有 {_mb:.0f} MB，超过 {MAX_UPLOAD_MB} MB 上限，"
                                f"已停止解析（现场解析会很慢且占用大量内存）。")
                     st.caption("🛠️ 怎么办：换一个更小的 PDF（建议 "
                                f"≤ {MAX_UPLOAD_MB} MB）；或先点击左侧"
-                               "「🚀 一键加载演示数据」继续演示，其余功能不受影响。")
+                               "「一键加载演示数据（6 篇）」继续演示，其余功能不受影响。")
                 else:
                     bg_submit("解析并查重：" + f.name,
                               lambda progress, _d=data, _n=f.name:
@@ -668,8 +694,8 @@ def render(ctx):
 
         pend = st.session_state.get("pending")
         if pend and isinstance(pend, dict):
-            st.warning(f"⚠️ 语义查重命中：库中已有《{pend.get('dup_name','未知')}》，"
-                       f"内容相似度 {float(pend.get('dup_sim') or 0):.1%}。")
+            st.caption(f"⚠️ 语义查重命中：库中已有《{pend.get('dup_name','未知')}》，"
+                       f"内容相似度 {float(pend.get('dup_sim') or 0):.1%}。请选择版本决策：")
             if pend.get("dup_evidence"):
                 st.caption(f"判定依据：{pend['dup_evidence']}（基于正文内容指纹，非文件名）")
             c1, c2, c3 = st.columns([1, 1, 1])
@@ -695,22 +721,22 @@ def render(ctx):
                 st.rerun()
 
         # ---------------- 元数据 / 排版 ----------------
-        _section("🪪 元数据与排版识别")
+        _section("元数据与排版识别")
         if not ctx.files:
             empty_state("文献库为空，暂无可识别元数据的论文。",
-                        hints=["在上方上传 PDF", "或点击左侧「🚀 一键加载演示数据」"])
+                        hints=["在上方上传 PDF", "或点击左侧「一键加载演示数据（6 篇）」"])
         else:
             mf = st.selectbox("选择论文", ctx.files, key="meta_sel")
             _meta_bg = bg_running(kinds={_LIB_META_KIND})
-            if st.button("🤖 抽取标题/作者/机构/摘要 + 判断排版",
+            if st.button("抽取标题/作者/机构/摘要 + 判断排版",
                          disabled=_meta_bg,
                          help="后台抽取：提交后可切换其他页面，实时进度见左侧「任务中心」"):
                 if not llm_guard(ctx, "元数据智能抽取"):
-                    st.info("📭 演示语料的元数据已在入库时自动生成，见「文献库」页签。")
+                    st.caption("📭 演示语料的元数据已在入库时自动生成，见「文献库」页签。")
                 else:
                     _p = resolve_pdf(mf)
                     if not _p or not os.path.exists(str(_p)):
-                        st.info("📭 该论文为内置演示语料（无原始 PDF），元数据已在入库时抽取完成，见「文献库」页签。")
+                        st.caption("📭 该论文为内置演示语料（无原始 PDF），元数据已在入库时抽取完成，见「文献库」页签。")
                     else:
                         bg_submit("元数据抽取：" + str(mf),
                                   lambda progress, _p=_p: _meta_worker(ctx, _p, progress),
@@ -728,20 +754,20 @@ def render(ctx):
                     st.json(st.session_state.meta_view)
 
         # ---------------- 细粒度结构 ----------------
-        _section("🔬 细粒度结构解析")
+        _section("细粒度结构解析")
         if not ctx.files:
             empty_state("文献库为空，暂无可解析的细粒度结构。",
-                        hints=["在上方上传 PDF", "或点击左侧「🚀 一键加载演示数据」"])
+                        hints=["在上方上传 PDF", "或点击左侧「一键加载演示数据（6 篇）」"])
         else:
             sf = st.selectbox("选择论文", ctx.files, key="struct_sel")
             with_vision = st.checkbox("🖼️ 用多模态模型逐图理解（较慢 / 消耗额度）")
             _struct_bg = bg_running(kinds={_LIB_STRUCT_KIND})
-            if st.button("🧩 全方位解析（标题树/表格/图表）",
+            if st.button("全方位解析（标题树/表格/图表）",
                          disabled=_struct_bg,
                          help="后台解析：提交后可切换其他页面，实时进度见左侧「任务中心」"):
                 _p = resolve_pdf(sf)
                 if not _p or not os.path.exists(str(_p)):
-                    st.info("📭 该论文为内置演示语料（无原始 PDF），版式级解析不适用；问答与图谱功能不受影响。")
+                    st.caption("📭 该论文为内置演示语料（无原始 PDF），版式级解析不适用；问答与图谱功能不受影响。")
                 else:
                     bg_submit("结构解析：" + str(sf),
                               lambda progress, _p=_p, _s=sf, _v=with_vision:
@@ -760,9 +786,9 @@ def render(ctx):
             if stobj and isinstance(stobj, dict):
                 if stobj.get("file") != sf:
                     st.caption(f"下方结构来自上一次解析的《{stobj.get('file','—')}》，"
-                               f"重新点击「🧩 全方位解析」可刷新为《{sf}》。")
+                               f"重新点击「全方位解析」可刷新为《{sf}》。")
                 if not any(stobj.get(k) for k in ("toc", "tables", "figs")):
-                    st.info("📭 未识别到标题树 / 表格 / 插图（该 PDF 可能无书签式章节结构或版式表格）。")
+                    st.caption("📭 未识别到标题树 / 表格 / 插图（该 PDF 可能无书签式章节结构或版式表格）。")
                 if stobj.get("toc"):
                     with st.expander(f"📚 标题树（{len(stobj['toc'])} 项）", expanded=False):
                         for item in stobj["toc"]:
@@ -821,7 +847,7 @@ def render(ctx):
                 if llm_guard(ctx, "参考文献结构化"):
                     _p = resolve_pdf(sf)
                     if not _p or not os.path.exists(str(_p)):
-                        st.info("📭 该论文为内置演示语料（无原始 PDF），无版式级参考文献区。")
+                        st.caption("📭 该论文为内置演示语料（无原始 PDF），无版式级参考文献区。")
                     else:
                         bg_submit("参考文献结构化：" + str(sf),
                                   lambda progress, _p=_p: _ref_worker(ctx, _p, progress),
@@ -851,7 +877,7 @@ def render(ctx):
     with tab_lib:
         # ---------------- 当前库 & 删除 ----------------
         if not ctx.files:
-            empty_state("文献库为空。", hints=["点击左侧「🚀 一键加载演示数据（6 篇）」",
+            empty_state("文献库为空。", hints=["点击左侧「一键加载演示数据（6 篇）」",
                                            "或在「上传与解析」页签上传 PDF"])
         else:
             # 库概览指标条（Round 17 UI/UX，借鉴 Stripe KPI 卡：hero 指标先行、
@@ -892,7 +918,7 @@ def render(ctx):
                 delf = st.selectbox("选择要删除的文献", ctx.files, key=_rm_key)
                 if st.button("🗑️ 确认删除所选文献", key="lib_rm_btn"):
                     if not delf:
-                        st.info("📭 请先在上方选择要删除的文献。")
+                        st.caption("📭 请先在上方选择要删除的文献。")
                     else:
                         try:
                             library.remove_paper(ctx, delf)
@@ -929,13 +955,13 @@ def render(ctx):
                             with st.spinner(step_text("🔍 正在对比版本差异")):
                                 diff_md = library.version_diff(ctx, files)
                             if not diff_md or not str(diff_md).strip():
-                                st.info("📭 未生成差异报告（可能两版正文完全一致）。")
+                                st.caption("📭 未生成差异报告（可能两版正文完全一致）。")
                             else:
                                 txt = str(diff_md)
                                 # 大模型不可用时 version_diff 会返回降级文案而非抛异常，
                                 # 这里显式降级提示 + 引导，避免评委看到一串技术错误摘要却无任何说明。
                                 if "暂不可用" in txt or "已降级为离线对比" in txt or txt.startswith("【"):
-                                    st.warning("⚠️ 版本差异报告已降级：大模型暂不可用，未生成对比表格。")
+                                    st.caption("⚠️ 版本差异报告已降级：大模型暂不可用，未生成对比表格。")
                                     st.caption("🩺 可能原因：API Key 无效 / 额度不足 / 现场网络受限。")
                                     st.caption("🛠️ 怎么办：填入有效 Key 后重试；"
                                                "无 Key 时可直接讲解「建议保留最新版」与版本清单，演示不受阻断。")
@@ -958,4 +984,4 @@ def _commit(ctx, prepared):
         st.rerun()
     except Exception as e:
         friendly_error("入库", e, reasons=["向量库写入失败 / 磁盘空间不足"],
-                       actions=["重试一次", "或点击左侧「🚀 一键加载演示数据」继续演示"])
+                       actions=["重试一次", "或点击左侧「一键加载演示数据（6 篇）」继续演示"])

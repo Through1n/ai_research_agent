@@ -71,7 +71,7 @@ TIKZ_LOG_SNIPPET = 4000               # 编译日志保留长度（UI 展示前 
 DOT_TIMEOUT_SEC = 30                  # dot -Tsvg 超时
 LATEX_ENGINES = ("tectonic", "pdflatex", "xelatex", "lualatex")
 EMPTY_LIBRARY_HINT = ("⚠️ 文献库为空，无法生成「无幻觉 References」。"
-                      "请先到「📁 文献库管理」上传 PDF（或在左侧点击「🚀 一键加载演示数据」），"
+                      "请先到「文献库管理」上传 PDF（或在左侧点击「一键加载演示数据（6 篇）」），"
                       "系统会从上传论文正文末尾的 References 段真实抽取条目作为引用白名单；"
                       "在文献库为空时本模块不会生成任何占位/编造引用。")
 NO_MODEL_OUTPUT_HINT = ("⚠️ 大模型未返回内容（可能是 API Key 未配置或网络异常），"

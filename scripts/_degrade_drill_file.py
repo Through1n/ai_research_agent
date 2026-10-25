@@ -189,13 +189,13 @@ def diag_double_error(at):
 
 
 def click_parse(at, data, name, note=""):
-    """设置假上传 → 渲染 → 点「🔍 解析并查重」→ 返回耗时。"""
+    """设置假上传 → 渲染 → 点「解析并查重」→ 返回耗时。"""
     at.session_state["pending"] = None
     _FAKE["data"], _FAKE["name"] = data, name
     at.run()
     btn = find_button(at, "解析并查重")
     if not btn:
-        print("    ❌ 页面上没出现「🔍 解析并查重」按钮（假上传未生效）")
+        print("    ❌ 页面上没出现「解析并查重」按钮（假上传未生效）")
         return None
     t = time.time()
     btn.click().run()
@@ -364,7 +364,7 @@ def s9_oversize(at):
         except Exception as e:
             print("    页数维度标定失败: %s: %s" % (type(e).__name__, e))
 
-        print("\n  [UI 实测] 105MB PDF 走完整上传链路（点击「🔍 解析并查重」）"
+        print("\n  [UI 实测] 105MB PDF 走完整上传链路（点击「解析并查重」）"
               "——若 UI 已加体积闸门，这里应被拦下并给出人话提示")
         big = build_pdf(n_pages=20, payload_mb=105)
         print("    上传体积 %.2f MB" % (len(big) / 1e6))
@@ -504,9 +504,9 @@ def s11_key_cleared(at):
             nav_to(at, label)
             print("      %-22s 异常=%s" % (label, list(at.exception) or "无"))
 
-        print("\n    -- 点两个典型的大模型按钮（文献库「🤖 抽取标题…」/ Agent「用此任务 ▶」）--")
+        print("\n    -- 点两个典型的大模型按钮（文献库「抽取标题…」/ Agent「用此任务 ▶」）--")
         nav_to(at, "📁 1. 文献库管理")
-        b = find_button(at, "🤖 抽取标题")
+        b = find_button(at, "抽取标题")
         if b:
             b.click().run()
             print("      文献库页异常=%s" % (list(at.exception) or "无"))

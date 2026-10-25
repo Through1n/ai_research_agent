@@ -33,11 +33,11 @@ from streamlit.testing.v1 import AppTest                # noqa: E402
 from core.llm import degraded_content                   # noqa: E402
 from ui.sidebar import MENU                             # noqa: E402
 
-PAGE_GRAPH = [m for m in MENU if m.startswith("🕸️")][0]
-PAGE_QA = [m for m in MENU if m.startswith("💬")][0]
-PAGE_LIB = [m for m in MENU if m.startswith("📁")][0]
-PAGE_SEARCH = [m for m in MENU if m.startswith("🔍")][0]
-PAGE_AGENT = [m for m in MENU if m.startswith("🤖")][0]
+PAGE_GRAPH = next(m for m in MENU if "图谱" in m)
+PAGE_QA = next(m for m in MENU if "问答" in m)
+PAGE_LIB = next(m for m in MENU if "文献库" in m)
+PAGE_SEARCH = next(m for m in MENU if "检索" in m)
+PAGE_AGENT = next(m for m in MENU if "总助手" in m)
 
 LINE = "=" * 78
 ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"

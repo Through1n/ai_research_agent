@@ -26,7 +26,7 @@ _DOMAIN_EN = {
     "图神经网络": ["graph neural", "gnn", "citation network"],
 }
 
-_SEARCH_DEMO_HINT = "如需离线演示，请点左侧「🚀 一键加载演示数据」并使用📁/💬/🕸️页面"
+_SEARCH_DEMO_HINT = "如需离线演示，请点左侧「一键加载演示数据（6 篇）」并使用文献库 / 问答 / 图谱页"
 
 # ---------------- 后台任务 kind：本页提交 / 认领的唯一标识 ----------------
 _K_ARXIV = "search_arxiv"          # arXiv 检索
@@ -44,6 +44,20 @@ def _toast(msg):
         st.toast(msg, icon="🚀")
     except Exception:
         pass
+
+
+def _drop_flat_cols(rows):
+    """表格降噪：删掉「整列都是同一个值」的列（含整列空白），这类列不含区分信息。
+
+    只在 ≥2 行时生效（单行的所有列天然同值）；若所有列都同值（每行完全一样），
+    原样返回，避免渲染成无列表格。
+    """
+    if not rows or len(rows) < 2:
+        return rows
+    keep = [c for c in rows[0] if len({str(r.get(c, "")) for r in rows}) > 1]
+    if not keep:
+        return rows
+    return [{c: r.get(c, "") for c in keep} for r in rows]
 
 
 # ============================ worker：后台线程执行，严禁 st.* ============================
@@ -232,10 +246,10 @@ def _consume_track(kind, t):
 # ============================ 页面各区（提交闸门 + 结果渲染） ============================
 
 def _arxiv(ctx):
-    section_header("arXiv 检索 / 下载", icon="📚")
+    section_header("arXiv 检索 / 下载")
     q = st.text_input("标题 / 关键词 / ID", key="aq")
     _running = bg_running(kinds={_K_ARXIV})
-    if st.button("🔍 搜索 arXiv", disabled=_running,
+    if st.button("搜索 arXiv", disabled=_running,
                  help="后台检索：提交后可切换其他页面，实时进度见左侧「任务中心」"):
         if not (q or "").strip():
             st.warning("⚠️ 请先输入标题、关键词或 arXiv ID。")
@@ -279,7 +293,7 @@ def _arxiv(ctx):
 
 
 def _batch(ctx):
-    section_header("参考文献批量抓取", icon="📋")
+    # 分区标题已上移为外层 expander 标签（首屏只保留 arXiv 一个主输入），此处不重复
     titles = st.text_area("标题列表（每行一条）", height=130, key="bt")
     _running = bg_running(kinds={_K_BATCH})
     if st.button("🚀 批量下载入库", disabled=_running,
@@ -322,7 +336,7 @@ def _batch(ctx):
 def _others(ctx):
     c1, c2 = st.columns([1, 1])
     with c1:
-        section_header("PubMed", icon="🧬")
+        section_header("PubMed")
         pq = st.text_input("关键词", key="pq")
         _running = bg_running(kinds={_K_PUBMED})
         if st.button("🔍 PubMed", disabled=_running,
@@ -341,17 +355,18 @@ def _others(ctx):
             empty_state("PubMed 未返回任何结果。",
                         hints=["换成英文医学关键词", _SEARCH_DEMO_HINT])
         if rows:
-            pretty_table([{
+            _tbl = [{
                 "标题": str(r.get("title", ""))[:90],
                 "作者": str(r.get("authors", ""))[:60],
                 "期刊": r.get("journal", ""),
                 "日期": r.get("pubdate", ""),
-            } for r in rows if isinstance(r, dict)], title="🧬 PubMed 结果")
+            } for r in rows if isinstance(r, dict)]
+            pretty_table(_drop_flat_cols(_tbl), title="PubMed 结果")
         for r in rows:
             if isinstance(r, dict) and r.get("url"):
                 st.markdown(f"[📎 PubMed 原文]({r['url']})")
     with c2:
-        section_header("网页搜索", icon="🌐")
+        section_header("网页搜索")
         wq = st.text_input("关键词", key="wq")
         _running = bg_running(kinds={_K_WEB})
         if st.button("🔍 DuckDuckGo", disabled=_running,
@@ -598,27 +613,27 @@ def render(ctx):
         _K_RECOMMEND: lambda k, t: _consume_recommend(ctx, k, t),
         _K_TRACK: lambda k, t: _consume_track(k, t),
     })
-    page_header("🔍 论文自动检索、追踪与推荐",
-                "arXiv/PubMed/网页批量检索、引用含金量筛选、个性化推荐、动态追踪订阅。",
-                icon="🔍")
-    st.caption("本页面依赖外网；比赛现场断网时请先「🚀 一键加载演示数据」，"
-               "用📁文献库 / 💬问答 / 🕸️图谱页完成演示。")
+    page_header("论文自动检索、追踪与推荐",
+                "arXiv/PubMed/网页批量检索、引用含金量筛选、个性化推荐、动态追踪订阅。")
+    st.caption("依赖外网；断网演示请先「一键加载演示数据（6 篇）」，再用文献库 / 问答 / 图谱页演示。")
 
     # key=：页签选中态必须钉住。提交后台任务会触发重跑，无 key 时 Streamlit 会把
     # 页签重置回第一个（实测：在「检索与下载」点一次 arXiv 检索，立刻跳回「订阅与推荐」），
     # 用户刚填的关键词和结果当场消失——真机截图脚本也因此在 p6 卡死。
-    tab_sub, tab_search, tab_quality = st.tabs(["订阅与推荐", "检索与下载", "引用含金量"],
+    # 顺序：**检索与下载放第一个**——首屏第一眼必须是「搜索输入 + 主按钮」；
+    # 订阅 / 推荐 / 引用含金量是二级面板，需要时切页签再看。
+    tab_search, tab_sub, tab_quality = st.tabs(["检索与下载", "订阅与推荐", "引用含金量"],
                                                key="search_tab")
 
     with tab_sub:
-        section_header("动态追踪订阅", icon="⏰")
+        section_header("动态追踪订阅")
         try:
             _track(ctx)
         except Exception as e:
             show_error("渲染「动态追踪」区块", e)
             st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
 
-        section_header("个性化推荐", icon="⭐")
+        section_header("个性化推荐")
         try:
             _recommend(ctx)
         except Exception as e:
@@ -626,11 +641,26 @@ def render(ctx):
             st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
 
     with tab_search:
-        for fn in (_arxiv, _others, _batch):
+        # 首屏只留一个主输入（arXiv）；PubMed / 网页搜索与批量抓取收进折叠区，
+        # 功能与按钮 key 全部保留，点开即可用。
+        try:
+            _arxiv(ctx)
+        except Exception as e:
+            show_error("渲染「arXiv」区块", e)
+            st.caption("🛠️ 怎么办：其余检索模块不受影响，可继续使用。")
+
+        with st.expander("其他数据源：PubMed / 网页搜索", expanded=False):
             try:
-                fn(ctx)
+                _others(ctx)
             except Exception as e:
-                show_error(f"渲染「{fn.__name__[1:]}」区块", e)
+                show_error("渲染「PubMed / 网页搜索」区块", e)
+                st.caption("🛠️ 怎么办：其余检索模块不受影响，可继续使用。")
+
+        with st.expander("参考文献批量抓取（每行一条标题）", expanded=False):
+            try:
+                _batch(ctx)
+            except Exception as e:
+                show_error("渲染「批量抓取」区块", e)
                 st.caption("🛠️ 怎么办：其余检索模块不受影响，可继续使用。")
 
     with tab_quality:

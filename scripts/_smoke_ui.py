@@ -52,9 +52,24 @@ def _app_route_keys():
 
 ROUTES = _app_route_keys()
 
-# 路由键 → 菜单文案。测试只依赖 app.py 里的路由键（emoji），不复制菜单文案，
-# 菜单重命名 / 分组调整都不会再把测试变成假绿。
-MENU_BY_ROUTE = {r: m for m in MENU for r in ROUTES if m.startswith(r)}
+# 页面别名的关键词表：本脚本的用例表沿用「图标当页面标识」（🤖=总助手 …），
+# 但菜单文案已是纯中文，故按关键词把标识映射回 MENU 里的真实项。
+# 这样菜单再改名也不会让用例静默跳过（旧版按 emoji 前缀匹配，改名即全绿假象）。
+_ROUTE_KW = {"🤖": "总助手", "📁": "文献库", "💬": "问答", "📖": "阅读",
+             "🔍": "检索", "🕸️": "图谱", "✍️": "写作", "🏗️": "架构", "💡": "创新"}
+
+
+def _page_of(route):
+    """把用例里的页面标识（图标或菜单文案）解析成 MENU 里的一项。"""
+    if route in MENU:
+        return route
+    kw = _ROUTE_KW.get(route)
+    if not kw:
+        return None
+    return next((m for m in MENU if kw in m), None)
+
+
+MENU_BY_ROUTE = {r: _page_of(r) for r in _ROUTE_KW}
 
 
 def _new():
@@ -265,14 +280,14 @@ def phase_fault(problems):
     _inject()
     _search, _lib, _graph = "🔍", "📁", "🕸️"
     cases = [
-        (_search, "🔍 搜索 arXiv"),
+        (_search, "搜索 arXiv"),
         (_search, "🔍 PubMed"),
         (_search, "🔍 DuckDuckGo"),
         (_search, "✨ 刷新并推荐"),
         (_search, "🔄 运行一次追踪"),
         (_search, "🚀 批量下载入库"),
         (_lib, "🔍 对比 1706.03762 版本差异"),
-        (_graph, "🕸️ 构建引用图谱"),
+        (_graph, "构建引用图谱"),
         (_graph, "📝 一键生成领域综述"),
     ]
     input_seed = {
@@ -284,7 +299,7 @@ def phase_fault(problems):
         "trk_topics": "cs.AI, cs.CL",   # 订阅话题
     }
     for i, (route, btn) in enumerate(cases):
-        page = MENU_BY_ROUTE.get(route)
+        page = _page_of(route)
         if page is None:
             _miss(problems, route, "路由键 %s 无对应菜单项" % route)
             continue
@@ -292,7 +307,7 @@ def phase_fault(problems):
             if not _drain_tasks():
                 problems.append((btn, "上一 case 的后台任务 30s 未排空，闸门断言可能假失败"))
             at, _ = _new()
-            _click(at, "🚀 一键加载演示数据（6 篇）")
+            _click(at, "一键加载演示数据（6 篇）")
             if not _goto(at, page, problems):
                 continue
             _seed_inputs(at, input_seed)
@@ -378,7 +393,7 @@ def main():
     print("\n[2] 加载演示数据后逐页渲染")
     try:
         at, dt = _new()
-        if not _click(at, "🚀 一键加载演示数据（6 篇）"):
+        if not _click(at, "一键加载演示数据（6 篇）"):
             _miss(problems, "sidebar", "未找到「一键加载演示数据」按钮")
         else:
             print(f"  加载耗时 {dt:.1f}s")
@@ -396,19 +411,19 @@ def main():
     if HEAVY:
         print("\n[3] 本地重操作（无外网依赖，先加载演示数据）")
         heavy_ops = [
-            ("🕸️", "🕸️ 构建引用图谱"),
+            ("🕸️", "构建引用图谱"),
             ("🕸️", "🎭 演示模式示意图谱"),
             ("🕸️", "📝 一键生成领域综述"),
-            ("📁", "🧩 全方位解析（标题树/表格/图表）"),
+            ("📁", "全方位解析（标题树/表格/图表）"),
         ]
         for route, btn in heavy_ops:
-            page = MENU_BY_ROUTE.get(route)
+            page = _page_of(route)
             if page is None:
                 _miss(problems, route, "路由键 %s 无对应菜单项" % route)
                 continue
             try:
                 at, _ = _new()
-                if not _click(at, "🚀 一键加载演示数据（6 篇）"):
+                if not _click(at, "一键加载演示数据（6 篇）"):
                     _miss(problems, "sidebar", "演示数据按钮未找到")
                     continue
                 if not _goto(at, page, problems):

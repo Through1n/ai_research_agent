@@ -5,29 +5,31 @@ from pathlib import Path
 
 import streamlit as st
 
-from config import DEMO_PAPERS, DESKTOP_MODE
+from config import BRAND, BRAND_TAGLINE, DEMO_PAPERS, DESKTOP_MODE
 from core.providers import list_providers, get_provider, custom_provider, CUSTOM_ID
 from services import library
 from ui.common import (memory_mb, ensure_state, jump_banner, friendly_error, empty_state, step_text)
 
 MENU = [
-    "🤖 0. 智能总助手",
-    "📁 1. 文献库管理",
-    "💬 2. 跨文献问答与溯源",
-    "📖 3. 版式阅读与智能翻译",
-    "🔍 4. 论文检索与追踪",
-    "🕸️ 5. 引用图谱与综述",
-    "✍️ 6. 写作辅助与可视化",
-    "🏗️ A. 系统架构设计",
-    "💡 B. 技术创新亮点",
+    "智能总助手",
+    "文献库管理",
+    "跨文献问答与溯源",
+    "版式阅读与智能翻译",
+    "论文检索与追踪",
+    "引用图谱与综述",
+    "写作辅助与可视化",
+    "系统架构设计",
+    "技术创新亮点",
 ]
-# 导航分组（问题七：简洁性）：核心工作流 7 项平铺，展示型 2 项收进折叠区
+# 导航分组：核心工作流 7 项平铺，展示型 2 项收进折叠区。
+# 文案即标识（不再用「emoji + 序号」当前缀）：路由、测试、页面标题共用同一串，
+# 少一层「显示名 vs 值」的翻译，也就少一处会漂的地方。
 MENU_MAIN = MENU[:7]
 MENU_ABOUT = MENU[7:]
 
 _PROVIDER_FAIL_HINT = [
     "🩺 可能原因：API Key 有误或已过期 / 平台额度耗尽 / 代理拦截了出网请求。",
-    "🛠️ 怎么办：确认 Key 正确后重试；无 Key 也可点下方「🚀 一键加载演示数据」继续演示离线功能。",
+    "🛠️ 怎么办：确认 Key 正确后重试；无 Key 也可点下方「一键加载演示数据（6 篇）」继续演示离线功能。",
 ]
 _DEMO_FAIL_HINT = [
     "🩺 可能原因：向量库写入失败 / 磁盘权限不足 / storage 目录被占用。",
@@ -113,8 +115,8 @@ def _library_stats(ctx):
     except Exception:
         n_chunks = 0
     if n_files:
-        return f"📚 文献库 {n_files} 篇 · {n_chunks} 个片段"
-    return "📚 文献库为空（点下方「🚀 一键加载演示数据」开始）"
+        return f"文献库 {n_files} 篇 · {n_chunks} 个片段"
+    return "文献库为空（点上方「加载演示数据」开始）"
 
 
 def _llm_ping(ctx):
@@ -319,7 +321,7 @@ def _render_model_settings(ctx):
                 st.warning("⚠️ 连通性测试未通过：请检查 Key / 平台额度 / 网络。")
                 st.caption(f"🩺 错误摘要：{detail}")
                 st.caption("🛠️ 怎么办：确认 Key 无误后重试；无 Key 可点下方"
-                           "「🚀 一键加载演示数据」继续离线演示。")
+                           "「一键加载演示数据（6 篇）」继续离线演示。")
 
     st.markdown("---")
     try:
@@ -334,7 +336,8 @@ def _render_model_settings(ctx):
 def render(ctx):
     ensure_state({"saved_api_key": "", "menu": MENU[0]})
     with st.sidebar:
-        st.title("🔬 AI4S 科研助手")
+        st.title(BRAND)
+        st.caption(BRAND_TAGLINE)
         _ver = _desktop_version_caption()
         if _ver:
             st.caption(f"🕹️ {_ver}")
@@ -350,7 +353,7 @@ def render(ctx):
         # 接入/账号设置收进折叠区：主流 Agent 的做法——设置不占主视觉，
         # 侧边栏只保留「导航 + 任务中心 + 主操作」。未配置 Key 时自动展开，
         # 配置就绪后默认收起。
-        with st.expander("⚙️ 模型接入与账号", expanded=not _llm_ready(ctx)):
+        with st.expander("模型接入与账号", expanded=not _llm_ready(ctx)):
             _render_model_settings(ctx)
 
         st.markdown("---")
@@ -414,7 +417,7 @@ def render(ctx):
         # 2026-10-24：粗体 + 表情的「功能导航」改成小标签（eyebrow）——11.5px / 7% 字距
         # / 三级灰，与下面的导航行形成两级层次，替代原先的粗体大字。
         st.markdown('<div class="ai-nav-eyebrow">功能导航</div>', unsafe_allow_html=True)
-        main_val = st.radio("🧭 功能导航", MENU_MAIN,
+        main_val = st.radio("功能导航", MENU_MAIN,
                             index=MENU_MAIN.index(cur) if cur in MENU_MAIN else None,
                             key="_nav_main",
                             label_visibility="collapsed")
@@ -426,7 +429,7 @@ def render(ctx):
         # 折叠区用按钮：radio 无论如何都有选中态，两组 radio 共用同一个导航状态
         # 时必然互相打架（且 Streamlit 禁止在实例化后回填 widget key 来纠正）。
         # 按钮无状态，"点了"就是"点了"。
-        with st.expander("ℹ️ 关于本系统"):
+        with st.expander("关于", expanded=False):
             for item in MENU_ABOUT:
                 if st.button(item, key="_nav_about_%s" % item,
                              use_container_width=True,
@@ -457,10 +460,9 @@ def render(ctx):
             pass
 
         st.markdown("---")
-        # 分组弱化说明：演示/维护属低频操作，放在底部并加次要文案，
-        # 不与上方核心导航争夺注意力（Notion "less is more" 原则）。
-        st.caption("🧪 演示与维护 · 无 Key 也能体验离线功能")
-        if st.button("🚀 一键加载演示数据（6 篇）",
+        # 演示数据是这里唯一的主动作；维护类操作只留一个次要按钮，不再用分组标题+说明
+        # （侧栏一屏里能被读到的行数是有限的，标题本身也是噪音）。
+        if st.button("一键加载演示数据（6 篇）",
                      use_container_width=True,
                      help="向文献库写入 6 篇内置示例论文（Transformer v1/v7、BERT、Adam、VAE、"
                           "BatchNorm），用于离线演示各项功能（不覆盖已有论文）。后三篇的正文里"
@@ -510,9 +512,9 @@ def render(ctx):
                 # 提示写进 flash 再 rerun：否则 success 会被 rerun 吞掉，用户零反馈
                 set_flash("success", f"✅ 演示数据已就绪，当前文献库 {n} 篇")
                 st.rerun()
-        # 🗑️ 清空为危险操作：先二次确认，避免误触（功能不变，仅加一步确认）。
+        # 「清空」为危险操作：先二次确认，避免误触（功能不变，仅加一步确认）。
         _clearing = bool(st.session_state.get("_confirm_clear", False))
-        if st.button("🗑️ 清空文献库", use_container_width=True,
+        if st.button("清空文献库", use_container_width=True,
                      disabled=_clearing,
                      help="移除文献库全部论文与索引，操作不可撤销"):
             if not ctx.files:
@@ -561,6 +563,5 @@ def render(ctx):
                 if st.button("❌ 取消", use_container_width=True):
                     st.session_state["_confirm_clear"] = False
                     st.rerun()
-        st.caption(_library_stats(ctx))
-        st.caption(f"💾 内存 {memory_mb()}")
+        st.caption(f"{_library_stats(ctx)} · 内存 {memory_mb()}")
     return menu
