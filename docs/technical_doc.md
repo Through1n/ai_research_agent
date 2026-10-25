@@ -1,18 +1,11 @@
 # MoreHand · 技术文档
 
-> **提交版本说明**
->
-> | 项 | 值 |
-> |---|---|
-> | 版本号 | `v1.0-final` |
-> | 提交日期 | 2026-10-14 |
-> | 对应提交 | 随最终交付提交一并推送，以仓库 HEAD 为准（`git log -1 --format=%h`） |
-> | 团队成员 | 见 `docs/团队信息.md` |
+> **提交版本说明**：`v1.0-final`（提交日期 2026-10-14，随最终交付提交一并推送，以仓库 HEAD 为准）；团队成员见 `docs/团队信息.md`。
 >
 > 文档内部版 v5.0（2026-10-12 Round 8 定稿）：首次接入真实 API Key 完成全链路实测，全文 AI 类指标由"推断值"刷新为真跑实减值；新增第 9 章「AI 协同说明」（赛题 3.4 硬性要求）。
 > 定位：全国高校 AI 大模型挑战赛参赛作品 · 全流程科研助手 Agent
 > 运行环境：Python 3.11.16 / Streamlit 1.63.0（conda 环境 `ai_research`）
-> 本文档与当前代码一一对应，所有引用一律写成 **`符号名@文件:行号`** 形式（符号名是稳定锚点，行号是当下快照），均可直接在仓库中定位，并可由随附脚本 `scripts/_check_doc_refs.py` **一键复跑校验**（逐条打开目标文件、读到该行、比对该行是否真含上下文提到的符号，输出「正确 / 疑似错误 / 无法判定」三列清单）。**全文当前校验结果：231 条引用，0 条疑似错误、0 条无法判定**（修复前 1–4 章抽样 103 条中 86 条对不上）。
+> 本文档与当前代码一一对应，所有引用一律写成 **`符号名@文件:行号`** 形式（符号名是稳定锚点，行号是当下快照），均可直接在仓库中定位，并可由随附脚本 `scripts/_check_doc_refs.py` **一键复跑校验**（逐条打开目标文件、读到该行、比对该行是否真含上下文提到的符号，输出「正确 / 疑似错误 / 无法判定」三列清单）。**全文当前校验结果：236 条引用，0 条疑似错误、0 条无法判定**（修复前 1–4 章抽样 103 条中 86 条对不上）。
 > **关于行号漂移**：代码仍在演进，行号会漂；故凡涉及实现位置的引用一律给出符号名，行号仅作快照，请以同一脚本复跑结果为准。凡本文未能核实的一律标注"待确认"，不以推断填充。
 > **数据来源优先级**：①Round 7/8 真实 API 实测（`round7_judgeG.md`、`round8_fixR6_references.md`、`round8_fixR7_title.md`、`round8_fixR8_frontier.md`、`round7_fixR5_citations.md`）→ ②`round4_worker9_official.md` 官方用例端到端实测 → ③Round 3 修复实测。凡未实测的一律标注"未实测/待补充"，不沿用推断值。
 
@@ -50,7 +43,7 @@
 
 - **研究生 / 科研人员**：需要快速读懂一批英文论文、跨文献对比方法与结果、追踪方向最新进展、起草开题或论文框架。系统的「跨文献问答」「图谱综述」「写作 Copilot」直接服务这一主线。
 - **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:97` 演示图谱兜底）。
-- **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑（**三者都会清空文献库**：库非空时直接拒绝运行，备份后加 `--force` 才执行）；单元测试 230 项（全套 `tests/`，其中 `test_core.py` 23 项）。
+- **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑（**三者都会清空文献库**：库非空时直接拒绝运行，备份后加 `--force` 才执行）；单元测试 238 项（全套 `tests/`，其中 `test_core.py` 23 项）。
 
 ## 1.3 赛题定位
 
@@ -76,7 +69,7 @@
 
 ## 1.5 当前状态一句话总结
 
-Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有真跑才会暴露"的缺陷后：9 页面 UI 冒烟 0 未捕获异常、230/230 单元测试、阅读页专项 62/62、**AI 链路端到端 21/21 PASS**；541 页官方教材 537 页提取 / 0 失败页 / 25.32s；双栏误判 0%；抗幻觉四道防线**全部在真实 LLM 下实测生效**（OCR 首次实测通过、细粒度三问全命中真值、References 40/40 逐字一致）。
+Round 7/8 真实 API Key 全链路实测后：9 页面 UI 冒烟 0 未捕获异常、238/238 单元测试、阅读页专项 62/62、**AI 链路端到端 21/21 PASS**；541 页官方教材 537 页提取 / 0 失败页 / 25.32s；双栏误判 0%；抗幻觉四道防线**全部在真实 LLM 下实测生效**。
 
 在此之上仍有三条诚实声明（详见 8.2 / 9.4）：①本地 `pdf/` 语料规模有限（Round 8 实测 5 文件 / 3 独立文档 / 2 有引用边，教材章节无引用关系；2026-10 扩至 6 篇 arXiv 后为 9 文件），赛题"批量文献（如 20 篇）"规模**未覆盖**；②OpenAlex / Semantic Scholar 在实测期间处于 IP 级 429 限流，被引数链路验证的是"诚实降级"而非真值获取；③"纯中文句的引用一致性校验盲区"与"沙箱为软隔离"仍是我们认知到的两项最重要的能力边界。
 
@@ -136,8 +129,8 @@ Round 7 首次填入真实 API Key 跑通全链路、Round 8 修掉 6 个"只有
 
 ## 2.4 非功能需求
 
-- **可复现**：Streamlit 锁定 1.63.x；检索/切块/去重参数全部环境变量可覆盖（`config.py:141-147`，均走 `_env_int`）。
-- **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:793`）。
+- **可复现**：Streamlit 锁定 1.63.x；检索/切块/去重参数全部环境变量可覆盖（`config.py:160-166`，均走 `_env_int`）。
+- **健壮**：LLM 调用统一走 `core/llm.py`：1 次首发 + 3 次退避重试（详见 4.2.1）；全部失败返回结构化伪响应、**不向用户暴露异常**，失败明细落盘 `storage/llm_failures.log`。UI 侧每区块独立 try/except（`safe_render@ui/common.py:824`）。
 - **长文档工程化**：20 页一批解析建块（`services/library.py:19 PDF_BATCH_SIZE = 20`）、单页 30s 守护线程超时跳过（`services/library.py:544 _extract_page_with_timeout`）、每 50 页进度回调、psutil 内存探针（`scripts/_memory_probe.py :: peak_mb`）。
 - **安全**：API Key 只经环境变量/会话注入；输出侧密钥正则脱敏（`core/guardrails.py:130 redact_secrets`）；Python 工具经 AST 白名单沙箱（`core/sandbox.py:27 validate_code`）；`.env` 同时被 `.gitignore` 与 `.dockerignore` 排除，不入仓库、不入镜像。
 - **诚实降级**：每个外部依赖（LLM、embedding、外部 API、LaTeX 编译器、Graphviz）都有明确降级路径并向用户说明原因与建议动作，绝不静默失败、绝不编造数据。
@@ -182,7 +175,7 @@ flowchart TD
     CHK -- 是 --> OUT["UI：答案 + 可点击【n】溯源卡片"]
 ```
 
-> 图中方框均标真实模块与符号名；`MAX_VARIANT_DENSE=5`、`RELEVANCE_FLOOR=0.35`、`DENSE_K/SPARSE_K/FINAL_K=12/12/6` 均取自 `services/rag.py:46-55` 与 `config.py:141-147` 当前值，非示意数字。
+> 图中方框均标真实模块与符号名；`MAX_VARIANT_DENSE=5`、`RELEVANCE_FLOOR=0.35`、`DENSE_K/SPARSE_K/FINAL_K=12/12/6` 均取自 `services/rag.py:46-55` 与 `config.py:160-166` 当前值，非示意数字。
 
 ## 3.3 调用主线与依赖规则
 
@@ -208,7 +201,7 @@ flowchart TD
 
 ## 3.4 界面与导航
 
-9 个页面由 `_PAGES@app.py:134` 注册，侧边栏菜单（`ui/sidebar.py:13 MENU`）与 query_params 双通道跳转；主体区顶部统一渲染跨 rerun 存活的 flash 提示（`app.py:168-171` 调 `ui/sidebar.py:60 render_flash`，写入侧走 `ui/sidebar.py:49 set_flash`）。
+9 个页面由 `_PAGES@app.py:148` 注册，侧边栏菜单（`ui/sidebar.py:15 MENU`）与 query_params 双通道跳转；主体区顶部统一渲染跨 rerun 存活的 flash 提示（`app.py:168-171` 调 `ui/sidebar.py:62 render_flash`，写入侧走 `ui/sidebar.py:51 set_flash`）。
 
 **品牌与内部标识是两条线**（2026-10-25 改名时定）：用户可见名称统一取
 `config.py:12 BRAND`（MoreHand）与 `config.py:13 BRAND_TAGLINE`；而
@@ -219,8 +212,13 @@ flowchart TD
 
 **导航文案即标识**：菜单项不再用「emoji + 序号」当前缀（侧栏曾有 20 个 emoji），
 侧栏文案、`_PAGES` 的键、页面大标题三处用同一串中文，少一层「显示名 vs 值」的
-翻译，也少一处会漂的地方。旧会话里残留的旧串由 `app.py:148 _LEGACY_KEYWORDS`
+翻译，也少一处会漂的地方。旧会话里残留的旧串由 `app.py:162 _LEGACY_KEYWORDS`
 按关键词归位，不把用户甩到首页。
+
+**品牌徽标**：squircle + 手掌（即神经网络）+ spark，按「光学尺寸」三档生成
+（16px 不糊），三处同源：exe 图标 / favicon（`app.py:38 _page_icon`）/
+侧栏（`ui/sidebar.py:347 _brand_block`）；徽标卡为有界框。规范见
+`docs/brand_logo_design.md`，验真见 `scripts/_verify_brand_badge.py`。
 
 **首屏减法口径**（每页统一）：页头（无装饰 emoji）→ 一行状态 caption →
 一个主操作 → 其余收进默认收起的折叠区。`st.subheader` 全站归零（22px 会绕过
@@ -415,14 +413,14 @@ flowchart TD
 
 要点：①扩展变体在 dense 路取**各变体最大分**，缓解中文查询对英文 embedding 的低余弦；②`annotate_paragraphs`（`services/rag.py:399`）为每条来源补页内段号；③多篇对比走 `retrieve_per_paper`（`services/rag.py:666`，每篇保底 3 条，防止单篇饿死）+ `build_grouped_context`（`services/rag.py:722`，【P1-1】【P2-1】分组角标）。
 
-**检索参数一览**（切块与召回参数在 `CHUNK_SIZE@config.py:141`（DENSE_K/SPARSE_K/FINAL_K 见 `DENSE_K@config.py:143`），rag 自持阈值以 `RELEVANCE_FLOOR@services/rag.py:46` 为首）：
+**检索参数一览**（切块与召回参数在 `CHUNK_SIZE@config.py:160`（DENSE_K/SPARSE_K/FINAL_K 见 `DENSE_K@config.py:162`），rag 自持阈值以 `RELEVANCE_FLOOR@services/rag.py:46` 为首）：
 
 | 参数 | 默认值 | 作用 |
 |---|---|---|
-| `CHUNK_SIZE` / `CHUNK_OVERLAP`（`config.py:141-142`） | 1200 / 150 | 切块目标字符数与相邻块重叠 |
-| `DENSE_K`（`config.py:143 DENSE_K`） | 12 | Chroma 向量召回数（每个查询变体） |
-| `SPARSE_K`（`config.py:144 SPARSE_K`） | 12 | BM25Plus 召回数 |
-| `FINAL_K`（`config.py:145 FINAL_K`） | 6 | RRF 融合后进入上下文的条数 |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP`（`config.py:160-161`） | 1200 / 150 | 切块目标字符数与相邻块重叠 |
+| `DENSE_K`（`config.py:162 DENSE_K`） | 12 | Chroma 向量召回数（每个查询变体） |
+| `SPARSE_K`（`config.py:163 SPARSE_K`） | 12 | BM25Plus 召回数 |
+| `FINAL_K`（`config.py:164 FINAL_K`） | 6 | RRF 融合后进入上下文的条数 |
 | `RELEVANCE_FLOOR`（`services/rag.py:46`） | 0.35 | 拒答闸门阈值 |
 | `MAX_REPAIR`（`services/rag.py:47`） | 1 | 修复环最大重跑次数 |
 | `COMPARE_PER_PAPER`（`services/rag.py:49`） | 3 | 多篇对比每篇保底片段数 |
@@ -690,7 +688,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 | 层 | 命令 | 本轮实测结果 |
 |---|---|---|
-| 单元测试 | `python -m unittest discover -s tests -v` | **230/230 OK** |
+| 单元测试 | `python -m unittest discover -s tests -v` | **238/238 OK** |
 | **AI 链路端到端实测（真实 Key）** | `python -u scripts/_verify_live_api.py` | **21/21 PASS**（严格化后的最新版本，原 19 条；分组：OCR / 细粒度问答 / 抗幻觉闸门 / 跨文献对比 / 写作 / 图谱 / 外部被引）。脚本自带"不污染 `storage/`"（跑在临时目录）与"Key 不可用即记 SKIP 不记 PASS"两条纪律 |
 | 离线端到端自检 | `python scripts/selftest.py` | 全链路冒烟通过（无需 Key） |
 | 官方数据集复跑 + 长文档专项 | `python scripts/_verify_official.py`（= A/B/C/D 四用例） | 扫描件离线降级 PASS；541 页 → **537 页提取 / 1305 chunks / 25.32s（解析 4.02s + 入库 21.30s）/ 峰值 RSS 893.1MB / 0 失败页 / 进度回调 11 次**；v1↔v7 去重 **0.963228**、完全改名仍命中 **1.000000**；3 篇连续入库 chunks 归属隔离（133 条，4.38s） |
@@ -733,10 +731,10 @@ docker compose down         # 停止
 | `LLM_PROVIDER` | `zhipu` | zhipu/deepseek/qwen/openai/ollama |
 | `LLM_MODEL` / `VL_MODEL` | glm-4-flash / glm-4v | 文本 / 多模态模型 |
 | `LLM_TIMEOUT` | 45s（演示保险，可设 25） | 单次调用超时 |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1200 / 150 | 切块字符数与重叠（`config.py:141-142`） |
-| `DENSE_K` / `SPARSE_K` / `FINAL_K` | 12 / 12 / 6 | 两路召回与融合条数（`config.py:143-145`） |
-| `DEDUP_THRESHOLD` | 0.90 | 语义去重阈值（`config.py:146 DEDUP_THRESHOLD`） |
-| `AGENT_MAX_ITERS` | 8 | Agent 最大工具调用轮数（`config.py:147 AGENT_MAX_ITERS`） |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1200 / 150 | 切块字符数与重叠（`config.py:160-161`） |
+| `DENSE_K` / `SPARSE_K` / `FINAL_K` | 12 / 12 / 6 | 两路召回与融合条数（`config.py:162-164`） |
+| `DEDUP_THRESHOLD` | 0.90 | 语义去重阈值（`config.py:165 DEDUP_THRESHOLD`） |
+| `AGENT_MAX_ITERS` | 8 | Agent 最大工具调用轮数（`config.py:166 AGENT_MAX_ITERS`） |
 | `LLM_PROVIDERS_EXTRA` | 空 | JSON 追加自定义 OpenAI 兼容 Provider |
 
 ## 6.5 已知问题清单（评审发现、按优先级排列）
@@ -826,13 +824,13 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 | ③ 自主工具调用 | 22 个 Function Schema + 6 专家白名单路由 + ReAct 闭环 + AST 白名单沙箱 + arXiv/PubMed/Web 检索 + 定时追踪 + GitHub 复现性 | **22/22 工具全部接入专家白名单，无孤岛**；沙箱子进程 `timeout=25`；被引数三级降级与真值一致（AlexNet **108512**） |
 | ④ 图谱挖掘 | 真实引用关系建图 + PageRank/入度/介数/特征向量 + 社区发现（三级降级）+ frontier 五维打分 + 四段式综述 + Future Work 三态判定 | 综述 **1928 字**含真实年份 2017/2018；Future Work **2/2** 有效状态；前沿分 14.3→3.3。**规模诚实声明：实测图谱仅 2 节点 1 边，「20 篇批量」未覆盖** |
 | ⑤ 学术 Copilot | 无幻觉 References 白名单写作、Mermaid/TikZ/Graphviz/Matplotlib 四类图、CSV 自动出图 + 数值事实注入 Caption、中英对照同步阅读、划词翻译、中文原位 PDF 输出 | References **40/40 与白名单逐字一致 / 0 处占位 / 14364 字 / 44.6s**（修复前：4515 字但整章占位符、139.3s）；引用↔参考文献双向跳转 **36/36 锚点、死链 0**；正文引用标记 **58 个**全部可反向回正文 |
-| ⑥ Agent 内核 | 任务规划 / 多专家路由（含关键词离线兜底）/ 长期记忆与画像 / 三层 Guardrails（注入检测·角标校验·密钥脱敏）/ Trace 思考可视化 | 9 页面 UI 冒烟 + 9 项故障注入 **exception=0**；7/7 条演示路径 0 未捕获异常；单测 **230/230**、阅读页专项 **62/62**、AI 链路 **21/21 PASS** |
+| ⑥ Agent 内核 | 任务规划 / 多专家路由（含关键词离线兜底）/ 长期记忆与画像 / 三层 Guardrails（注入检测·角标校验·密钥脱敏）/ Trace 思考可视化 | 9 页面 UI 冒烟 + 9 项故障注入 **exception=0**；单测 **238/238**、阅读页专项 **62/62**、AI 链路 **21/21 PASS** |
 
 ### 8.1.2 工程规模
 
 - **代码**：39 个 Python 模块文件（core 10 / services 14 / tools 3 / ui 12）加 `app.py` 与 `config.py`；9 个交互页面；严格自上而下的四层依赖（`ui → services → core`、`tools → services`）。运行时数据集中在 `storage/`（路径由 `config.py` 定义为 `STORAGE_DIR` 并启动时自动建子目录）；另有 3 处直连落盘：`core/llm.py`（失败日志）、`services/citation_quality.py`（引用质量缓存）、`services/library.py`（上传目录与重建前备份）。
 - **能力面**：6 个专家、5 家可切换 Provider、7 张真实截图（`docs/shots/p0–p6`，一图一模块）。
-- **测试**：单元测试 230/230；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 62/62；其余复跑脚本（官方四用例、图谱压测、截图重定向、桌面版校验）全部留在 `scripts/`（附录 A）。
+- **测试**：单元测试 238/238；UI 冒烟 9 页面 0 未捕获异常；阅读页专项 62/62；其余复跑脚本（官方四用例、图谱压测、截图重定向、桌面版校验）全部留在 `scripts/`（附录 A）。
 - **过程留痕**：`docs/review/` 下 Round 1–11 累计 **45 份**历史过程报告（含 `FINAL_SUMMARY.md`），Round 12 审计与部署报告 **13 份**，Round 13 **6 份**，均另列于附录 B。每份都交代了"改了哪些文件、实测数字是什么、哪些没修"。
 - **交付物**：技术文档（本文档）、README、演示视频脚本、在线演示部署指南、桌面版指南、团队信息与 Docker/桌面两条部署链路；另有答辩问答手册、录制工程化脚本、提交历史分析、一键复现包（`start.bat`/`start.sh`/`Dockerfile.quick`）与评委 FAQ。
 
@@ -841,8 +839,6 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 本项目**不是把通用大模型套一层学术皮肤，而是围绕"科研结论必须可溯源、不可编造"这一约束，从零设计并实现了整套工程链路**：用版面感知解析保证进入向量库的上下文不串栏，用四道防线让"不知道"能被系统诚实说出并拒答，用真实外部数据源（OpenAlex/S2/Crossref/GitHub）替代规则打分，用统一降级矩阵保证任何外部依赖失效时都"明示而不静默"。
 
 在技术取舍上我们有一条贯穿始终的纪律：**宁缺毋假**——被引数取不到就写明"该维度不计分"，OCR 不可用就明确拒绝空扫描件入库，参考文献抽取质量不足就直接判失败而不拿索引页凑数。这条纪律让部分数字看起来不够漂亮（例如 v1/v7 整篇相似度低于阈值、靠分段指纹才命中），但它保证了评委看到的每一个数字都能被复现。
-
-当前状态可演示、可复现、可审计：一句话启动（`streamlit run app.py`），无 API Key 也能跑完解析、检索、去重、图谱、离线综述等全部链路；每个关键指标都有对应复跑脚本与实测报告。
 
 ## 8.2 当前局限（诚实清单）
 
@@ -872,7 +868,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 | 短期 | 溯源精度 | `parsing.build_chunks_from_texts` 保证 chunk 不跨页 + 原生段落 bbox，阅读页实现段落级像素高亮 |
 | 短期 | 补齐已知小缺陷闭环 | UI 接入 `dup_advice`（版本建议目前仅返回未在页面展示）；UI 层串行化入库操作以消除并发写 `ctx.papers/chunks` 的风险；沙箱临时目录补 `finally` 清理；`commit()` 文件名清洗 |
 | 短期 | **补齐"20 篇批量文献"规模实证** | 造 ≥20 篇 fixture，把 graph 组三条断言升级为 `n_nodes>=20`、`len(bridges)>=1` 与耗时阈值；同步复跑 `scripts/bench_graph.py`。**这是与赛题要求差距最大的一项** |
-| 中期（1–3 个月） | 补测与标定 | **扫描件 OCR 已完成真实 Key 补测**（本轮），剩余：本地 OCR 引擎兜底（PaddleOCR）以消除逐次非确定性与 Key 依赖；embedding 换成模型后重新标定 `DEDUP_THRESHOLD`（当前 v1/v7 整篇 0.891292 低于阈值，靠分段指纹兜底）；修 `_node_year` 的两个边界用例（`arXiv:` 前缀 / 两位年份） |
+| 中期（1–3 个月） | 补测与标定 | **扫描件 OCR 已完成真实 Key 补测**（本轮），剩余：本地 OCR 引擎兜底（PaddleOCR）以消除逐次非确定性与 Key 依赖；embedding 换成模型后重新标定 `DEDUP_THRESHOLD`；修 `_node_year` 的两个边界用例（`arXiv:` 前缀 / 两位年份） |
 | 中期（1–3 个月） | 工程加固 | 沙箱迁移 Docker 容器级隔离；本地 OCR 引擎兜底（PaddleOCR）；长文档入库改后台任务 + 断点续传；requirements 补可选依赖 |
 | 中期 | 评测体系 | 建立抗幻觉基准集（英文/中文分栏）、双栏判定公开语料回归、被引数抽检脚本进 CI |
 | 长期（3–6 个月） | 能力扩展 | 多模态 RAG（图表直接入向量库）；协同过滤推荐；跨用户文献共享与协作标注；Grafana 化运行指标（LLM 失败率/降级率）看板 |
@@ -938,7 +934,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 ## 9.4 AI 使用边界与诚实声明
 
 - **可追溯性**：本节每条经验都对应一次真实运行，证据落在 Round 7/8 各修复报告（路径见附录 B）。
-- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 230/230、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
+- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 238/238、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
 - **AI 未参与**：真实 API Key 的获取与管理、演示视频录制、`docs/团队信息.md` 署名内容。
 - **尚未做到**：AI 目前主要覆盖"修复已知缺陷"与"撰写文档"，**不足以独立判断哪些功能该做**（如是否自建 ≥20 篇图谱 fixture），优先级决策仍由人工承担。
 
@@ -952,9 +948,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 | `python scripts/resnap.py` | 重拍 `docs/shots/` 界面截图（需 playwright + chromium） |
 | `python scripts/watch_daemon.py 30` | arXiv 增量追踪守护进程（可选） |
 
-其余 8 条复跑命令见 **6.1 测试体系**表。
-
-环境：Python 3.11 / 依赖见 `requirements.txt` / Streamlit 锁定 1.63.x。本文档为唯一事实源，经 Markdown→HTML→PDF 两步生成。
+其余 8 条复跑命令见 **6.1 测试体系**表；本文档为唯一事实源。
 
 # 附录 B：评审材料索引
 
@@ -972,7 +966,6 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 # 附录 C：文档版本与数据来源说明
 
 - 本版（**v5.0**，2026-10-12）三项改动：①**AI 类指标由"推断值"换为"真跑实减值"**（Round 7 前 31 处 LLM 调用点全部没跑过，本轮填真实 Key 完成全链路实测并修掉 6 个仅真跑才暴露的缺陷）；②**新增第 9 章「AI 协同说明」**（赛题 3.4）；③**新增三条诚实局限**（8.2 #13/#14/#15），并**解除**原 #11「扫描件 OCR 未做端到端实测」的标注。
-- 数字来源（按优先级）：**0. Round 7/8 真实 API 实测**（报告清单见附录 B）——AI 类数字一律以此为准；1. `round4_worker9_official.md` 官方四用例：**537 页提取 / 1305 chunks / 25.32s / 峰值 893.1MB / 0 失败页**，v1↔v7 去重 **0.963228**；其余实测见附录 B 对应轮次报告。
 - **口径更正沿革（不再回退）**：v4.0 起统一 Round 4 官方口径；**v5.0 起 AI 类数字一律采 Round 7/8 实测值**，Round 7 前的 AI 数字若出现均标注"离线口径"。另"16 个工具"已更正为 **21 个**；"引用含金量纯规则打分"已升级为**真实被引三级降级链路**（见 4.6 / 5.4）。
 - 引用以当前工作区代码为准（复跑见清单 ①）；文档与代码冲突时以代码为准。
 
@@ -980,29 +973,28 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 # 附录 D：完整环境变量清单
 
-> 全部变量均**可用环境变量覆盖**，模板见 `.env.example`（只放占位值，**严禁填真实密钥**）；云平台在 **Settings → Secrets** 注入，键名必须与下表**完全一致（大写）**。
+> 全部变量均**可用环境变量覆盖**，模板见 `.env.example`（只放占位值，**严禁填真实密钥**）；云平台在 **Settings → Secrets** 注入，键名与下表**完全一致**。
 
 | 变量 | 默认值 | 读取位置 | 说明 |
 |---|---|---|---|
 | `LLM_PROVIDER` | `zhipu` | `services/state.py:184` | 启动默认 Provider，可选 `zhipu`/`deepseek`/`qwen`/`openai`/`ollama` |
-| `ZHIPU_API_KEY` | 空 | `config.py:127` | 智谱 Key；`glm-4-flash` 文本 + `glm-4v` 视觉（唯一内置视觉模型） |
+| `ZHIPU_API_KEY` | 空 | `config.py:146` | 智谱 Key；`glm-4-flash` 文本 + `glm-4v` 视觉（唯一内置视觉模型） |
 | `DEEPSEEK_API_KEY` | 空 | `core/providers.py:46` | DeepSeek；无视觉模型，OCR 自动降级离线解析 |
 | `DASHSCOPE_API_KEY` | 空 | `core/providers.py:54` | 通义千问；含 `qwen-vl-plus` 视觉模型 |
 | `OPENAI_API_KEY` | 空 | `core/providers.py:62` | OpenAI；需国际网络环境 |
 | `OLLAMA_API_KEY` | 空 | `config.py` | 本地 Ollama，可留空 |
-| `LLM_API_KEY` | 空 | `config.py:127` | 通用兜底 Key（任意 OpenAI 兼容端点） |
+| `LLM_API_KEY` | 空 | `config.py:146` | 通用兜底 Key（任意 OpenAI 兼容端点） |
 | `LLM_BASE_URL` | 平台默认 | `config.py` | 自定义端点 Base URL（内网网关 / vLLM） |
-| `LLM_MODEL` | `glm-4-flash` | `config.py:128` | 文本 / 任务规划 / Function Calling 模型 |
-| `VL_MODEL` | `glm-4v` | `config.py:129` | 多模态 / 扫描件 OCR 视觉模型 |
-| `LLM_TIMEOUT` | `45` | `config.py:130` | 单次调用超时（秒）；演示保险，现场可设 `25` |
-| `LLM_RETRY_BUDGET_SEC` | `20` | `config.py:135` | 单次调用总预算（秒），超预算即放弃重试、人话降级 |
-| `MAX_UPLOAD_MB` | `100` | `config.py:151` | 单个上传 PDF 体积上限（解析前应用层闸门） |
+| `LLM_MODEL` | `glm-4-flash` | `config.py:147` | 文本 / 任务规划 / Function Calling 模型 |
+| `VL_MODEL` | `glm-4v` | `config.py:148` | 多模态 / 扫描件 OCR 视觉模型 |
+| `LLM_TIMEOUT` | `45` | `config.py:149` | 单次调用超时（秒）；演示保险，现场可设 `25` |
+| `LLM_RETRY_BUDGET_SEC` | `20` | `config.py:154` | 单次调用总预算（秒），超预算即放弃重试、人话降级 |
+| `MAX_UPLOAD_MB` | `100` | `config.py:170` | 单个上传 PDF 体积上限（解析前应用层闸门） |
 | `GITHUB_TOKEN` / `GITHUB_API_TOKEN` | 空 | `services/extern.py:16` | 提升开源代码可得性检出率；不配则匿名自动降级（二选一） |
-| `HF_ENDPOINT` | 云上留空 | `config.py:138` | **云平台务必留空**（走 huggingface.co）；仅桌面态（国内）启镜像 |
-| `AI4S_DESKTOP` | `0` | `config.py:17` | 桌面模式开关；**Web / 容器部署务必留空** |
+| `HF_ENDPOINT` | 云上留空 | `config.py:157` | **云平台务必留空**（走 huggingface.co）；仅桌面态（国内）启镜像 |
+| `AI4S_DESKTOP` | `0` | `config.py:36` | 桌面模式开关；**Web / 容器部署务必留空** |
 
-> 检索与切块参数（`CHUNK_SIZE` / `CHUNK_OVERLAP` / `DENSE_K` / `SPARSE_K` / `FINAL_K` / `DEDUP_THRESHOLD` / `AGENT_MAX_ITERS` / `AGENT_GLOBAL_MAX_ITERS`）已在 **6.4 关键配置项**列明，此处不重复。
-> ⚠️ 两条部署安全红线：`HF_ENDPOINT` 在境外云平台留空，`AI4S_DESKTOP` 不设。
+> 检索与切块参数（`CHUNK_SIZE` 等 8 项）已在 **6.4 关键配置项**列明，此处不重复。
 
 ---
 
@@ -1020,7 +1012,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 ```bash
 PY=C:/Users/Administrator/anaconda3/envs/ai_research/python.exe
 $PY -m compileall -q core services tools ui app.py config.py   # ① 字节码
-$PY -m unittest discover -s tests                                 # ② 期望 190 OK
+$PY -m unittest discover -s tests                                 # ② 期望 238 OK
 $PY scripts/_smoke_ui.py                                          # ③ 9 页面 0 异常
 $PY scripts/_smoke_read.py                                        # ④ 阅读页专项（勿与③并行）
 $PY scripts/_check_doc_refs.py                                    # ⑤ 引用校验 0 疑似
@@ -1028,8 +1020,4 @@ $PY scripts/_check_doc_refs.py                                    # ⑤ 引用�
 
 # 附录 F：常见问题速查
 
-评委最常问的 7 个问题（没装 Python / 我是 Mac / 没 API Key / 首次检索慢 / 上传被拒 / Key 失效会崩吗 / 刷新会丢结果）
-与完整 22 条问答，均迁至独立文档 **`docs/评委FAQ.md`**（每条答案附 `文件:行号` 依据，可当场核对）；
-本地启动与部署报错速查见 `docs/部署操作手册.md`，网络降级 12 场景见 `docs/网络降级演练手册.md`。
-
-**文档结束。** 如 PDF 页码或内容与此 md 不一致，以本 md 为准。
+评委 FAQ（22 条，附 `文件:行号` 依据）见 **`docs/评委FAQ.md`**；部署速查见 `docs/部署操作手册.md`。**文档结束。**
