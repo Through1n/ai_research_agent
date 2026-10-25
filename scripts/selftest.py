@@ -1,9 +1,13 @@
-"""离线自测（无需 API Key）：验证 语义去重 / 混合检索 / 真实引用图谱 / Agent 工具编排闭环。"""
+"""离线自测（无需 API Key）：验证 语义去重 / 混合检索 / 真实引用图谱 / Agent 工具编排闭环。
+
+⚠️ 本脚本会清空文献库（`ctx.save_library()` 落盘），因此默认拒绝在非空库上运行。
+"""
+import os
 import sys
 import types
 import json
 
-sys.path.insert(0, r"C:\Users\Administrator\ai_research_agent")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.state import Container
 from services import library, rag
@@ -20,6 +24,13 @@ def reset(ctx):
 
 
 ctx = Container()
+
+# 安全闸门：reset() 会清空并落盘，绝不允许静默执行。
+if list(ctx.paper_order) and "--force" not in sys.argv:
+    print(f"⚠️ 自测会清空文献库（当前 {len(ctx.paper_order)} 篇），脚本不做备份。")
+    print("   先备份再重跑：cp -r storage storage.bak && python scripts/selftest.py --force")
+    sys.exit(2)
+
 reset(ctx)
 
 print("========== 1) 加载演示语料 + 内容级语义去重 ==========")

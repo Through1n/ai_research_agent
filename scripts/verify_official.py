@@ -1,6 +1,10 @@
 """真实官方 PDF 验证：内容级语义去重（含改名场景）、扫描件检测、长文档工程指标。
 
 不依赖 API Key（走原生文本层）；输出可直接引用到技术文档的实测数字。
+
+⚠️ 本脚本靠**清空文献库**来保证重跑的起点一致，因此默认拒绝在非空库上运行：
+   要么先备份（`cp -r storage storage.bak`）再加 `--force`，要么换一台干净的机器跑。
+   不做这道闸门就等于「跑一次指标验证，用户库里的论文全没了」——而它不会备份。
 """
 import os
 import sys
@@ -17,6 +21,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 P = lambda *a: os.path.join(ROOT, *a)
 
 ctx = Container()
+
+# 安全闸门：本脚本会清空文献库，绝不允许静默执行。
+# 判据是「库里有没有东西」，不是「有没有传 --force」——两者都要满足才继续。
+if list(ctx.paper_order) and "--force" not in sys.argv:
+    print("⚠️ 这个脚本为做实测会先清空文献库，而它自己不做备份。")
+    print(f"   当前库里有 {len(ctx.paper_order)} 篇论文：")
+    for _fn in list(ctx.paper_order)[:10]:
+        print(f"     - {_fn}")
+    if len(ctx.paper_order) > 10:
+        print(f"     … 共 {len(ctx.paper_order)} 篇")
+    print("\n先备份，再加 --force 重跑：")
+    print(f"    cp -r {P('storage')} {P('storage')}.bak")
+    print("    python scripts/verify_official.py --force")
+    sys.exit(2)
+
 # 隔离：清空运行库（仅影响 storage，不动 pdf/ 源文件）
 for fn in list(ctx.paper_order):
     library.remove_paper(ctx, fn)

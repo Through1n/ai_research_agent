@@ -58,6 +58,16 @@ def bench(n):
 
 
 print("========== 引用图谱规模压测（倒排索引候选 + 语义兜底）==========")
+
+# 安全闸门：make_corpus() 会清空文献库，绝不允许静默执行。
+if "--force" not in sys.argv:
+    _probe = Container()
+    _n = len(_probe.paper_order)
+    if _n:
+        print(f"⚠️ 压测会清空文献库（当前 {_n} 篇），脚本不做备份。")
+        print("   先备份再重跑：cp -r storage storage.bak && python scripts/bench_graph.py --force")
+        sys.exit(2)
+
 base = None
 for n in (20, 40):
     t, e = bench(n)

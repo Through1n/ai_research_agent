@@ -50,7 +50,7 @@
 
 - **研究生 / 科研人员**：需要快速读懂一批英文论文、跨文献对比方法与结果、追踪方向最新进展、起草开题或论文框架。系统的「跨文献问答」「图谱综述」「写作 Copilot」直接服务这一主线。
 - **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:93` 演示图谱兜底）。
-- **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑；单元测试 230 项（全套 `tests/`，其中 `test_core.py` 23 项）。
+- **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑（**三者都会清空文献库**：库非空时直接拒绝运行，备份后加 `--force` 才执行）；单元测试 230 项（全套 `tests/`，其中 `test_core.py` 23 项）。
 
 ## 1.3 赛题定位
 
@@ -929,7 +929,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 | 命令 | 预期输出（本机实测） |
 |---|---|
-| `python scripts/verify_official.py` | 去重胜负样本：BERT 不误命中已有 v7（`dup_sim@scripts/verify_official.py:31`） |
+| `python scripts/verify_official.py` | 去重胜负样本：BERT 不误命中已有 v7（`dup_sim@scripts/verify_official.py:59`） |
 | `python scripts/resnap.py` | 重拍 `docs/shots/` 界面截图（需 playwright + chromium） |
 | `python scripts/watch_daemon.py 30` | arXiv 增量追踪守护进程（可选） |
 
