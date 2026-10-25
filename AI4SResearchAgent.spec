@@ -45,6 +45,11 @@ BUNDLE_ITEMS = [
     (".streamlit", "app_bundle/.streamlit"),
     # 前端静态库（mermaid.min.js 等）：随软件本地分发，运行时零外网依赖（/app/static/...）
     ("static", "app_bundle/static"),
+    # 品牌徽标：页面图标 + 侧栏品牌区 + 「品牌徽标」区块都在运行时读它，
+    # 必须进 app_bundle（冻结态 app.py 跑在 %APPDATA%/.../app/，读不到 exe 根目录）
+    ("assets/icon.png", "app_bundle/assets"),
+    ("assets/logo.png", "app_bundle/assets"),
+    ("assets/logo.svg", "app_bundle/assets"),
 ]
 
 datas = []

@@ -12,6 +12,25 @@ from dotenv import load_dotenv
 BRAND = "MoreHand"
 BRAND_TAGLINE = "研究流水线 · 文献 → 问答 → 图谱 → 写作"
 
+
+def brand_logo(name: str = "icon.png") -> str:
+    """品牌徽标文件路径——页面图标 / 侧栏品牌区 / 「品牌徽标」区块共用同一张图。
+
+    - 开发态：项目根 `assets/<name>`；
+    - 冻结态：随 app_bundle 进 `%APPDATA%/AI4SResearchAgent/app/assets/`（见
+      AI4SResearchAgent.spec 的 BUNDLE_ITEMS）。
+    取不到返回空串，由调用方回退（这里不抛异常：图标缺失不该让应用起不来）。
+    设计规范与生成脚本见 `assets/make_logo.py` / `docs/brand_logo_design.md`。
+    """
+    try:
+        here = Path(__file__).resolve().parent
+        for cand in (here / "assets" / name, Path.cwd() / "assets" / name):
+            if cand.exists():
+                return str(cand)
+    except Exception:
+        pass
+    return ""
+
 # ---------- 桌面 / 开发双模式判定（见 desktop/INTERFACE_CONTRACT.md §3） ----------
 FROZEN = getattr(sys, "frozen", False)
 DESKTOP_MODE = FROZEN or os.environ.get("AI4S_DESKTOP") == "1"

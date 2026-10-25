@@ -32,7 +32,21 @@ try:                                                     # 品牌名取自 confi
     from config import BRAND as _BRAND
 except Exception:                                        # pragma: no cover
     _BRAND = "MoreHand"
-st.set_page_config(page_title=_BRAND, page_icon="🖐️", layout="wide")
+
+# 页面图标（浏览器标签 / 任务栏角标）：开发态在项目根 assets/，冻结态随 app_bundle
+# 进 %APPDATA%/.../app/assets/。两边都取不到就退回 emoji，不让启动失败。
+def _page_icon() -> str:
+    try:
+        from config import brand_logo
+        _icon = brand_logo("icon.png")
+        if _icon:
+            return _icon
+    except Exception:                                    # pragma: no cover
+        pass
+    return "🖐️"
+
+
+st.set_page_config(page_title=_BRAND, page_icon=_page_icon(), layout="wide")
 
 # ---------- 依赖导入兜底：环境缺依赖时给中文提示而不是崩溃 ----------
 try:

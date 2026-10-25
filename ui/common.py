@@ -50,6 +50,11 @@ _C_BG_ZEBRA2 两个只服务它的常量。）
   .ai-think           思考块：左侧 3px 细线表达层级（不用阴影）
   .ai-table-wrap      表格包裹层：overflow-x:auto，防宽表撑破布局
   .ai-divider         1px 分隔线
+  .ai-brand-name      侧栏品牌名：--fs-title / --c-text（配 logo 图横排）
+  .ai-brand-tagline   侧栏品牌副标题：--fs-caption / --c-text-3
+  .ai-brand-badge     品牌徽标卡：**高度有界**（max-height + overflow-y:auto），
+                      图片与文字一律不溢出框定范围，超出在框内上下滑动查看
+  .ai-brand-badge-cap 徽标卡内的图注/规格行：--fs-micro / --c-text-3
   .ptab / .ptab-wrap  统一表格（见 _PRETTY_CSS：柔底表头 + 斑马纹 + 悬停态）
 """
 
@@ -58,11 +63,13 @@ import os
 import socket
 import time
 import traceback
+from functools import lru_cache
 from html import escape as _escape
 
 import pandas as pd
 import streamlit as st
 
+from config import brand_logo
 from ui import design as _design
 
 # 长文本折叠阈值：超过该字数或 15 行一律折叠（UI 规范 5）
@@ -236,6 +243,30 @@ _COMPONENT_CSS = """<style>
 }
 .ai-muted{                      /* 次级文字：解释性、补充说明性内容 */
   color:var(--c-text-2);
+}
+/* ---- 品牌区 / 品牌徽标卡（2026-10-25 加）---------------------------------
+   .ai-brand-badge 是**唯一**允许出现滚动条的构件：产品需求明确要求
+   「所有展示内容限定在明确的最大框定范围内，不得溢出；超出则框内上下滑动」。
+   高度上限走 --brand-badge-max-h（默认 320px），窄侧栏可在调用处覆盖。 */
+.ai-brand-name{
+  font-size:var(--fs-title);line-height:var(--lh-title);font-weight:650;
+  color:var(--c-text);letter-spacing:-0.01em;margin:0;
+}
+.ai-brand-tagline{
+  font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--c-text-3);margin:0;
+}
+.ai-brand-badge{
+  max-height:var(--brand-badge-max-h,320px);
+  overflow-y:auto;overflow-x:hidden;
+  background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);
+  padding:var(--s-4);margin:var(--s-2) 0;min-width:0;
+  -webkit-overflow-scrolling:touch;                 /* iOS/WebView 惯性滚动 */
+  overscroll-behavior:contain;                      /* 滚到头不带动整页 */
+}
+.ai-brand-badge img{max-width:100%;height:auto;display:block;margin:0 auto var(--s-2);}
+.ai-brand-badge-cap{
+  font-size:var(--fs-micro);line-height:var(--lh-micro);color:var(--c-text-3);
+  margin:var(--s-1) 0 0;
 }
 .ai-snippet{                    /* 等宽代码块：原文片段、工具参数，横向溢出时滚动，不撑破栅格 */
   background:var(--c-subtle);border:1px solid var(--c-border);border-radius:var(--r);
@@ -1031,6 +1062,36 @@ def resolve_pdf(filename):
 #   · metric_strip()      KPI 指标条（3-5 个 hero 指标先行，明细表格后置）
 # 视觉层一律引用 ui/design.py 的令牌：颜色 / 圆角 / 间距 / 字号都走 var(--...) 或
 # 本模块 _COMPONENT_CSS 的共用类，装饰性阴影已删除，不引入第二套视觉语言。
+@lru_cache(maxsize=4)
+def brand_logo_data_uri(name: str = "icon.png", box: int = 512) -> str:
+    """把品牌徽标转成 data URI，供**有界框内部**的 <img> 使用。
+
+    为什么必须 data URI 而不是 st.image：产品需求要求「图片与文字一起限定在
+    明确的最大框定范围内」，而 st.image 是 Streamlit 的顶层元素，塞不进我们自己
+    的 .ai-brand-badge 容器里——那样图片就跑到框子外面，框只圈住了文字
+    （scripts/_verify_brand_badge.py 第 5 步正是断言这一点）。
+    大图先缩到 box 见方再编码，避免把几 MB 的 base64 塞进 HTML。
+    """
+    path = brand_logo(name)
+    if not path:
+        return ""
+    try:
+        import base64
+        import io
+
+        from PIL import Image
+
+        with Image.open(path) as im:
+            im = im.convert("RGBA")
+            if max(im.size) > box:
+                im.thumbnail((box, box), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:                                    # pragma: no cover
+        return ""
+
+
 def _empty_state_card_html(title: str, desc: str = "", actions=(), icon: str = "🧭",
                            footer: str = "") -> str:
     """教学式空状态卡片的 HTML（纯函数，便于单测；st.* 包装见 empty_state_card）。

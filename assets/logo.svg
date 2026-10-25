@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" width="1024" height="1024">
+  <!-- MoreHand 品牌徽标：抽象手掌 = 神经网络。令牌见 ui/design.py（BLUE_LIGHT/BLUE_DEEP）。 -->
+  <defs>
+    <linearGradient id="mh-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="rgb(47, 124, 201)" />
+      <stop offset="1" stop-color="rgb(23, 78, 142)" />
+    </linearGradient>
+    <clipPath id="mh-squircle">
+      <rect x="0" y="0" width="1" height="1" rx="0.219" ry="0.219" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#mh-squircle)">
+    <rect x="0" y="0" width="1" height="1" fill="url(#mh-bg)" />
+    <g stroke="#ffffff" stroke-width="0.055" stroke-linecap="round" fill="none">
+      <line x1="0.300" y1="0.715" x2="0.418" y2="0.552" />
+      <line x1="0.412" y1="0.742" x2="0.412" y2="0.360" />
+      <line x1="0.505" y1="0.762" x2="0.520" y2="0.302" />
+      <line x1="0.596" y1="0.742" x2="0.628" y2="0.368" />
+      <line x1="0.668" y1="0.712" x2="0.732" y2="0.502" />
+    </g>
+    <path d="M 0.285 0.752 Q 0.492 0.900 0.700 0.742"
+          stroke="#ffffff" stroke-width="0.045" stroke-linecap="round" fill="none" />
+    <g fill="#ffffff">
+      <circle cx="0.800" cy="0.240" r="0.062" />
+    </g>
+  </g>
+</svg>

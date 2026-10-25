@@ -5,10 +5,12 @@ from pathlib import Path
 
 import streamlit as st
 
-from config import BRAND, BRAND_TAGLINE, DEMO_PAPERS, DESKTOP_MODE
+from config import BRAND, BRAND_TAGLINE, DEMO_PAPERS, DESKTOP_MODE, brand_logo
 from core.providers import list_providers, get_provider, custom_provider, CUSTOM_ID
 from services import library
-from ui.common import (memory_mb, ensure_state, jump_banner, friendly_error, empty_state, step_text)
+from ui.common import (memory_mb, ensure_state, jump_banner, friendly_error, empty_state,
+                       step_text, _inject_css_once, _COMPONENT_CSS, _CSS_FLAG_COMPONENT,
+                       brand_logo_data_uri)
 
 MENU = [
     "智能总助手",
@@ -333,11 +335,81 @@ def _render_model_settings(ctx):
         friendly_error("读取用户画像", e, reasons=["memory.json 损坏"],
                        actions=["删除 storage/memory.json 后重启"])
 
+def _e(s) -> str:
+    """HTML 转义（品牌文案走 unsafe_allow_html 渲染，必须先转义）。"""
+    try:
+        from html import escape
+        return escape(str(s if s is not None else ""))
+    except Exception:                                    # pragma: no cover
+        return ""
+
+
+def _brand_block() -> None:
+    """侧栏品牌区：徽标图 + MoreHand + 副标题（横排，取不到图就退回纯文字）。
+
+    徽标图同时用于页面图标（app.py）与「品牌徽标」区块，三处同一张图
+    （assets/icon.png，生成脚本 assets/make_logo.py）。
+    """
+    _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
+    _logo = brand_logo("icon.png")
+    if not _logo:                                        # 图标缺失不该让侧栏塌掉
+        st.title(BRAND)
+        st.caption(BRAND_TAGLINE)
+        return
+    _c_logo, _c_text = st.columns([1, 3.4], gap="small")
+    with _c_logo:
+        st.image(_logo, width=46, output_format="PNG")
+    with _c_text:
+        st.markdown('<div class="ai-brand-name">%s</div>' % _e(BRAND),
+                    unsafe_allow_html=True)
+        st.markdown('<div class="ai-brand-tagline">%s</div>' % _e(BRAND_TAGLINE),
+                    unsafe_allow_html=True)
+
+
+def _brand_badge_block() -> None:
+    """「品牌徽标」区块：**高度有界**的徽标卡 + 点击查看完整设计规范。
+
+    需求（2026-10-25）两条硬约束在这里落实：
+      ① 图片与文字一律不溢出框定范围 —— .ai-brand-badge 的 max-height 锁死高度，
+         徽标图用 data URI 塞进同一个框（st.image 是顶层元素，会跑到框外），
+         超出部分在框内上下滑动（overscroll-behavior:contain 不带动整页）；
+      ② 提供「点击进入查看详情」的交互 —— 外层 st.expander 本身就是点击入口，
+         点开才加载完整规范，不占首屏。
+    """
+    _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
+    with st.expander("品牌徽标", expanded=False):
+        _img = brand_logo_data_uri("logo.png", 512) or brand_logo_data_uri("icon.png", 512)
+        _img_html = (f'<img src="{_img}" alt="MoreHand 徽标" width="150" />'
+                     if _img else "")
+        st.markdown(
+            '<div class="ai-brand-badge">'
+            + _img_html
+            + '<div class="ai-brand-name">%s</div>' % _e(BRAND)
+            + '<div class="ai-brand-tagline">%s</div>' % _e(BRAND_TAGLINE)
+            + '<div class="ai-brand-badge-cap">构成</div>'
+            + '<div class="ai-muted">圆角方形（squircle）底 + 品牌蓝渐变；'
+              '中央一只抽象的向上手掌，五根手指是圆头白线，指节处为浅色节点'
+              '——手掌即 MoreHand 的 Hand，也是 AI agent 的神经网络（节点＝能力，'
+              '连线＝编排）；右上角四角星 spark 表示智能生成。</div>'
+            + '<div class="ai-brand-badge-cap">用色</div>'
+            + '<div class="ai-muted">只取品牌强调色系 #2F7CC9 → #174E8E 与'
+              '白 / 浅蓝白 #D6E6FA，不引入第三色相（与 ui/design.py 同源）。</div>'
+            + '<div class="ai-brand-badge-cap">光学尺寸</div>'
+            + '<div class="ai-muted">≥64px 细模（掌缘弧 + 关节节点 + spark）；'
+              '32–63px 中模（去关节节点）；&lt;32px 剪影模（只留五根加粗圆头线）'
+              '——16px 下任何内部细节都会糊成一团，宁可只要一只手。</div>'
+            + '<div class="ai-brand-badge-cap">规格</div>'
+            + '<div class="ai-muted">assets/icon.ico 含 16/24/32/48/64/128/256 '
+              '七档；logo.png 1024&sup2;、icon.png 256&sup2;；矢量源 assets/logo.svg。</div>'
+            + '</div>',
+            unsafe_allow_html=True)
+        st.caption("完整设计规范与实现方案见 docs/brand_logo_design.md")
+
+
 def render(ctx):
     ensure_state({"saved_api_key": "", "menu": MENU[0]})
     with st.sidebar:
-        st.title(BRAND)
-        st.caption(BRAND_TAGLINE)
+        _brand_block()
         _ver = _desktop_version_caption()
         if _ver:
             st.caption(f"🕹️ {_ver}")
@@ -436,6 +508,9 @@ def render(ctx):
                              disabled=(item == cur)):
                     _pick(item)
                     cur = item
+            # 品牌徽标：默认收起（不占首屏），点开才看——与「关于」同类，
+            # 属展示型信息而非导航。
+            _brand_badge_block()
 
         st.session_state["_nav_ready"] = True
         st.session_state["_nav_main_shadow"] = main_val
