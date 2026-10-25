@@ -154,6 +154,15 @@ C:\Users\Administrator\anaconda3\envs\ai_research\python.exe scripts\release.py 
 - 直接改项目源码跑 `streamlit run app.py`（开发模式）；
 - 桌面版用户不要手动改 `%APPDATA%\...\app\` 下的文件，下次更新会被覆盖。
 
+### 6.7 启动窗口里偶尔冒出一行 `'xxx' is not recognized as an internal or external command`
+
+不影响启动，可直接忽略。原因是 cmd.exe 解析「UTF-8 批处理 + `chcp 65001` + 中文」时会把某行
+注释或回显的**尾巴当成命令执行**（实测碎片内容随行拆分落点变化，如 `'写。'`、`'号'`、`'taller'`；
+只在某些「首次」出现，紧接着重跑就没了）。
+
+- 主入口 `启动科研助手.bat` 已改为**纯 ASCII**（控制台提示是英文），不会再出现这种噪音；
+- `start.bat` 是完整搭建脚本、提示仍为中文，同样可能冒一行，可直接忽略。
+
 ---
 
 ## 7. 目录结构（壳层 vs 业务层）

@@ -1,23 +1,29 @@
 @echo off
 chcp 65001 >nul
 REM ============================================================
-REM  AI4S 科研助手 - 快捷启动（双击即用）
+REM  AI4S Research Agent - quick launcher (double-click to run)
 REM
-REM  与 start.bat 的分工：本文件是轻量快捷方式——不装依赖、不检查 Key，
-REM  直接用 conda 环境 ai_research 启动 streamlit；完整一键搭建请用 start.bat。
+REM  Division of labour with start.bat: this file is the lightweight
+REM  shortcut. It does NOT install dependencies and does NOT check the
+REM  API key. It locates the conda env "ai_research" (PATH probe plus
+REM  the usual install locations) and runs streamlit via "-m", so it
+REM  never needs "conda activate". For a full one-click setup use start.bat.
 REM
-REM  Round 16 修正（旧文件的两个实测痛点）：
-REM   1) 旧实现裸调 `conda activate` + `streamlit`，双击时若 PATH 里没有
-REM      conda（常见：非 Anaconda Prompt 环境启动），会报"不是内部或外部命令"
-REM      并因缺少 pause 瞬间闪退，用户看不到任何原因。
-REM   2) 旧文件第 2 行注释是乱码（UTF-8 被二次转码成 U+FFFD），已重写。
-REM  现在：显式定位 ai_research 环境的 python.exe（PATH 探测 + 常见路径兜底），
-REM  用 `-m streamlit` 启动，不依赖 activate；任一步失败都 pause 等按键。
+REM  Why this file is ASCII-only:
+REM  a UTF-8 batch file that contains Chinese text together with chcp 65001
+REM  makes cmd.exe mis-split lines and execute the tail of a comment as a
+REM  command (observed: "'X' is not recognized as an internal or external
+REM  command"). A pure-ASCII batch has no byte/char ambiguity, so it is
+REM  immune on any console code page. Chinese copy lives in the app itself;
+REM  the build script build_desktop.bat follows the same rule.
+REM
+REM  Failure handling: every exit path pauses, so double-clicking never
+REM  flashes a window shut before the reason can be read.
 REM ============================================================
 cd /d "%~dp0"
 
 if not exist "app.py" (
-    echo [FAIL] 未找到 app.py —— 请把本文件放在项目根目录再双击。
+    echo [FAIL] app.py not found - put this file in the project root.
     pause
     exit /b 1
 )
@@ -35,19 +41,19 @@ if not defined PYEXE (
     if not errorlevel 1 set "PYEXE=python"
 )
 if not defined PYEXE (
-    echo [FAIL] 未找到 Python 环境 ai_research，PATH 里也没有 python。
-    echo         请先安装 Anaconda 并创建 ai_research 环境，或改用 start.bat 自动搭建。
+    echo [FAIL] Conda env "ai_research" not found and python is not on PATH.
+    echo        Install Anaconda and create that env, or run start.bat to set it up.
     pause
     exit /b 1
 )
 
-echo 使用 Python: %PYEXE%
-echo 正在启动 AI4S 科研助手 ... 浏览器将打开 http://127.0.0.1:8501
-echo （关闭本窗口或按 Ctrl+C 停止服务）
+echo Python: %PYEXE%
+echo Starting AI4S Research Agent ... the browser will open http://127.0.0.1:8501
+echo (close this window or press Ctrl+C to stop the server)
 echo.
 
 "%PYEXE%" -m streamlit run app.py --server.address=127.0.0.1
 
 echo.
-echo 服务已停止。按任意键关闭窗口。
+echo Server stopped. Press any key to close this window.
 pause >nul
