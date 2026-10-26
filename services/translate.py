@@ -666,7 +666,8 @@ def bilingual_html(pairs, glossary=None, align=True):
         right.append('<p data-index="%d" data-i="%d">%s</p>' % (i, i, zh))
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 *{{box-sizing:border-box;}}
-html,body{{margin:0;height:100%;overflow:hidden;background:var(--c-bg,#fafafa);
+html,body{{margin:0;height:100%;overflow:hidden;background:var(--c-bg,#fafafa);}}
+body{{display:flex;flex-direction:column;align-items:center;
 font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC","WenQuanYi Micro Hei","Helvetica Neue",Arial,sans-serif);
 font-size:var(--fs-body,13.5px);line-height:1.65;color:var(--c-text,#18181b);overflow-wrap:anywhere;}}
 img{{max-width:100%;height:auto;}}
@@ -675,7 +676,8 @@ img{{max-width:100%;height:auto;}}
    不可滚动；若选 (a) 内容自适应 + 高度 JS，长文档会被高度上限截断且无滚动条可救，
    内容直接不可达；(b) 把滚动收敛到一层，两栏天然同步（不弱于原比例同步），
    且窗口再窄也只会出现「一条」滚动条。 */
-#wrap{{display:flex;align-items:flex-start;flex-wrap:wrap;height:100vh;max-height:100vh;
+#wrap{{display:flex;align-items:flex-start;flex-wrap:wrap;
+flex:1 1 auto;min-height:0;align-self:stretch;
 overflow-y:auto;overflow-x:hidden;}}
 .pane{{flex:1 1 320px;min-width:0;max-width:100%;
 padding:var(--s-5,24px) var(--s-4,16px) var(--s-7,40px);overflow-wrap:anywhere;}}
@@ -687,7 +689,11 @@ border-bottom:1px solid var(--c-border,#e4e4e7);color:var(--c-text,#18181b);curs
 overflow-wrap:anywhere;}}
 p.active{{background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));
 box-shadow:inset 3px 0 0 var(--c-accent,#1f5fae);}}
-#bar{{position:fixed;top:var(--s-2,8px);left:50%;transform:translateX(-50%);
+/* 提示条走常规流（不再 position:fixed）：固定定位会永久压在正文第一段上方
+   （实测 bar=[8,34]、首段 top=24，顶部 10px 被盖），用户把鼠标移到那条位置时
+   看到的就是浮条压字。放进 flex 列后它自己占一条高度，正文从它下方开始，
+   任何滚动位置都不再发生重叠。 */
+#bar{{flex:0 0 auto;margin:var(--s-2,8px) 0;
 background:var(--c-accent,#1f5fae);color:var(--c-surface,#ffffff);
 padding:var(--s-1,4px) var(--s-4,16px);border-radius:var(--r,8px);
 font-size:var(--fs-caption,12px);line-height:1.5;z-index:9;
@@ -746,15 +752,18 @@ max-width:calc(100% - 16px);overflow-wrap:anywhere;}}
   }}
   function bindPane(a, b){{
     a.querySelectorAll('p').forEach(function(p){{
-      var on = function(){{
-        var idx = p.getAttribute('data-index');
-        if (idx === null || idx === undefined) return;
+      var idx = p.getAttribute('data-index');
+      if (idx === null || idx === undefined) return;
+      /* 悬停只高亮，绝不滚动。两栏共用 #wrap 这一层滚动容器，在 mouseenter 里
+         scrollIntoView 等于把整页挪走：光标底下换成另一段 → 再次 mouseenter
+         → 再滚动，来回抖动直到内容全被推出视口（2026-10-26 用户实测「悬停后
+         原渲染页面消失」）。滚动只留给一次性的显式点击。 */
+      p.addEventListener('mouseenter', function(){{ highlight(idx); }});
+      p.addEventListener('click', function(){{
         highlight(idx);
         var t = b.querySelector('p[data-index="' + idx + '"]');
-        if (t) t.scrollIntoView({{block:'nearest'}});
-      }};
-      p.addEventListener('mouseenter', on);
-      p.addEventListener('click', on);
+        if (t) {{ try{{ t.scrollIntoView({{block:'center'}}); }}catch(e){{}} }}
+      }});
     }});
   }}
   bindPane(l, r); bindPane(r, l);
@@ -1902,7 +1911,10 @@ def _aligned_pair_html(en, zh, idx, align=True):
                 r_parts.append('<span class="sn" data-sidx="%d">%s</span>' % (k, _esc(zs)))
         if not l_parts or not r_parts:
             return en_esc, zh_esc
-        return "".join(l_parts), "".join(r_parts)
+        # 英文句子之间必须补回一个空格：split_sentences 会吃掉句间空白，
+        # 直接 "".join 会渲染成 "decoder.The best" / "mechanism.We propose"
+        # （2026-10-26 截图实测）。中文不用补，句末标点自带断句。
+        return " ".join(l_parts), "".join(r_parts)
     except Exception:
         return _esc(en), (_esc(zh) if zh else "<em>（待翻译）</em>")
 
@@ -1919,21 +1931,28 @@ box-shadow:inset 0 -2px 0 var(--c-accent,#1f5fae);}
   function paneOf(el){ var p = el; while (p && p !== document.body){ if (p.id === 'l' || p.id === 'r') return p; p = p.parentElement; } return null; }
   function other(p){ return document.getElementById(p && p.id === 'l' ? 'r' : 'l'); }
   function clear(){ var ms = document.querySelectorAll('.sn.on'); for (var i = 0; i < ms.length; i++){ ms[i].classList.remove('on'); } }
-  function link(el){
+  function mark(el){
     var idx = el.getAttribute('data-sidx');
-    if (idx === null) return;
+    if (idx === null) return null;
     var o = other(paneOf(el));
-    if (!o) return;
+    if (!o) return null;
     clear();
     el.classList.add('on');
     var t = o.querySelector('.sn[data-sidx="' + idx + '"]');
-    if (t){ t.classList.add('on'); try{ t.scrollIntoView({block:'nearest'}); }catch(e){} }
+    if (t) t.classList.add('on');
+    return t;
   }
   var ps = document.querySelectorAll('.sn');
   for (var i = 0; i < ps.length; i++){
     (function(el){
-      el.addEventListener('mouseenter', function(){ link(el); });
-      el.addEventListener('click', function(){ link(el); });
+      /* 悬停只做双向高亮；滚动只在点击时发生——悬停里 scrollIntoView 会挪动
+         两栏共用的 #wrap，把光标下的句子换成另一句再触发 mouseenter，滚雪球
+         式抖动直至正文被推出视口（2026-10-26「悬停后页面消失」根因）。 */
+      el.addEventListener('mouseenter', function(){ mark(el); });
+      el.addEventListener('click', function(){
+        var t = mark(el);
+        if (t){ try{ t.scrollIntoView({block:'center'}); }catch(e){} }
+      });
     })(ps[i]);
   }
   var panes = document.querySelectorAll('.pane');

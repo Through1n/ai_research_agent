@@ -330,6 +330,14 @@ class BilingualHtmlTest(unittest.TestCase):
         b = bilingual_html([("A. B.", "甲。乙。")])
         self.assertNotIn("{sel}", b)
 
+    def test_sentence_spans_keep_word_gap(self):
+        # 句级对齐的英文相邻句之间必须留有空格：切成 span 后直接拼接会粘成
+        # "decoder.The best"（2026-10-26 截图实测的第二个渲染缺陷）
+        b = bilingual_html([("First one. Second sentence here.", "第一句。第二句。")])
+        self.assertNotIn("one.Second", b)
+        self.assertIn("one.", b)
+        self.assertIn("Second sentence", b)
+
 
 class FiguresTest(unittest.TestCase):
     def test_page_image_rects_sorted_and_filtered(self):
