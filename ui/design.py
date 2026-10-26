@@ -481,6 +481,15 @@ textarea{
   background:var(--c-surface);
   padding:var(--s-4);
 }
+/* 卡片头行：卡片内第一个元素（通常是 section_header 标题）与正文之间拉一条分隔线，
+   形成 Element Card header / body 的结构感——否则卡片只是"有个框"，内部仍是一堆平铺。
+   只作用于 card 前缀的卡片，不影响其它容器。 */
+[data-testid="stVerticalBlock"][class*="st-key-card"]
+  > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:first-child{
+  border-bottom:1px solid var(--c-border);
+  padding-bottom:var(--s-3);
+  margin-bottom:var(--s-3);
+}
 [data-testid="stExpander"]{box-shadow:none; min-width:0;}
 [data-testid="stExpander"] details,
 [data-testid="stExpanderDetails"]{
