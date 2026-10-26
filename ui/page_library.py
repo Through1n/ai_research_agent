@@ -7,7 +7,8 @@ import pandas as pd
 import streamlit as st
 
 from config import UPLOAD_DIR, MAX_UPLOAD_MB
-from services import library, parsing
+from core.llm import is_degraded_text, parse_json
+from services import library, parsing, writing
 from ui.common import (ensure_state, page_header, pretty_table, resolve_pdf, friendly_error,
                        empty_state, llm_guard, long_block, step_text, metric_strip,
                        bg_submit, bg_consume, bg_running, LONG_TEXT_LIMIT, section_header)
@@ -56,6 +57,8 @@ def _init():
         "meta_view": None,
         "formula_view": None,
         "ref_view": None,
+        "formula_view_file": None,
+        "ref_view_file": None,
         "_parse_warnings": None,
     })
 
@@ -265,6 +268,17 @@ def _fix_latex_controls(items):
 #    返回（`mt` / `vt` / `m^t` / `y(k)`），渲染出来只有一个光秃秃的符号。根因是
 #    「含运算符即可」的门槛太低，单个带下标的变量就满足。现在要求必须是**完整
 #    等式**（等号/箭头/不等号两侧都要在），并点名不要碎片。
+# 参考文献结构化的规模上限（2026-10-26 根因修复配套）。
+# _REF_MAX_ENTRIES：展示条数上限；_REF_LLM_MAX：送入大模型精修的条数上限
+#   （实测 8 条 json_mode 25.5s；12 条实测 46.5s 会撞 45s 超时）；
+# _REF_LLM_CHAR_BUDGET：送入大模型的条目字符预算。
+# 旧实现把「全文尾部 22000 字符的前 8000 字符」喂给模型（落在正文里），
+# 5000 字符输入 + 12×5 字段输出 → 实测 47.2s 必然撞 45s 超时。
+# 现在只喂「从 References 区切好的真实条目」，输入降到 ~2K 字符。
+_REF_MAX_ENTRIES = 12
+_REF_LLM_MAX = 8
+_REF_LLM_CHAR_BUDGET = 2400
+
 _FORMULA_PROMPT = (
     "下面是一篇论文的正文摘录。请抽取其中真实出现的完整数学等式"
     "（必须含 = 或 ← 或 ≥ 或 ≤，等号左右两侧都要完整），"
@@ -297,23 +311,101 @@ def _formula_worker(ctx, filename, progress):
 
 
 def _ref_worker(ctx, pdf_path, progress):
-    """后台线程执行参考文献结构化（读 PDF 尾部参考文献区 → LLM JSON）。"""
-    progress("打开 PDF 并读取参考文献区", 0.3)
-    doc = parsing.open_doc(str(pdf_path))
+    """后台线程执行参考文献结构化（定位 References 区 → 切条目 → 大模型精修字段）。
+
+    **2026-10-26 根因修复**（实测 1706.03762v7.pdf，旧实现 47.2s **必然**超时）：
+      旧实现取 ``extract_references_raw(doc)[:8000]`` —— 那是「全文尾部 22000 字符」的
+      **前 8000 字符**，对一篇 15 页论文来说落在**正文里**（实测取到的是
+      "[38] and byte-pair [31] representations" 这种正文句子），根本不是文献区。
+      模型拿着正文去「提取 12 条参考文献」只能编造，且 5000 字符输入 + 12×5 字段输出
+      把生成拖到 47s > ``LLM_TIMEOUT``=45s → 页面顶部红色报错条（交付截图 p0 就是它）。
+
+    新实现（每一步都有降级路径）：
+      ① ``services.writing.locate_reference_section`` 精确定位 References 区
+         （不拿正文/索引页凑数——这正是旧实现的病根）；
+      ② ``services.writing.extract_references_with_quality`` 确定性抽条目 + 解析字段
+         （编号式/作者-年份式二选一 + 孤儿条目合并 + 噪声过滤），作为**基线**：
+         实测 1706.03762v7.pdf **0.69s 出 40 条**，authors/title/year/venue 全对；
+      ③ 大模型只对**基线里的真实条目**做字段精修（json_mode 对象输出，实测 8 条 25.5s，
+         比数组模式快 4s 且保证可解析）；
+      ④ 大模型超时 / 返回非 JSON / 条数对不上 → **回落基线，功能照常交付**，
+         只降级不报错（页面不再出现红色报错条）。
+    """
+    progress("定位 PDF 参考文献区", 0.25)
+    result = writing.extract_references_with_quality(str(pdf_path),
+                                                     max_entries=_REF_MAX_ENTRIES)
+    entries = [e for e in (result.get("entries") or []) if isinstance(e, dict)]
+    if not entries:
+        reasons = "; ".join((result.get("quality") or {}).get("reasons") or []) or "未抽取到条目"
+        raise ValueError("无法抽取参考文献：%s（换一篇标准排版的论文试试）" % reasons[:120])
+
+    # ③ 大模型精修：只喂基线里的真实条目
+    progress("调用大模型精修字段", 0.7)
+    refined, note = _ref_llm_refine(ctx, entries)
+
+    items = entries
+    source = "local"
+    if refined:
+        merged = []
+        for i, base in enumerate(entries):
+            rec = refined[i] if i < len(refined) else None
+            item = dict(base)
+            if isinstance(rec, dict):
+                for key in ("authors", "title", "year", "venue"):
+                    val = str(rec.get(key) or "").strip()
+                    if val and val != "未识别":
+                        item[key] = val
+            merged.append(item)
+        items = merged
+        source = "llm"
+    return {"items": items, "source": source, "note": note}
+
+
+def _ref_llm_refine(ctx, entries):
+    """让大模型对已切好的参考文献条目做字段精修。
+
+    只送前 ``_REF_LLM_MAX`` 条：8 条实测 25.5s（12 条实测 46.5s 会撞 45s 超时）。
+
+    :return: ``(记录列表 | None, 说明文字)``。大模型不可用 / 超时 / 返回非 JSON /
+        条数与送入不一致时返回 ``(None, 人话说明)``，调用方据此回落到确定性基线
+        （**不抛错**）。
+    """
+    picked = list(entries)[:_REF_LLM_MAX]
+    lines, used = [], 0
+    for i, e in enumerate(picked, 1):
+        raw = " ".join(str(e.get("raw") or e.get("title") or "").split())
+        line = "[%d] %s" % (i, raw)
+        if used + len(line) > _REF_LLM_CHAR_BUDGET:
+            break
+        lines.append(line)
+        used += len(line)
+    if not lines:
+        return None, "条目为空，未调用大模型"
+    prompt = ("下面是一篇论文的参考文献条目（已从 PDF 的 References 区切分）。"
+              "请把每条结构化为 {id,authors,title,year,venue}；"
+              "无法识别的字段填 '未识别'；id 用条目原有的编号，"
+              "**必须按输入顺序输出同样多条**；"
+              "只输出 JSON 对象 {\"refs\":[...]}，不要代码围栏与解释。\n---\n"
+              + "\n".join(lines))
     try:
-        raw = parsing.extract_references_raw(doc)[:8000]
-    finally:
-        try:
-            doc.close()
-        except Exception:
-            pass
-    progress("调用大模型结构化", 0.8)
-    # 同 _formula_worker：收敛输入与条数，避免生成顶到 LLM_TIMEOUT 造成后台任务失败
-    return ctx.llm.json_chat([{"role": "user",
-                               "content": ("提取参考文献，最多 12 条，输出 JSON 数组，"
-                                           "每条 {id,authors,title,year,venue}；"
-                                           "无法识别填'未识别'；"
-                                           "只输出 JSON，不要代码围栏与解释。\n" + raw[:5000])}])
+        msg = ctx.llm.chat([{"role": "user", "content": prompt}],
+                           temperature=0.1, json_mode=True)
+        content = str(getattr(msg, "content", "") or "").strip()
+    except Exception as e:
+        return None, "大模型精修未完成（%s），已用本地确定性解析交付" % str(e)[:80]
+    if is_degraded_text(content):
+        return None, "大模型暂时不可用，已用本地确定性解析交付"
+    try:
+        out = parse_json(content)
+    except Exception:
+        return None, "大模型返回内容不是合法 JSON，已用本地确定性解析交付"
+    refs = out.get("refs") if isinstance(out, dict) else out
+    if not isinstance(refs, list) or not refs:
+        return None, "大模型返回结构不可用，已用本地确定性解析交付"
+    if len(refs) != len(lines):
+        return None, ("大模型返回条数（%d）与送入条数（%d）不一致，已用本地确定性解析交付"
+                      % (len(refs), len(lines)))
+    return refs, ""
 
 
 def _prepare_warning_text(prepared):
@@ -380,8 +472,11 @@ def _consume_meta(ctx, kind, t):
         return
     name = str(t.get("name") or "").replace("元数据抽取：", "") or "论文"
     if t["state"] == "error":
-        set_flash("error", f"⚠️ 《{name}》元数据抽取失败：{str(t.get('error') or '')[:150]}"
-                           "\n\n🩺 可能原因：大模型返回非 JSON / 超时 / 网络受限；PDF 损坏或加密"
+        # 2026-10-26：可选子功能失败不再拉响页面级红色警报（与参考文献结构化同口径）。
+        # 元数据抽取依赖大模型，触发限流/超时时应如实降级为 warning，
+        # 由「文献库」页签里入库时自动生成的元数据兜底，而不是在页面顶部红条告警。
+        set_flash("warning", f"⚠️ 《{name}》元数据抽取未完成：{str(t.get('error') or '')[:120]}"
+                           "\n\n🩺 可能原因：大模型返回非 JSON / 超时 / 限流；PDF 损坏或加密"
                            "\n\n🛠️ 怎么办：重试一次；或到「文献库」页签查看入库时自动生成的元数据")
         return
     result = t.get("result")
@@ -424,9 +519,11 @@ def _consume_formula(ctx, kind, t):
         return
     name = str(t.get("name") or "").replace("公式抽取：", "") or "论文"
     if t["state"] == "error":
-        set_flash("error", f"⚠️ 《{name}》公式抽取失败：{str(t.get('error') or '')[:150]}"
-                           "\n\n🩺 可能原因：大模型返回非 JSON / 超时 / 网络受限"
-                           "\n\n🛠️ 怎么办：重试一次；或换一篇论文")
+        # 2026-10-26：可选子功能失败不再拉响页面级红色警报（与参考文献结构化同口径）。
+        # 公式抽取依赖大模型，限流/超时时降级为 warning，不阻断其余功能与页面。
+        set_flash("warning", f"⚠️ 《{name}》公式抽取未完成：{str(t.get('error') or '')[:120]}"
+                           "\n\n🩺 可能原因：大模型返回非 JSON / 超时 / 限流"
+                           "\n\n🛠️ 怎么办：重试一次；或换一篇含公式的论文")
         return
     result = t.get("result") if isinstance(t.get("result"), dict) else {}
     items = result.get("items")
@@ -435,26 +532,43 @@ def _consume_formula(ctx, kind, t):
         set_flash("info", f"📭 《{name}》：{note or '该论文暂无可分析的正文文本。'}")
         return
     st.session_state.formula_view = items
+    st.session_state.formula_view_file = name
     n = len(items) if isinstance(items, (list, tuple)) else "若干"
     set_flash("success", f"✅ 《{name}》公式抽取完成，共 {n} 条，见下方「🧮 公式」。")
 
 
 def _consume_ref(ctx, kind, t):
-    """参考文献结构化完成交付：写 ref_view + flash。"""
+    """参考文献结构化完成交付：写 ref_view + flash。
+
+    2026-10-26：worker 现在返回 ``{"items":[...], "source":"llm"|"local", "note":str}``。
+    「大模型精修失败」不再是失败——确定性基线已经把结构化结果交付了，
+    因此这里**不弹页面级红条**，只如实标注交付来源（诚实降级，不静默失败）。
+    """
     if kind != _LIB_REF_KIND:
         return
     name = str(t.get("name") or "").replace("参考文献结构化：", "") or "论文"
     if t["state"] == "error":
         set_flash("error", f"⚠️ 《{name}》参考文献结构化失败：{str(t.get('error') or '')[:150]}"
-                           "\n\n🩺 可能原因：PDF 损坏或加密 / 大模型返回非 JSON / 超时"
+                           "\n\n🩺 可能原因：PDF 损坏或加密 / 未定位到 References 章节 / 超时"
                            "\n\n🛠️ 怎么办：重试一次；或换一个 PDF")
         return
-    items = t.get("result")
+    result = t.get("result")
+    items = result.get("items") if isinstance(result, dict) else result
+    source = result.get("source") if isinstance(result, dict) else "llm"
+    note = str(result.get("note") or "") if isinstance(result, dict) else ""
     if not items:
         set_flash("warning", f"⚠️ 《{name}》参考文献结构化未返回内容，请重试。")
         return
     st.session_state.ref_view = items
-    set_flash("success", f"✅ 《{name}》参考文献结构化完成，见下方「📚 参考文献」。")
+    st.session_state.ref_view_file = name
+    if source == "llm":
+        msg = f"✅ 《{name}》参考文献结构化完成，共 {len(items)} 条，见下方「📚 参考文献」。"
+    else:
+        msg = (f"✅ 《{name}》参考文献结构化完成，共 {len(items)} 条（本地确定性解析），"
+               "见下方「📚 参考文献」。")
+        if note:
+            msg += "\n\n🩹 " + note
+    set_flash("success", msg)
 
 
 def _render_library_health(ctx):
@@ -860,6 +974,12 @@ def render(ctx):
                 c2.caption("⏳ 参考文献结构化正在后台运行（进度见左侧「任务中心」）…")
             if st.session_state.get("formula_view"):
                 with st.expander(f"🧮 公式（{len(st.session_state.formula_view)} 条）", expanded=False):
+                    # 公式取自库里**已入库正文**（不是当前下拉框选的 PDF），
+                    # 与下方标题树/参考文献可能不是同一篇 —— 必须标明来源，
+                    # 否则「公式来自 A、下拉框是 B」在画面上无任何提示。
+                    _ffile = st.session_state.get("formula_view_file")
+                    if _ffile:
+                        st.caption(f"公式来自《{_ffile}》")
                     for fml in st.session_state.formula_view:
                         if not isinstance(fml, dict):
                             continue
@@ -869,6 +989,9 @@ def render(ctx):
                         except Exception:
                             st.code(str(fml.get("latex", "")))
             if st.session_state.get("ref_view"):
+                _rfile = st.session_state.get("ref_view_file")
+                if _rfile:
+                    st.caption(f"参考文献来自《{_rfile}》")
                 try:
                     pretty_table(pd.DataFrame(st.session_state.ref_view), title="📚 参考文献")
                 except Exception as e:

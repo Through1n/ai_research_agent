@@ -34,8 +34,12 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _verify_shots_clean import scan_image      # 交付图「无错误横幅」门禁
+
 ROOT = Path(__file__).resolve().parents[1]
 CAND_DIR = Path("C:/Users/Administrator/reshoot_backup/candidates")
+DELIVER_DIR = ROOT / "资料" / "截图"
 
 
 # ------------------------------------------------------------------ Key 自查
@@ -174,6 +178,28 @@ def expand(pg, label):
     time.sleep(0.8)
 
 
+def select_option(pg, label, value, timeout=60):
+    """在 selectbox 里选中某个选项（按 label 定位容器，再点 role=option 的那一项）。
+
+    2026-10-26 新增：p0 需要**按论文切换**采集——
+    公式抽取读的是「已入库正文语料」（只有带真公式的论文才抽得出），
+    而结构解析 / 参考文献读的是「PDF 版式」（Transformer v7 的标题树/表格/插图/文献最全）。
+    """
+    box = pg.locator("[data-testid='stSelectbox']").filter(has_text=label).first
+    box.click()
+    time.sleep(1.0)
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        opt = pg.get_by_role("option", name=value, exact=False)
+        if opt.count() > 0:
+            opt.first.click()
+            wait_idle(pg, timeout=60)
+            time.sleep(0.6)
+            return True
+        time.sleep(1.0)
+    raise SystemExit("❌ 下拉框 %r 里找不到选项 %r" % (label, value))
+
+
 def wait_iframes(pg, min_n=1, timeout=90):
     """等嵌入 iframe 出现（版式渲染 / 图谱 / 双语面板都是 iframe）。"""
     t0 = time.time()
@@ -217,7 +243,20 @@ def shoot(pg, path, tag, max_h=14000, top_pad=60):
     time.sleep(0.8)
     leak_check(pg, tag)
     pg.screenshot(path=str(path), full_page=False)
-    print(f"  📸 {tag} -> {path}（{Path(path).stat().st_size // 1024} KB，视口 {vh}px）")
+    # 交付图门禁（2026-10-26）：截图里出现运行时错误横幅就中止。
+    # 旧实现用 wait_text(..., must=False) —— 超时也不报错，于是把
+    # 「参考文献结构化失败 · Request timed out」原样拍进了 p0.png，
+    # 跟着进了技术文档 PDF 与项目介绍文档 DOCX/PDF。
+    # 宁可没有图，也不要带错的图。
+    res = scan_image(path)
+    if not res["ok"]:
+        detail = "；".join(res["reasons"])
+        if str(path).startswith(str(DELIVER_DIR)):
+            raise SystemExit("❌ 截图 %s 检出运行时错误横幅，拒绝作为交付物：%s"
+                             % (Path(path).name, detail))
+        print("  ⚠️ 候选图 %s 检出错误横幅（不入库）：%s" % (Path(path).name, detail))
+    print(f"  📸 {tag} -> {path}（{Path(path).stat().st_size // 1024} KB，视口 {vh}px，"
+          f"洁净检查{'通过' if res['ok'] else '未通过'}）")
     pg.set_viewport_size({"width": 1440, "height": 900})
     time.sleep(1.2)
 
@@ -293,25 +332,57 @@ def do_p1(pg, out):
 
 
 def do_p0(pg, out):
-    """1. 文献库管理：1b 细粒度解析（元数据/标题树/表格/插图/公式/参考文献）。"""
+    """1. 文献库管理：1b 细粒度解析（元数据/标题树/表格/插图/公式/参考文献）。
+
+    **2026-10-26 修订**：
+      * 所有等待都等**真实成功标志**（结果块标题），不再等「页面上出现过某词」。
+      * 结构解析 / 参考文献结构化是**确定性**管线（不依赖大模型，限流也不失败），
+        仍用 must=True 硬等；
+      * 元数据 / 公式抽取**依赖大模型**，当前 Key 存在但会触发平台限流（429），
+        故改为 best-effort：重试一次，超时也不阻断整页截图——失败只降级为
+        warning（产品已把可选子功能失败从红色警报降级，见 ui/page_library.py
+        的 _consume_meta / _consume_formula / _consume_ref），交付图门禁只拦红色横幅。
+
+    按论文分两段采集：
+      ① **公式**取自「已入库正文语料」→ 选 VAE（1312.6114v10.pdf，实测 6 条）；
+      ② **元数据 / 结构 / 参考文献**取自「PDF 版式」→ 选 Transformer v7
+         （标题树 22 项 / 表格 2 / 插图 3 / 参考文献 12 条）。
+    """
     print("→ p0 文献库管理（1b 细粒度解析）")
     nav(pg, "文献库管理")
-    btn(pg, "抽取标题/作者/机构/摘要").first.click()
-    print("  元数据抽取（真实 LLM）…")
-    wait_text(pg, "元数据 JSON", timeout=180, must=False)
+
+    # ① 公式：选带真公式的论文（best-effort，限流可重试）
+    select_option(pg, "选择论文", "1312.6114v10.pdf")
+    for att in range(1, 3):
+        btn(pg, "提取 LaTeX 公式").first.click()
+        print(f"  LaTeX 公式抽取（真实 LLM · VAE）… 第 {att} 次")
+        if wait_text(pg, "🧮 公式（", timeout=160, must=False):
+            break
+        print("  ⚠️ 公式未出（可能限流 429），重试")
+        wait_idle(pg, timeout=20)
     wait_idle(pg)
+
+    # ② 元数据 / 结构 / 参考文献：换回版式最全的 Transformer v7
+    select_option(pg, "选择论文", "1706.03762v7.pdf")
+    for att in range(1, 3):
+        btn(pg, "抽取标题/作者/机构/摘要").first.click()
+        print(f"  元数据抽取（真实 LLM · Transformer v7）… 第 {att} 次")
+        if wait_text(pg, "🪪 元数据 JSON", timeout=160, must=False):
+            break
+        print("  ⚠️ 元数据未出（可能限流 429），重试")
+        wait_idle(pg, timeout=20)
+    wait_idle(pg)
+
     btn(pg, "全方位解析").first.click()
-    print("  细粒度解析（标题树/表格/插图）…")
-    wait_text(pg, "解析完成", timeout=300, must=False)
+    print("  细粒度解析（标题树/表格/插图，确定性管线）…")
+    wait_text(pg, "解析完成", timeout=300, must=True)
     wait_idle(pg)
-    btn(pg, "提取 LaTeX 公式").first.click()
-    print("  LaTeX 公式抽取（真实 LLM）…")
-    wait_text(pg, "🧮 公式（", timeout=240, must=False)
-    wait_idle(pg)
+
     btn(pg, "结构化参考文献").first.click()
-    print("  参考文献结构化（真实 LLM）…")
-    wait_text(pg, "参考文献", timeout=240, must=False)
+    print("  参考文献结构化（确定性基线，大模型可选精修）…")
+    wait_text(pg, "📚 参考文献", timeout=300, must=True)
     wait_idle(pg)
+
     for lbl in ("标题树（", "公式（"):
         try:
             expand(pg, lbl)
@@ -532,18 +603,30 @@ def main():
                 raise SystemExit(f"❌ 当前为降级/未配置 Key 态（{bad}），不合规，终止拍摄")
         print("  ✅ 干净态校验通过（无未配置 Key 提示）")
 
+        # 演示数据必须**在所有流程之前**加载：p0 的公式/结构/参考文献都依赖
+        # 文献库里有这 6 篇。旧实现只在拍 p1 时加载 ⇒ `--only p0` 单独跑时库是空的。
+        try:
+            btn(pg, "一键加载演示数据").first.click()
+            wait_text(pg, "演示数据已就绪", timeout=240, must=False)
+            wait_idle(pg)
+            print("  ✅ 演示数据已加载")
+        except Exception as e:
+            print("  ⚠️ 加载演示数据失败：", e)
+
         for tag, fn in FLOWS:
             if only and tag not in only:
                 continue
-            if tag == "p1":
-                try:
-                    btn(pg, "一键加载演示数据").first.click()
-                    wait_text(pg, "演示数据已就绪", timeout=180, must=False)
-                    wait_idle(pg)
-                except Exception as e:
-                    print("  ⚠️ 加载演示数据失败：", e)
             fn(pg, out)
         b.close()
+    # 收尾再全量扫一遍交付图（单张检查之外的兜底：覆盖「拍完又被别处改坏」的情况）
+    shots = sorted(out.glob("p*.png"))
+    if shots:
+        bad = [r for r in (scan_image(p) for p in shots) if not r["ok"]]
+        if bad:
+            for r in bad:
+                print("  ❌ %s：%s" % (Path(r["path"]).name, "；".join(r["reasons"])))
+            raise SystemExit("❌ 交付图存在运行时错误横幅，整轮作废（请修好功能后重拍）")
+        print("  ✅ 交付图洁净检查通过：%d 张无错误横幅" % len(shots))
     print("✅ 采集完成。候选图目录：", CAND_DIR)
     rows2, _ = ui_mtimes()
     print("=== 拍摄后 ui/ 文件 mtime（若与开拍前有差异需补拍）===")
