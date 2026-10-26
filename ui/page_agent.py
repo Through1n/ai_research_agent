@@ -318,7 +318,7 @@ def render(ctx):
     for i, s in enumerate(SUGGEST):
         try:
             with cols[i % SUGGEST_COLS]:
-                with st.container(border=True):
+                with st.container(border=True, key="card03"):
                     st.markdown(f"**{_e(s['title'])}**")
                     st.caption(s["desc"])
                     if st.button("用此任务 ▶", key=f"sug{i}", use_container_width=True):
@@ -365,7 +365,7 @@ def render(ctx):
         except Exception:
             finals = []
         n_src = len(_collect_sources(tr)) if tr else 0
-        with st.container(border=True):
+        with st.container(border=True, key="card04"):
             st.markdown(f"**🙋 {_e(goal)}**")
             if finals:
                 # 离线占位不能顶着「✅ 已完成」出现（Round 12 ②残留，与 page_qa 同一套判定）

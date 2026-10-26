@@ -527,7 +527,7 @@ def _jump_action_bar():
     if not info:
         return
     tail = f"（第 {info['para']} 段）" if info["para"] else ""
-    with st.container(border=True):
+    with st.container(border=True, key="card10"):
         st.markdown(f"🎯 **问答溯源待跳转**：《{_esc(info['source'])}》"
                     f"第 {info['page']} 页{tail}")
         st.caption("点击下方按钮直达「📖 版式阅读与翻译」并定位到该页；查看后点「已查看」清除本提示。")

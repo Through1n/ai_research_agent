@@ -2079,7 +2079,7 @@ def render(ctx):
                 # 后台交付的译文：渲染即清（与旧内联行为一致）
                 _hl_res = st.session_state.pop("hl_tr_result", None)
                 if _hl_res is not None:
-                    with st.container(border=True):
+                    with st.container(border=True, key="card11"):
                         st.caption("🌐 译文")
                         _full = str(_hl_res.get("zh") or "")
                         if not _full.strip():

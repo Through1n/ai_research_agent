@@ -234,7 +234,7 @@ def render_innov(ctx):
                     continue
                 _t, _s, _ = _INNOV[_idx]
                 with _col:
-                    with st.container(border=True):
+                    with st.container(border=True, key="card09"):
                         st.markdown(f"**{_idx + 1}. {_t}**\n\n{_s}")
     # 完整说明不丢，只从首屏收进折叠区
     with st.expander(f"完整说明（{len(_INNOV)} 项）", expanded=False):

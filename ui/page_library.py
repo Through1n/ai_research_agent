@@ -1030,7 +1030,7 @@ def render(ctx):
                 })
             pretty_table(rows, title=f"✅ 当前共 {len(ctx.files)} 篇文献",
                          max_rows=MAX_FAILED_SHOW)
-            with st.container(border=True):
+            with st.container(border=True, key="card07"):
                 # ⚠️ 删除后 options（ctx.files）会变短，而 selectbox 的选中值存在
                 # session_state 里不会自动失效——残留的旧文件名已不在新选项中，
                 # 下一轮渲染会拿它当选中项。必须在实例化 selectbox **之前**清掉
@@ -1064,7 +1064,7 @@ def render(ctx):
                         hints=["演示时先加载演示数据（内含 1706.03762 的 v1 / v7 两版）",
                                "或手动上传同一论文的 v1 / v7"])
         for gid, files in multi.items():
-            with st.container(border=True):
+            with st.container(border=True, key="card08"):
                 st.markdown(f"🗂️ **同一论文（{gid}）** · 库中有 {len(files)} 版：{'、'.join(files)}")
                 try:
                     latest = library.latest_of(files)[0]

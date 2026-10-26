@@ -418,7 +418,7 @@ def render(ctx):
         # 条件里的 _pending_key_ready() 见该函数文档：没有它，用户刚填入 Key 的
         # 那一回合会同时看到「尚未配置」警告与「Key 已填入」成功提示（自相矛盾）。
         if not (_llm_ready(ctx) or _pending_key_ready()):
-            with st.container(border=True):
+            with st.container(border=True, key="card12"):
                 st.warning("📌 尚未配置 API Key：请在下方「接入方式」选择平台并填入 Key；"
                            "无 Key 也可使用底部按钮一键加载离线演示数据。")
 

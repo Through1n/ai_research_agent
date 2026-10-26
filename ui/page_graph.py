@@ -459,7 +459,7 @@ def render(ctx):
     # ===== 区一：引用图谱可视化（构建 / 结果 / 演示，均属图谱范畴） =====
     # 不再单独起 section_header：页头已表明本页主体是图谱，这里直接给主按钮，
     # 避免「页头 28px + 分区 18px」两级标题连排、把主操作挤到第二屏。
-    with st.container(border=True):
+    with st.container(border=True, key="card05"):
         _gr_build = bg_running(kinds={_GRAPH_BUILD_KIND})
         if st.button("构建引用图谱", disabled=_gr_build,
                      help="后台构建：提交后可切换其他页面，实时进度见左侧任务中心"):
@@ -527,7 +527,7 @@ def render(ctx):
     # 原先这里有一条 st.markdown("---")：但紧跟其后的 _sec_head 本身已经是分区信号，
     # 横线 + 标题 = 双重视觉打断，删掉横线用留白分区更干净。
     section_header("领域综述与前沿方向生成")
-    with st.container(border=True):
+    with st.container(border=True, key="card06"):
         c2, c3 = st.columns([1, 1])
         _gr_review = bg_running(kinds={_GRAPH_REVIEW_KIND})
         _gr_future = bg_running(kinds={_GRAPH_FUTURE_KIND})

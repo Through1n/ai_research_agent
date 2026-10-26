@@ -460,6 +460,18 @@ textarea{
 }
 
 /* Expander */
+/* ---- 卡片：st.container(border=True, key="card_xxx") 的统一外观 ----
+   1.63 真机实测：带 key 的边框容器是 div[data-testid="stVerticalBlock"] 且类名含
+   st-key-card_xxx。Streamlit 默认给它 1px 半透明深灰描边 + 15px 内边距 + 透明背景，
+   与本文档三条纪律冲突（描边不是中性阶、15px 不在 8px 网格、卡片与页面底无分层）。
+   约定：只有需要呈现为卡片的容器才把 key 命名成 card 前缀，其它 key 不会命中。
+   注意：本段注释里不得出现任何色值或圆角字面量，静态扫描会把它当规则抓走。 */
+[data-testid="stVerticalBlock"][class*="st-key-card"]{
+  border:1px solid var(--c-border);
+  border-radius:var(--r);
+  background:var(--c-surface);
+  padding:var(--s-4);
+}
 [data-testid="stExpander"]{box-shadow:none; min-width:0;}
 [data-testid="stExpander"] details,
 [data-testid="stExpanderDetails"]{

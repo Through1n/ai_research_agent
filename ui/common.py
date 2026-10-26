@@ -877,7 +877,7 @@ def jump_banner(show_goto: bool = True):
     para = payload.get("para_idx")
     label = _jump_target_label(payload.get("source"))
     tail = f"（第 {para} 段）" if para else ""
-    with st.container(border=True):
+    with st.container(border=True, key="card01"):
         st.info(f"🎯 问答溯源待跳转：《{label}》第 {page} 页{tail}")
         if show_goto:
             c1, c2 = st.columns([1, 1])
@@ -974,7 +974,7 @@ def render_trace(trace, in_expander=False):
         st.warning(f"⚠️ 执行轨迹解析失败：{str(e)[:120]}")
         return
     body = st.expander("🧭 Agent 执行轨迹（规划 / 路由 / 工具 / 思考）",
-                       expanded=not in_expander) if in_expander else st.container(border=True)
+                       expanded=not in_expander) if in_expander else st.container(border=True, key="card02")
     with body:
         for ev in dicts:
             try:
