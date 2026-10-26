@@ -26,15 +26,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "app.py")
 
 MENU = [
-    ("🤖 0. 智能总助手", "ui/page_agent.py"),
-    ("📁 1. 文献库管理", "ui/page_library.py"),
-    ("💬 2. 跨文献问答与溯源", "ui/page_qa.py"),
-    ("📖 3. 版式阅读与智能翻译", "ui/page_reading.py"),
-    ("🔍 4. 论文检索与追踪", "ui/page_search.py"),
-    ("🕸️ 5. 引用图谱与综述", "ui/page_graph.py"),
-    ("✍️ 6. 写作辅助与可视化", "ui/page_writing.py"),
-    ("🏗️ A. 系统架构设计", "ui/page_misc.py"),
-    ("💡 B. 技术创新亮点", "ui/page_misc.py"),
+    ("智能总助手", "ui/page_agent.py"),
+    ("文献库管理", "ui/page_library.py"),
+    ("跨文献问答与溯源", "ui/page_qa.py"),
+    ("版式阅读与智能翻译", "ui/page_reading.py"),
+    ("论文检索与追踪", "ui/page_search.py"),
+    ("引用图谱与综述", "ui/page_graph.py"),
+    ("写作辅助与可视化", "ui/page_writing.py"),
+    ("系统架构设计", "ui/page_misc.py"),
+    ("技术创新亮点", "ui/page_misc.py"),
 ]
 
 _KINDS = ("markdown", "caption", "text", "button", "info", "warning",

@@ -84,7 +84,7 @@ def _page(css: str, expand_testid: str | None) -> str:
     </div>
   </header>
   <main>
-    <h2>AI4S 科研助手（DOM 复刻页）</h2>
+    <h2>MoreHand（DOM 复刻页）</h2>
     <div class="card">主区域内容：修复只影响左上角展开按钮的可见性，不得波及此处。</div>
   </main>
 </div>

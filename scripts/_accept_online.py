@@ -10,9 +10,9 @@ OUT = "资料/截图/online"
 os.makedirs(OUT, exist_ok=True)
 
 MENU = [
-    "🤖 0. 智能总助手", "📁 1. 文献库管理", "💬 2. 跨文献问答与溯源",
-    "📖 3. 版式阅读与智能翻译", "🔍 4. 论文检索与追踪", "🕸️ 5. 引用图谱与综述",
-    "✍️ 6. 写作辅助与可视化", "🏗️ A. 系统架构设计", "💡 B. 技术创新亮点",
+    "智能总助手", "文献库管理", "跨文献问答与溯源",
+    "版式阅读与智能翻译", "论文检索与追踪", "引用图谱与综述",
+    "写作辅助与可视化", "系统架构设计", "技术创新亮点",
 ]
 
 R = {}   # 结果收集
@@ -151,7 +151,7 @@ async def main():
 
         # 3b. 问答（无 Key → 应走离线降级，记录耗时与是否出现标识条）
         qa = {}
-        ok, dt = await nav_to(pg, "💬 2. 跨文献问答与溯源", 99)
+        ok, dt = await nav_to(pg, "跨文献问答与溯源", 99)
         ta = pg.locator('textarea').first
         if await ta.count():
             t2 = time.time()
@@ -178,7 +178,7 @@ async def main():
 
         # 3c. 引用图谱（演示模式示意图谱）
         graph = {}
-        ok, dt = await nav_to(pg, "🕸️ 5. 引用图谱与综述", 99)
+        ok, dt = await nav_to(pg, "引用图谱与综述", 99)
         gl = pg.locator('button:has-text("演示模式示意图谱")').first
         if await gl.count():
             t3 = time.time()
@@ -201,7 +201,7 @@ async def main():
 
         # 3d. 写作页 Figure Caption
         cap = {}
-        ok, dt = await nav_to(pg, "✍️ 6. 写作辅助与可视化", 99)
+        ok, dt = await nav_to(pg, "写作辅助与可视化", 99)
         cl = pg.locator('button:has-text("载入示例数据")').first
         if await cl.count():
             t4 = time.time()

@@ -12,10 +12,10 @@ from playwright.sync_api import sync_playwright
 URL = "https://ai4s-research-agent.app.workbuddy.host/"
 OUT = "资料/截图/online"
 
-MAIN = ["🤖 0. 智能总助手", "📁 1. 文献库管理", "💬 2. 跨文献问答与溯源",
-        "📖 3. 版式阅读与智能翻译", "🔍 4. 论文检索与追踪",
-        "🕸️ 5. 引用图谱与综述", "✍️ 6. 写作辅助与可视化"]
-ABOUT = ["🏗️ A. 系统架构设计", "💡 B. 技术创新亮点"]
+MAIN = ["智能总助手", "文献库管理", "跨文献问答与溯源",
+        "版式阅读与智能翻译", "论文检索与追踪",
+        "引用图谱与综述", "写作辅助与可视化"]
+ABOUT = ["系统架构设计", "技术创新亮点"]
 
 log = []
 
@@ -88,7 +88,7 @@ def main():
 
         # 演示路径
         try:
-            pg.get_by_role("radio", name="📁 1. 文献库管理").first.dispatch_event("click")
+            pg.get_by_role("radio", name="文献库管理").first.dispatch_event("click")
             time.sleep(2.5)
             demo = pg.get_by_role("button", name="一键加载演示数据")
             if demo.count():

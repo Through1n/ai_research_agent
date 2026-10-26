@@ -295,7 +295,7 @@ def do_p1(pg, out):
 def do_p0(pg, out):
     """1. 文献库管理：1b 细粒度解析（元数据/标题树/表格/插图/公式/参考文献）。"""
     print("→ p0 文献库管理（1b 细粒度解析）")
-    nav(pg, "📁 1. 文献库管理")
+    nav(pg, "文献库管理")
     btn(pg, "抽取标题/作者/机构/摘要").first.click()
     print("  元数据抽取（真实 LLM）…")
     wait_text(pg, "元数据 JSON", timeout=180, must=False)
@@ -331,7 +331,7 @@ def do_p0(pg, out):
 def do_p2(pg, out):
     """2. 跨文献问答与溯源：2b 拒答 + 调试区 + 页码级溯源锚点。"""
     print("→ p2 跨文献问答与溯源（2b 拒答 + 调试区 + 溯源）")
-    nav(pg, "💬 2. 跨文献问答与溯源")
+    nav(pg, "跨文献问答与溯源")
     # ① 正常问答：答案 + 【n】角标 + 溯源卡片（页码徽章 + 定位按钮）
     fill_text_by_label(pg, "请输入问题", "对比 Transformer 与 BERT 的架构（表格）")
     btn(pg, "提问").first.click()
@@ -355,23 +355,40 @@ def do_p2(pg, out):
     shoot(pg, out / "p2.png", "p2", max_h=16000)
 
 
+def click_in_expander(pg, expander_label, btn_label):
+    """展开折叠区后再点里面的按钮。
+
+    背景：首屏减法改造把「解析与版式诊断」收进了默认收起的 st.expander，
+    里面的按钮在 DOM 里存在但 not visible ⇒ 直接 click 会一直等到超时。
+    （实测 2026-10-26：p3 重拍卡在「检测本页栏数」element is not visible。）
+    """
+    try:
+        expander = pg.get_by_text(expander_label).first
+        expander.click()
+        wait_idle(pg, timeout=60)
+        time.sleep(0.6)
+    except Exception as e:
+        print("  ⚠️ 展开 %s 失败：%s" % (expander_label, e))
+    btn(pg, btn_label).first.click()
+
+
 def do_p3(pg, out):
     """3. 版式阅读与翻译：3a 双栏原生渲染不串栏。"""
     print("→ p3 版式阅读与智能翻译（3a 不串栏）")
-    nav(pg, "📖 3. 版式阅读与智能翻译")
+    nav(pg, "版式阅读与智能翻译")
     wait_idle(pg, timeout=60)
     for pg_no in (4, 3, 5):
         try:
             set_number(pg, "页码", pg_no)
         except Exception as e:
             print(f"  ⚠️ 设页码失败：{e}")
-        btn(pg, "🎨 渲染该页").first.click()
+        btn(pg, "渲染该页").first.click()
         wait_idle(pg, timeout=120)
         n = wait_iframes(pg, min_n=1, timeout=60)
         print(f"  第 {pg_no} 页渲染 iframe 数={n}")
         if n >= 1:
             break
-    btn(pg, "🔍 检测本页栏数").first.click()
+    click_in_expander(pg, "解析与版式诊断", "检测本页栏数")
     wait_idle(pg, timeout=60)
     time.sleep(1.0)
     shoot(pg, out / "p3.png", "p3", max_h=12000)
@@ -387,7 +404,7 @@ def do_p3(pg, out):
 def do_p6(pg, out):
     """4. 论文检索与追踪：多源真实检索 + 引用含金量质量标注。"""
     print("→ p6 论文检索与追踪（多源结果 + 质量标注）")
-    nav(pg, "🔍 4. 论文检索与追踪")
+    nav(pg, "论文检索与追踪")
     click_tab(pg, "检索与下载")
     fill_text_by_label(pg, "标题 / 关键词 / ID", "graph neural network")
     got = False
@@ -432,7 +449,7 @@ def do_p6(pg, out):
 def do_p4(pg, out):
     """5. 引用图谱与综述：5c 图谱驱动综述（含图谱结构明细）。"""
     print("→ p4 引用图谱与综述（5c 图谱驱动综述）")
-    nav(pg, "🕸️ 5. 引用图谱与综述")
+    nav(pg, "引用图谱与综述")
     btn(pg, "构建引用图谱").first.click()
     print("  构建真实引用图谱…")
     wait_text(pg, "图谱构建完成", timeout=300, must=False)
@@ -456,7 +473,7 @@ def do_p4(pg, out):
 def do_p5(pg, out):
     """6. 写作辅助与可视化：6a References 溯源表 + CSV 自动出图。"""
     print("→ p5 写作辅助与可视化（6a References 溯源表）")
-    nav(pg, "✍️ 6. 写作辅助与可视化")
+    nav(pg, "写作辅助与可视化")
     btn(pg, "📂 载入示例数据").first.click()
     wait_idle(pg, timeout=120)
     btn(pg, "生成该图 Figure Caption").first.click()
@@ -506,7 +523,7 @@ def main():
         b = p.chromium.launch(headless=True)
         pg = b.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=2)
         pg.goto(args.base + "/", timeout=60000, wait_until="domcontentloaded")
-        pg.wait_for_selector("text=AI4S 科研助手", timeout=60000)
+        pg.wait_for_selector("text=MoreHand", timeout=60000)
         wait_idle(pg, timeout=180)
         # 干净态确认：不得出现「尚未配置 API Key」等降级提示
         txt = pg.evaluate("() => document.body.innerText")

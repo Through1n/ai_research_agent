@@ -291,7 +291,7 @@ def main() -> int:
     args = ap.parse_args()
 
     print("=" * 62)
-    print("  AI4S 科研助手 · 部署后健康自检" + ("（深度模式）" if args.deep else "（仅探活）"))
+    print("  MoreHand · 部署后健康自检" + ("（深度模式）" if args.deep else "（仅探活）"))
     print(f"  项目根：{ROOT}")
     print("=" * 62)
 

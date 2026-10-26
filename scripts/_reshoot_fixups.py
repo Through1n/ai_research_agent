@@ -73,7 +73,7 @@ def crop_between(pg, path, top_pat, bot_pat, pad_top=70, pad_bot=50):
 # ------------------------------------------------------------------ p0
 def fix_p0(pg, out):
     print("→ [修复] p0 文献库管理（补公式/参考文献，等图加载）")
-    nav(pg, "📁 1. 文献库管理")
+    nav(pg, "文献库管理")
     btn(pg, "抽取标题/作者/机构/摘要").first.click()
     wait_text(pg, "元数据 JSON", timeout=180, must=False)
     wait_idle(pg)
@@ -113,7 +113,7 @@ def fix_p0(pg, out):
 # ------------------------------------------------------------------ p2
 def fix_p2(pg, out):
     print("→ [修复] p2 问答与溯源（硬拒答 + 调试区展开）")
-    nav(pg, "💬 2. 跨文献问答与溯源")
+    nav(pg, "跨文献问答与溯源")
     fill_text_by_label(pg, "请输入问题", "对比 Transformer 与 BERT 的架构（表格）")
     btn(pg, "提问").first.click()
     print("  第 1 问（正常问答）…")
@@ -132,9 +132,26 @@ def fix_p2(pg, out):
 
 
 # ------------------------------------------------------------------ p3
+def click_in_expander(pg, expander_label, btn_label):
+    """展开折叠区后再点里面的按钮。
+
+    背景：首屏减法改造把「解析与版式诊断」收进了默认收起的 st.expander，
+    里面的按钮在 DOM 里存在但 not visible ⇒ 直接 click 会一直等到超时。
+    （实测 2026-10-26：p3 重拍卡在「检测本页栏数」element is not visible。）
+    """
+    try:
+        expander = pg.get_by_text(expander_label).first
+        expander.click()
+        wait_idle(pg, timeout=60)
+        time.sleep(0.6)
+    except Exception as e:
+        print("  ⚠️ 展开 %s 失败：%s" % (expander_label, e))
+    btn(pg, btn_label).first.click()
+
+
 def fix_p3(pg, out):
     print("→ [修复] p3 版式阅读（先选双栏页，最后渲染）")
-    nav(pg, "📖 3. 版式阅读与智能翻译")
+    nav(pg, "版式阅读与智能翻译")
     wait_idle(pg, timeout=60)
     best = None
     for pg_no in (2, 3, 5, 6):
@@ -143,7 +160,7 @@ def fix_p3(pg, out):
         except Exception as e:
             print(f"  ⚠️ 设页码失败：{e}")
             continue
-        btn(pg, "🔍 检测本页栏数").first.click()
+        click_in_expander(pg, "解析与版式诊断", "检测本页栏数")
         wait_idle(pg, timeout=60)
         txt = pg.evaluate("() => document.body.innerText")
         tag = "双栏" if "📑 双栏" in txt else "单栏"
@@ -156,7 +173,7 @@ def fix_p3(pg, out):
     print(f"  选定第 {best} 页做原生渲染")
     set_number(pg, "页码", best)
     # 最后一步才是渲染：渲染产物只活在自己那轮 rerun，之后不能再有任何点击
-    btn(pg, "🎨 渲染该页").first.click()
+    btn(pg, "渲染该页").first.click()
     wait_idle(pg, timeout=120)
     wait_iframes(pg, min_n=1, timeout=90)
     wait_images(pg, 45)
@@ -175,7 +192,7 @@ def fix_p3(pg, out):
 # ------------------------------------------------------------------ p5
 def fix_p5(pg, out):
     print("→ [修复] p5 写作辅助（References 溯源表 + 分区裁剪）")
-    nav(pg, "✍️ 6. 写作辅助与可视化")
+    nav(pg, "写作辅助与可视化")
     btn(pg, "📂 载入示例数据").first.click()
     wait_idle(pg, timeout=120)
     btn(pg, "生成该图 Figure Caption").first.click()
@@ -216,7 +233,7 @@ def fix_p5(pg, out):
 def fix_p6(pg, out):
     import re
     print("→ [修复] p6 检索与追踪（arXiv + PubMed 多源同屏）")
-    nav(pg, "🔍 4. 论文检索与追踪")
+    nav(pg, "论文检索与追踪")
     click_tab(pg, "检索与下载")
     fill_text_by_label(pg, "标题 / 关键词 / ID", "graph neural network")
     got = False
@@ -259,7 +276,7 @@ def main():
         b = p.chromium.launch(headless=True)
         pg = b.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=2)
         pg.goto("http://127.0.0.1:8599/", timeout=60000, wait_until="domcontentloaded")
-        pg.wait_for_selector("text=AI4S 科研助手", timeout=60000)
+        pg.wait_for_selector("text=MoreHand", timeout=60000)
         wait_idle(pg, timeout=180)
         for tag in only:
             flows[tag](pg, ROOT / "资料" / "截图")

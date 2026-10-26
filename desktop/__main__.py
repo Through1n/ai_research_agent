@@ -17,7 +17,7 @@ def _fatal(text: str) -> int:
     """windowed（pythonw）模式下唯一的异常出口：原生弹窗，返回非 0。"""
     try:
         import ctypes
-        ctypes.windll.user32.MessageBoxW(None, text, "AI4S 科研助手启动失败", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, text, "MoreHand 启动失败", 0x10)
     except Exception:
         pass
     return 1

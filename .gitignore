@@ -10,6 +10,16 @@
 # ---------- 内部工作记录（不进公开仓库）----------
 .workbuddy/
 
+# ---------- Office 文档流水线中间工作区 ----------
+# output/<session-id>/ 是 docx/pdf 流水线的临时工作目录：
+#   stage1/final_draft.md            S1 稿件
+#   stage2/formatted-*.html          S2 版式（图片已内联成 data URI，单文件 2.8MB+）
+#   stage3/_probe* / _fin* / _final* 探针与试渲染产物
+# 全部是可复现的中间物，交付物是 资料/项目介绍文档.docx 与 .pdf（入库），
+# 重建脚本是 scripts/_build_intro_doc.py + _fix_docx_pagesize.py + _docx_to_pdf.ps1（入库）。
+# 故整目录忽略：避免 8MB 二进制中间物进 git。
+output/
+
 # ---------- 运行时存储（向量库、上传、缓存、日志）----------
 storage/
 chroma/

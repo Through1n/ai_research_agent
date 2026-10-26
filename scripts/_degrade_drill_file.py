@@ -399,7 +399,7 @@ def s10_race(at):
     _FAKE["name"] = "1810.04805v2.pdf"
     click_parse(at, _FAKE["data"], _FAKE["name"])
     print("    查重命中 pending=%s（命中时待用户决策，尚未入库）" % bool(ss(at, "pending")))
-    ok = nav_to(at, "💬 2. 跨文献问答与溯源")
+    ok = nav_to(at, "跨文献问答与溯源")
     print("    切导航成功=%s · 当前 menu=%s" % (ok, ss(at, "menu")))
     print("    切走后 pending 是否仍残留在 session_state: %s" % bool(ss(at, "pending")))
     print("    问答页未捕获异常: %s" % (list(at.exception) or "无"))
@@ -407,7 +407,7 @@ def s10_race(at):
     print("    问答页上是否串出文献库内容: %s" % (leak or "否"))
 
     print("\n  ▶ 10b 再切回文献库页：旧的查重对话框是否复活")
-    nav_to(at, "📁 1. 文献库管理")
+    nav_to(at, "文献库管理")
     back = [s for s in texts(at) if "查重" in s or "相似度" in s]
     print("    未捕获异常: %s · pending 仍在=%s" % (list(at.exception) or "无",
                                                 bool(ss(at, "pending"))))
@@ -421,7 +421,7 @@ def s10_race(at):
     def _slow_prepare(ctx, *a, **kw):
         time.sleep(1.5)                                  # 让"解析中"窗口真实存在
         try:
-            st.session_state["menu"] = "🕸️ 5. 引用图谱与综述"   # 用户的点击已排队
+            st.session_state["menu"] = "引用图谱与综述"   # 用户的点击已排队
             marker["switched"] = True
         except Exception as e:
             marker["failed"] = "%s: %s" % (type(e).__name__, e)
@@ -430,7 +430,7 @@ def s10_race(at):
     library.prepare_pdf = _slow_prepare
     try:
         at.session_state["pending"] = None
-        at.session_state["menu"] = "📁 1. 文献库管理"
+        at.session_state["menu"] = "文献库管理"
         _FAKE["data"] = (ROOT / "论文样本" / "1810.04805v2.pdf").read_bytes()
         _FAKE["name"] = "1810.04805v2.pdf"
         at.run()
@@ -498,20 +498,20 @@ def s11_key_cleared(at):
             print("      %s" % s.replace("\n", " ")[:230])
 
         print("\n    -- 无 Key 下逐个页面渲染（只渲染不点，避免触发真实外网检索）--")
-        for label in ["📁 1. 文献库管理", "💬 2. 跨文献问答与溯源", "📖 3. 版式阅读与智能翻译",
-                      "🔍 4. 论文检索与追踪", "🕸️ 5. 引用图谱与综述",
-                      "✍️ 6. 写作辅助与可视化", "🤖 0. 智能总助手"]:
+        for label in ["文献库管理", "跨文献问答与溯源", "版式阅读与智能翻译",
+                      "论文检索与追踪", "引用图谱与综述",
+                      "写作辅助与可视化", "智能总助手"]:
             nav_to(at, label)
             print("      %-22s 异常=%s" % (label, list(at.exception) or "无"))
 
         print("\n    -- 点两个典型的大模型按钮（文献库「抽取标题…」/ Agent「用此任务 ▶」）--")
-        nav_to(at, "📁 1. 文献库管理")
+        nav_to(at, "文献库管理")
         b = find_button(at, "抽取标题")
         if b:
             b.click().run()
             print("      文献库页异常=%s" % (list(at.exception) or "无"))
             dump(at, limit=8)
-        nav_to(at, "🤖 0. 智能总助手")
+        nav_to(at, "智能总助手")
         b2 = find_button(at, "用此任务")
         if b2:
             b2.click().run()
@@ -541,7 +541,7 @@ def s12_refresh():
     tid = tasks.submit("演练任务1", _job1, kind="agent", goal="演练1")
 
     at_a = AppTest.from_file(APP, default_timeout=300)
-    at_a.session_state["menu"] = "🤖 0. 智能总助手"
+    at_a.session_state["menu"] = "智能总助手"
     at_a.run()
     print("    [刷新前] 侧边栏任务中心: %s"
           % ([s for s in texts(at_a.sidebar) if "任务" in s] or "（面板无文案）"))
@@ -554,7 +554,7 @@ def s12_refresh():
 
     print("\n  ▶ 12b 浏览器刷新 = 新建 session（模块级 _TASKS 在同一进程内仍存活）")
     at_b = AppTest.from_file(APP, default_timeout=300)
-    at_b.session_state["menu"] = "🤖 0. 智能总助手"
+    at_b.session_state["menu"] = "智能总助手"
     at_b.run()
     t = tasks.get(tid) or {}
     print("    任务条目仍在模块级 dict: state=%s consumed=%s" % (t.get("state"), t.get("consumed")))
@@ -586,11 +586,11 @@ def s12_refresh():
         return "RESULT-BODY-2"
     tid2 = tasks.submit("演练任务2（刷新时未完成）", _job2, kind="agent", goal="演练2")
     at_c = AppTest.from_file(APP, default_timeout=300)
-    at_c.session_state["menu"] = "🤖 0. 智能总助手"
+    at_c.session_state["menu"] = "智能总助手"
     at_c.run()
     print("    提交后立刻: state=%s" % (tasks.get(tid2) or {}).get("state"))
     at_d = AppTest.from_file(APP, default_timeout=300)      # ← 刷新
-    at_d.session_state["menu"] = "🤖 0. 智能总助手"
+    at_d.session_state["menu"] = "智能总助手"
     at_d.run()
     print("    刷新后立刻: state=%s（是否仍在跑）" % (tasks.get(tid2) or {}).get("state"))
     print("    刷新后侧边栏运行中文案: %s"
@@ -612,7 +612,7 @@ def s12_refresh():
     tid3 = tasks.submit("演练任务3（必失败）", _boom, kind="agent", goal="演练3")
     time.sleep(1.5)
     at_e = AppTest.from_file(APP, default_timeout=300)
-    at_e.session_state["menu"] = "🤖 0. 智能总助手"
+    at_e.session_state["menu"] = "智能总助手"
     at_e.run()
     print("    state=%s" % (tasks.get(tid3) or {}).get("state"))
     print("    侧边栏文案: %s"
@@ -628,7 +628,7 @@ def main():
     print("AI4S 故障演练（文件/状态类） · 解释器 %s" % sys.executable)
     print("工作目录 %s" % ROOT)
     at = AppTest.from_file(APP, default_timeout=900)
-    at.session_state["menu"] = "📁 1. 文献库管理"
+    at.session_state["menu"] = "文献库管理"
     at.run()
     print("首次加载 %.1fs · 未捕获异常=%s\n" % (time.time() - t0, list(at.exception) or "无"))
 
