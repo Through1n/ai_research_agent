@@ -28,20 +28,20 @@
 | 中文窗口标题 | `AI4S 科研助手` |
 | 应用版本 | `v1.0` |
 | 用户数据根目录 | `%APPDATA%\AI4SResearchAgent\` |
-| 数据子目录 | `storage\`（含 uploads\、chroma\、pdf\）、`logs\`、`config\` |
+| 数据子目录 | `storage\`（含 uploads\、chroma\、论文样本\）、`logs\`、`config\` |
 | Streamlit 日志 | `%APPDATA%\AI4SResearchAgent\logs\streamlit.log` |
 | LLM 失败日志 | 保持业务代码现状：`storage\llm_failures.log`（即 `%APPDATA%\...\storage\llm_failures.log`，由 config.STORAGE_DIR 自动重定向，不改 core/llm.py） |
 | launcher 自身日志 | `%APPDATA%\AI4SResearchAgent\logs\launcher.log` |
 | 窗口默认尺寸 | 1440 x 900 |
 | 窗口最小尺寸 | 1200 x 720 |
-| 图标源/引用路径 | `assets\icon.ico`（开发态相对项目根；打包后 spec 把 assets 收进 bundle，窗口与 exe 都引用它） |
+| 图标源/引用路径 | `品牌资源\icon.ico`（开发态相对项目根；打包后 spec 把 assets 收进 bundle，窗口与 exe 都引用它） |
 | 端口 | 动态空闲端口（find_free_port），禁止写死 8501 |
 | 单实例锁 | `%APPDATA%\AI4SResearchAgent\app.lock`（msvcrt 不可用于？——用 `portalocker` 未装，故用 socket bind 127.0.0.1 固定锁端口 + lock 文件双保险，见 §5） |
 
 ## 3. 路径适配契约（只改 config.py 一处）
 
 现状（不得破坏的引用关系）：
-- `config.py`：`ROOT = Path(__file__).resolve().parent`；STORAGE_DIR/UPLOAD_DIR/CHROMA_DIR = ROOT/storage/...；PDF_DIR = ROOT/pdf；DEMO_DIR = ROOT/demo_data
+- `config.py`：`ROOT = Path(__file__).resolve().parent`；STORAGE_DIR/UPLOAD_DIR/CHROMA_DIR = ROOT/storage/...；PDF_DIR = ROOT/论文样本；DEMO_DIR = ROOT/演示语料
 - `services/graph.py:208-210`：`from config import ROOT` 后读 `ROOT/lib/vis-9.1.2/*`（只读静态资源）
 - `core/llm.py:26-27`：`from config import STORAGE_DIR` 写 llm_failures.log
 - `ui/common.py:131-132`：遍历 UPLOAD_DIR、PDF_DIR
@@ -54,7 +54,7 @@ FROZEN = getattr(sys, "frozen", False)
 DESKTOP = FROZEN or os.environ.get("AI4S_DESKTOP") == "1"
 
 if FROZEN:
-    RESOURCE_ROOT = Path(sys._MEIPASS)          # 只读：demo_data、lib、.streamlit、assets、app.py
+    RESOURCE_ROOT = Path(sys._MEIPASS)          # 只读：演示语料、lib、.streamlit、assets、app.py
     DATA_ROOT = Path(os.environ["APPDATA"]) / "AI4SResearchAgent"   # 可写
     ROOT = RESOURCE_ROOT                         # 保证 ROOT/lib 静态资源可读
 else:
@@ -70,8 +70,8 @@ else:
 | STORAGE_DIR | ROOT/storage | DATA_ROOT/storage | 写 |
 | UPLOAD_DIR | STORAGE_DIR/uploads | 同左（DATA_ROOT 下） | 写 |
 | CHROMA_DIR | STORAGE_DIR/chroma | 同左 | 写 |
-| PDF_DIR | ROOT/pdf | DATA_ROOT/storage/pdf（保持在 storage 内，业务代码 import 名不变） | 写 |
-| DEMO_DIR | ROOT/demo_data | RESOURCE_ROOT/demo_data | 只读 |
+| PDF_DIR | ROOT/论文样本 | DATA_ROOT/storage/pdf（保持在 storage 内，业务代码 import 名不变） | 写 |
+| DEMO_DIR | ROOT/演示语料 | RESOURCE_ROOT/演示语料 | 只读 |
 | lib（graph.py 经 ROOT 访问） | ROOT/lib | RESOURCE_ROOT/lib | 只读 |
 | .env | ROOT/.env | DATA_ROOT/.env（先 DATA_ROOT 再 fallback RESOURCE_ROOT） | 读 |
 
@@ -110,7 +110,7 @@ else:
 
 - `webview.create_window(title="AI4S 科研助手", url=f"http://127.0.0.1:{port}", width=1440, height=900, min_size=(1200,720), icon=<icon 路径>)`
 - GUI 后端：Windows 固定 edgechromium（WebView2），`webview.start(gui="edgechromium")`
-- 图标解析：函数 `resolve_icon()` —— 冻结态 `RESOURCE_ROOT/assets/icon.ico`；开发态项目根 `assets/icon.ico`；找不到则传 None（不得崩）
+- 图标解析：函数 `resolve_icon()` —— 冻结态 `RESOURCE_ROOT/品牌资源/icon.ico`；开发态项目根 `品牌资源/icon.ico`；找不到则传 None（不得崩）
 - 菜单（pywebview Menu）：
   - 文件：打开数据目录（os.startfile DATA_ROOT）、查看日志（打开 logs/streamlit.log）、退出
   - 帮助：项目主页（打开 https://github.com/ 占位，见 about.py）、关于
@@ -147,15 +147,15 @@ else:
 ## 7. 打包契约（Worker 3）
 
 - spec 文件：项目根 `AI4SResearchAgent.spec`（需提交）；模式 **onedir**（不用 onefile，启动快、好排查）
-- 入口：`desktop/__main__.py`；`console=False`、`icon='assets/icon.ico'`、name=`AI4SResearchAgent`
+- 入口：`desktop/__main__.py`；`console=False`、`icon='品牌资源/icon.ico'`、name=`AI4SResearchAgent`
 - datas（源 → bundle 内目标目录，保持相对结构）：
-  - `demo_data/` → `demo_data/`
+  - `演示语料/` → `演示语料/`
   - `.streamlit/` → `.streamlit/`
   - `lib/` → `lib/`
-  - `assets/icon.ico`（及 icon.png）→ `assets/`
+  - `品牌资源/icon.ico`（及 icon.png）→ `品牌资源/`
   - `app.py` → `.`（根）
   - 业务包 ui/services/core/tools 以源码形式（*.py）整体收进 datas 或作为模块 collect —— 推荐把它们当 hiddenimports 正常编译（它们是纯 Python 包，有 __init__.py），app.py 作为 data 放入根，与 streamlit-desktop-app build.py 做法一致
-  - 不收：storage/、pdf/、.env、version_history/、tests/、docs/、scripts/、__pycache__、.git
+  - 不收：storage/、论文样本/、.env、version_history/、tests/、资料/、scripts/、__pycache__、.git
 - collect_all：streamlit、chromadb、pywebview、plotly；collect_data_files 按需补 altair、pyarrow（chromadb 依赖）、streamlit 的 static 资产
 - hiddenimports 重点：fitz(pymupdf)、webview.platforms.edgechromium、clr（pythonnet，pywebview Win 后端）、rank_bm25、arxiv、networkx、psutil、PIL、dotenv、openai、pandas、sklearn（如 sandbox 用）、业务包 ui/services/core/tools 全部 collect_submodules
 - excludes：tkinter、PyQt5、PySide2、PySide6、matplotlib（注意 core/sandbox.py 白名单字符串里提到 matplotlib，但未实际 import；打包机上若 matplotlib 已装且被 chromadb/plotly 间接拉入则不强排，以实测不报错为准）、notebook、IPython
@@ -165,10 +165,10 @@ else:
 
 ## 8. 资产契约（Worker 4）
 
-- `assets/make_icon.py`：Pillow 脚本，可重复执行；设计 = #1f5fae 圆角方形底 + 白色简洁图形（学术帽优先；画不好就纯色底白色粗体字母 "A"，简洁 > 复杂丑陋）
-- 产物：`assets/icon.png`（1024x1024）、`assets/icon.ico`（内嵌 16/32/48/64/128/256）
+- `品牌资源/make_icon.py`：Pillow 脚本，可重复执行；设计 = #1f5fae 圆角方形底 + 白色简洁图形（学术帽优先；画不好就纯色底白色粗体字母 "A"，简洁 > 复杂丑陋）
+- 产物：`品牌资源/icon.png`（1024x1024）、`品牌资源/icon.ico`（内嵌 16/32/48/64/128/256）
 - `desktop/about.py`：**由 Worker 1 自己创建**（纯字符串常量 APP_NAME、APP_VERSION="v1.0"、TEAM、HOMEPAGE_URL、LICENSE、ABOUT_TEXT），Worker 4 不进入 desktop/
-- `installer.iss`（Inno Setup，完整可用但不要求实际编译）：装到 {autopf}\AI4SResearchAgent、开始菜单+桌面快捷方式、卸载器，源 = dist/AI4SResearchAgent/，图标 assets/icon.ico，AppId 用固定 GUID
+- `installer.iss`（Inno Setup，完整可用但不要求实际编译）：装到 {autopf}\AI4SResearchAgent、开始菜单+桌面快捷方式、卸载器，源 = dist/AI4SResearchAgent/，图标 品牌资源/icon.ico，AppId 用固定 GUID
 - `启动桌面版.vbs`（新增，不动旧 vbs）：静默调 anaconda env 的 pythonw.exe `-m desktop`，cwd=项目根
 - sidebar 版本标识：**由 Worker 2 完成**（sidebar.py 归 Worker 2），在 `st.caption(f"💾 内存...")` 之后加 `st.caption("桌面版 v1.0")`（开发/桌面都显示）
 
@@ -179,7 +179,7 @@ else:
 | desktop/__main__.py、desktop/launcher.py、desktop/window.py、desktop/paths.py（如需要）、desktop/about.py、desktop/__init__.py | Worker 1（about.py 常量也由 Worker 1 一并落地，Worker 4 不得进入 desktop/ 目录） |
 | .streamlit/config.toml、ui/desktop_chrome.py、app.py、config.py、ui/sidebar.py | Worker 2（sidebar 两处改动都归 Worker 2：st.title 之后的无 Key 警告卡片 + 最底部"桌面版 v1.0"版本 caption；Worker 4 不得改 sidebar.py） |
 | AI4SResearchAgent.spec、build_desktop.bat、.gitignore | Worker 3（Worker 3 可在打包报错时微调 config.py / desktop/*.py 修 hiddenimports，但必须在 commit message 写明改了什么、为什么） |
-| assets/（make_icon.py、icon.png、icon.ico）、installer.iss、启动桌面版.vbs | Worker 4（Worker 4 不修改任何业务 .py；docs/desktop_guide.md、docs/desktop_test_report.md、README 桌面章节归 Worker 5） |
+| 品牌资源/（make_icon.py、icon.png、icon.ico）、installer.iss、启动桌面版.vbs | Worker 4（Worker 4 不修改任何业务 .py；资料/desktop_guide.md、资料/desktop_test_report.md、README 桌面章节归 Worker 5） |
 
 ## 10. 测试与取证契约
 
@@ -193,5 +193,5 @@ else:
 1. desktop/：__main__.py、launcher.py、window.py、about.py（+ 可选 paths.py/__init__.py）
 2. .streamlit/config.toml（增强）、ui/desktop_chrome.py、app.py（+2 行）、config.py（双模式路径）、ui/sidebar.py（警告卡片+版本行）
 3. AI4SResearchAgent.spec、build_desktop.bat、dist/AI4SResearchAgent/（不入库）
-4. assets/make_icon.py、icon.png、icon.ico、installer.iss、启动桌面版.vbs
-5. docs/desktop_guide.md、docs/desktop_test_report.md、README.md 桌面版章节、.gitignore 更新
+4. 品牌资源/make_icon.py、icon.png、icon.ico、installer.iss、启动桌面版.vbs
+5. 资料/desktop_guide.md、资料/desktop_test_report.md、README.md 桌面版章节、.gitignore 更新

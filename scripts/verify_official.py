@@ -36,7 +36,7 @@ if list(ctx.paper_order) and "--force" not in sys.argv:
     print("    python scripts/verify_official.py --force")
     sys.exit(2)
 
-# 隔离：清空运行库（仅影响 storage，不动 pdf/ 源文件）
+# 隔离：清空运行库（仅影响 storage，不动 论文样本/ 源文件）
 for fn in list(ctx.paper_order):
     library.remove_paper(ctx, fn)
 
@@ -46,33 +46,33 @@ def load(path, name):
     return pr
 
 print("========== A) 官方真实 PDF 语义去重 ========== ")
-v7 = load(P("demo_data", "1706.03762v7.pdf"), "1706.03762v7.pdf")
+v7 = load(P("演示语料", "1706.03762v7.pdf"), "1706.03762v7.pdf")
 print(f"v7 入库  查重={v7['dup_name']} sim={v7['dup_sim']:.3f}")
 library.commit(ctx, v7, title="Attention Is All You Need", arxiv_id="1706.03762", version="v7")
 
-v1 = load(P("pdf", "1706.03762v1.pdf"), "1706.03762v1.pdf")
+v1 = load(P("论文样本", "1706.03762v1.pdf"), "1706.03762v1.pdf")
 print(f"v1 入库  查重={v1['dup_name']} sim={v1['dup_sim']:.3f}")
 print(f"          依据：{v1['dup_evidence']}")
 library.commit(ctx, v1, title="Attention Is All You Need", arxiv_id="1706.03762", version="v1")
 
-bert = load(P("demo_data", "1810.04805v2.pdf"), "1810.04805v2.pdf")
+bert = load(P("演示语料", "1810.04805v2.pdf"), "1810.04805v2.pdf")
 print(f"BERT 入库 查重={bert['dup_name']} sim={bert['dup_sim']:.3f}（应无命中）")
 library.commit(ctx, bert, title="BERT: Pre-training of Deep Bidirectional Transformers",
                arxiv_id="1810.04805", version="v2")
 
 print("\n------ B) 改名场景：证明不依赖文件名 ------")
-renamed = load(P("pdf", "1706.03762v1.pdf"), "my_saved_paper_final.pdf")
+renamed = load(P("论文样本", "1706.03762v1.pdf"), "my_saved_paper_final.pdf")
 print(f"重命名后上传 → 查重={renamed['dup_name']} sim={renamed['dup_sim']:.3f}")
 print(f"              依据：{renamed['dup_evidence']}")
 
 print("\n------ C) 扫描件检测 ------")
-sc = parsing.open_doc(P("pdf", "1706.03762v1_img.pdf"))
+sc = parsing.open_doc(P("论文样本", "1706.03762v1_img.pdf"))
 print(f"1706.03762v1_img.pdf 页数={sc.page_count} 判定扫描件={parsing.detect_scanned(sc)}"
       f" 原生文本字符数={sum(len(sc[i].get_text().strip()) for i in range(min(3, sc.page_count)))}")
 sc.close()
 
 print("\n------ D) 超长文档工程指标 ------")
-long_path = P("pdf", "UnderstandingDeepLearning_02_09_26_C.pdf")
+long_path = P("论文样本", "UnderstandingDeepLearning_02_09_26_C.pdf")
 if os.path.exists(long_path):
     t0 = time.time()
     lp = load(long_path, "UnderstandingDeepLearning.pdf")
@@ -84,7 +84,7 @@ if os.path.exists(long_path):
     print(f"页数={lp['page_count']} 字数={len(lp['full_text']):,} 分块={chunks} "
           f"入库耗时={time.time() - t0:.1f}s 进程内存={mem:.0f}MB")
 else:
-    lp = load(P("pdf", "LongBook_540p_fixture.pdf"), "LongBook_540p.pdf")
+    lp = load(P("论文样本", "LongBook_540p_fixture.pdf"), "LongBook_540p.pdf")
     library.commit(ctx, lp, title="Long Book Fixture")
     import psutil
     chunks = len([c for c in ctx.chunks if c["source"] == "LongBook_540p.pdf"])

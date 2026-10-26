@@ -1,15 +1,15 @@
 """将矢量版 v1 逐页渲染为图片，再拼装成无文本层的"扫描件"PDF（模拟 1706.03762v1_img.pdf）。
 
 路径按仓库根目录推导，不写死机器相关的绝对路径——此前是
-``r"C:\\Users\\<用户名>\\ai_research_agent\\pdf\\..."``，而 scripts/ 会随镜像/仓库
+``r"C:\\Users\\<用户名>\\ai_research_agent\\论文样本\\..."``，而 scripts/ 会随镜像/仓库
 一起分发，等于把本机用户名公开出去（同 make_longbook.py 已修的问题）。
 """
 import pymupdf as fitz
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-SRC = str(_ROOT / "pdf" / "1706.03762v1.pdf")
-DST = str(_ROOT / "pdf" / "1706.03762v1_img.pdf")
+SRC = str(_ROOT / "论文样本" / "1706.03762v1.pdf")
+DST = str(_ROOT / "论文样本" / "1706.03762v1_img.pdf")
 
 if not Path(SRC).is_file():
     raise SystemExit(

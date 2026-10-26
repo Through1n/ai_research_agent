@@ -262,7 +262,7 @@ def main():
         pg.wait_for_selector("text=AI4S 科研助手", timeout=60000)
         wait_idle(pg, timeout=180)
         for tag in only:
-            flows[tag](pg, ROOT / "docs" / "shots")
+            flows[tag](pg, ROOT / "资料" / "截图")
         b.close()
     print("✅ 修复轮完成")
 

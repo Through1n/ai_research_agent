@@ -494,8 +494,8 @@ def _render_library_health(ctx):
         pretty_table(rows, max_rows=MAX_FAILED_SHOW)
 
     def _rebuild_entry():
-        st.caption("从 pdf/ 官方测试件完整重建（含扫描件 OCR），同名自动覆盖，不影响其它上传。")
-        if st.button("🔧 一键重建文献库（pdf/ 官方测试件，含 541 页教材）", key="lib_rebuild"):
+        st.caption("从 论文样本/ 官方测试件完整重建（含扫描件 OCR），同名自动覆盖，不影响其它上传。")
+        if st.button("🔧 一键重建文献库（论文样本/ 官方测试件，含 541 页教材）", key="lib_rebuild"):
             _run_rebuild(ctx)
 
     def _diag(details=()):
@@ -598,9 +598,9 @@ def _run_rebuild(ctx):
         except Exception:
             pass
         friendly_error("重建文献库", e,
-                       reasons=["pdf/ 目录缺少官方测试件", "磁盘空间不足 / 向量库写入失败",
+                       reasons=["论文样本/ 目录缺少官方测试件", "磁盘空间不足 / 向量库写入失败",
                                 "扫描件 OCR 需要可用的多模态模型 Key"],
-                       actions=["确认 pdf/ 下 5 个官方 PDF 存在后重试",
+                       actions=["确认 论文样本/ 下 5 个官方 PDF 存在后重试",
                                 "在左侧「接入方式」填入有效 Key 后重试（扫描件 OCR 需要）"])
         return
     try:

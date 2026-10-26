@@ -43,7 +43,7 @@ INCLUDE_TOP_ITEMS = [
     "core",
     "tools",
     "lib",
-    "demo_data",
+    "演示语料",
     ".streamlit",
 ]
 
@@ -51,7 +51,7 @@ INCLUDE_TOP_ITEMS = [
 EXCLUDE_NAMES = {
     ".git", "build", "dist", "dist-release", "storage", "version_history",
     "__pycache__", ".idea", ".vscode", ".venv", "node_modules",
-    "desktop", "tests", "scripts", "pdf",
+    "desktop", "tests", "scripts", "论文样本",
 }
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".pyd"}
 

@@ -1,0 +1,96 @@
+{
+  "first_paint_sec": 11.8,
+  "nav_appeared_sec": 6.1,
+  "title": "AI4S 科研助手 Agent",
+  "home_body_len": 1146,
+  "pages": [
+    {
+      "menu": "🤖 0. 智能总助手",
+      "clicked": true,
+      "render_sec": 3.8,
+      "body_len": 1173,
+      "shot": "资料/截图/online\\o1_智能总助手.png"
+    },
+    {
+      "menu": "📁 1. 文献库管理",
+      "clicked": true,
+      "render_sec": 3.7,
+      "body_len": 1223,
+      "shot": "资料/截图/online\\o2_文献库管理.png"
+    },
+    {
+      "menu": "💬 2. 跨文献问答与溯源",
+      "clicked": true,
+      "render_sec": 3.7,
+      "body_len": 1018,
+      "shot": "资料/截图/online\\o3_跨文献问答与.png"
+    },
+    {
+      "menu": "📖 3. 版式阅读与智能翻译",
+      "clicked": true,
+      "render_sec": 3.7,
+      "body_len": 829,
+      "shot": "资料/截图/online\\o4_版式阅读与智.png"
+    },
+    {
+      "menu": "🔍 4. 论文检索与追踪",
+      "clicked": true,
+      "render_sec": 3.7,
+      "body_len": 947,
+      "shot": "资料/截图/online\\o5_论文检索与追.png"
+    },
+    {
+      "menu": "🕸️ 5. 引用图谱与综述",
+      "clicked": true,
+      "render_sec": 3.7,
+      "body_len": 876,
+      "shot": "资料/截图/online\\o6_引用图谱与综.png"
+    },
+    {
+      "menu": "✍️ 6. 写作辅助与可视化",
+      "clicked": true,
+      "render_sec": 3.7,
+      "body_len": 1203,
+      "shot": "资料/截图/online\\o7_写作辅助与可.png"
+    },
+    {
+      "menu": "🏗️ A. 系统架构设计",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 1203,
+      "shot": "资料/截图/online\\o8_系统架构设计.png"
+    },
+    {
+      "menu": "💡 B. 技术创新亮点",
+      "clicked": false,
+      "render_sec": 3.7,
+      "body_len": 1203,
+      "shot": "资料/截图/online\\o9_技术创新亮点.png"
+    }
+  ],
+  "js_errors_after_nav": [],
+  "page_errors": [],
+  "demo": {
+    "load_demo_sec": 2.0,
+    "load_demo_ok": true,
+    "body_after_demo_len": 1263
+  },
+  "qa": {},
+  "graph": {
+    "demo_graph_sec": 1.5,
+    "done": true
+  },
+  "caption": {
+    "load_csv_sec": 6.0,
+    "csv_loaded": true
+  },
+  "client_timezone": "Asia/Shanghai",
+  "server_date_header": "Wed, 14 Oct 2026 17:18:18 GMT",
+  "js_errors_total": 2,
+  "page_errors_total": 0,
+  "js_errors_all": [
+    "error: %cUnknown option detected: \"gravitationalWeight\". Did you mean \"gravitationalConstant\"?\n\nProblem value found at: \noptions = {\n  physics: {\n    barnesHut: {\n      gravitationalWeight\n    }\n  }\n}\n\n\n bac",
+    "error: %cErrors have been found in the supplied options object. background: #FFeeee; color: #dd0000"
+  ],
+  "page_errors_all": []
+}

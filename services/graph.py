@@ -1095,7 +1095,7 @@ def explore_future(ctx, G):
 #    「相关但未被直接引用」的论文；Salton 余弦归一化，证据列明共同邻居。
 # ③ Price(1965) 累积优势模型 / Newman(2009)「晚发表但被引超预期」：引文速度
 #    （本地入度 ÷ 论文年龄）作为新兴热点信号；小图上仅作方向性参考。
-# 全部新符号追加在文件末尾：既有函数行号不变，docs/technical_doc.md 的行号引用零漂移。
+# 全部新符号追加在文件末尾：既有函数行号不变，资料/technical_doc.md 的行号引用零漂移。
 
 # 引用意图线索词（对引文语境句做小写子串计数；contrasting 优先级高于 supporting）
 _INTENT_CONTRAST_CUES = ("however", "in contrast", "by contrast", "unlike", "whereas",

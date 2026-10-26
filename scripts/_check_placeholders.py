@@ -5,11 +5,11 @@
     python scripts/_check_placeholders.py
 
 功能：
-    扫描 README.md 与 docs/团队信息.md，定位三类"待填"占位符并逐条输出
+    扫描 README.md 与 资料/团队信息.md，定位三类"待填"占位符并逐条输出
     「文件:行号 | 占位符原文 | 所属章节 › 行内标签」：
       1. 【占位符】        —— README 团队信息一节使用的中文占位 token；
       2. TODO             —— 行内 TODO 标记（README:342 的提交前提醒注释）；
-      3. 方括号占位       —— docs/团队信息.md 的 [待填写] / [姓名] / [学校] / [组别] /
+      3. 方括号占位       —— 资料/团队信息.md 的 [待填写] / [姓名] / [学校] / [组别] /
                              [成员 N] / [____-__-__] 等待填方括号组。
 
 退出码（供 CI / 交付前门禁使用）：
@@ -25,7 +25,7 @@
     纯数值列表。[待填写] / [姓名] / [学校] / [组别] / [成员 N] / [____-__-__]
     等真实待填项一律拦截。
 
-配套文档：docs/占位符填空清单.md（怎么填）、docs/review/round15_team_info.md（实测报告）。
+配套文档：资料/占位符填空清单.md（怎么填）、资料/复盘/round15_team_info.md（实测报告）。
 """
 import re
 import sys
@@ -34,7 +34,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = [
     ROOT / "README.md",
-    ROOT / "docs" / "团队信息.md",
+    ROOT / "资料" / "团队信息.md",
 ]
 
 # ---- 三类待填占位符模式 ----------------------------------------------------
@@ -46,7 +46,7 @@ BRACKET_RE = re.compile(r"\[[^\[\]]*\]")       # 方括号组（不允许嵌套�
 # 白名单 A：方括号"内容文本"命中即豁免（附豁免理由，供汇总审计）。
 WHITELIST_TEXT_PATTERNS = [
     # ① 填空清单统一示例标记：[示例] / [示例：...] 明确声明"格式示范，非真实信息"。
-    #    用户按 docs/占位符填空清单.md 填写时若保留该前缀，属有意保留。
+    #    用户按 资料/占位符填空清单.md 填写时若保留该前缀，属有意保留。
     (re.compile(r"^示例"), "示例标记（[示例] 前缀 = 格式示范声明）"),
     # ② 校名/院系/单位格式示范：XX大学、XX学院 是填空清单"填写模板"一节的模板写法，
     #    不是忘填的占位符。
@@ -158,7 +158,7 @@ def main():
 
     print("=" * 68)
     print("占位符校验 · python scripts/_check_placeholders.py")
-    print("目标: README.md, docs/团队信息.md")
+    print("目标: README.md, 资料/团队信息.md")
     print("=" * 68)
 
     total = 0
@@ -185,7 +185,7 @@ def main():
     print("\n" + "-" * 68)
     if failed:
         print(f"合计: {total} 处待填占位符")
-        print("结果: ❌ 未通过 —— 请按 docs/占位符填空清单.md 逐项填写")
+        print("结果: ❌ 未通过 —— 请按 资料/占位符填空清单.md 逐项填写")
         print("提示: 填完后重跑本脚本，退出码为 0 方可进入交付前门禁")
         return 1
     print(f"合计: {total} 处待填占位符")

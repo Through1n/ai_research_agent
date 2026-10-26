@@ -91,7 +91,7 @@ if not defined CONDA_ROOT (
     echo     ① 装 Miniconda（Python 3.11 版）后重新双击本脚本
     echo        下载地址：https://docs.conda.io/projects/miniconda/
     echo     ② 完全不想装东西：直接用在线演示地址，浏览器打开即可
-    echo        见 docs\5分钟快速体验指南.md
+    echo        见 资料\5分钟快速体验指南.md
     echo     ③ 装了 Docker：在项目根目录执行
     echo        docker build -f Dockerfile.quick -t ai4s-quick .
     echo        然后 docker run -p 8501:8501 ai4s-quick

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """补拍 BERT(1706.03762v1.pdf) 双栏正文页的「原生渲染」截图。
 
-输出 docs/shots/_p3_dual.png（临时文件，不覆盖任何正式图）。
+输出 资料/截图/_p3_dual.png（临时文件，不覆盖任何正式图）。
 方法：真双栏正文页（先用「检测本页栏数」确认），最后一步点「渲染该页」，
 等 iframe 出现后按视口截图（1440x1250，dsf=2 → 2880x2500）。
 """
@@ -16,7 +16,7 @@ from _reshoot_shots import (btn, load_keys, leak_check, nav,  # noqa: E402
 
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-OUT = Path(__file__).resolve().parents[1] / "docs" / "shots" / "_p3_dual.png"
+OUT = Path(__file__).resolve().parents[1] / "资料" / "截图" / "_p3_dual.png"
 
 
 def select_doc(pg, name):

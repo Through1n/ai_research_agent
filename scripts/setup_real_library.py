@@ -2,7 +2,7 @@
 
 背景（R9 头号缺陷）：仓库里的 storage/library.json 曾是测试夹具——3 篇文献只有
 4 个 chunk 且全部来自第 1 页，用户在问答/图谱/写作/对比页只能检索到首页片段。
-本脚本用 pdf/ 下的真实 PDF 走完整入库路径（分 20 页批 + 单页 30s 超时 +
+本脚本用 论文样本/ 下的真实 PDF 走完整入库路径（分 20 页批 + 单页 30s 超时 +
 扫描件 OCR）重建文献库，并打印实测表。
 
 用法（必须用 ai_research 环境的 Python，base 环境会误判缺模块）：
@@ -14,7 +14,7 @@
     --no-reset           不清空全库，只覆盖同名官方文献
                          （默认全新重建：先自动备份 storage/ 再清空）
 
-入库的官方测试件（pdf/ 下，共 5 件）：
+入库的官方测试件（论文样本/ 下，共 5 件）：
     1706.03762v7.pdf                     15 页 文本层  Attention Is All You Need v7
     1706.03762v1.pdf                     15 页 文本层  v1（复现 v1/v7 语义查重）
     1810.04805v2.pdf                     16 页 文本层  BERT
@@ -60,7 +60,7 @@ def _fmt_pages(pages):
 
 def main():
     parser = argparse.ArgumentParser(description="用真实 PDF 重建文献库")
-    parser.add_argument("--pdf-dir", default=str(ROOT / "pdf"), help="PDF 目录")
+    parser.add_argument("--pdf-dir", default=str(ROOT / "论文样本"), help="PDF 目录")
     parser.add_argument("--files", default="", help="逗号分隔的文件名列表（默认官方 5 件）")
     parser.add_argument("--no-reset", action="store_true", help="不清空全库，只覆盖同名文献")
     args = parser.parse_args()

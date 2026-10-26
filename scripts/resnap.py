@@ -1,4 +1,4 @@
-"""刷新 docs/shots 界面截图：启动临时 Streamlit → playwright 逐页截图。
+"""刷新 资料/截图 界面截图：启动临时 Streamlit → playwright 逐页截图。
 用法：python scripts/resnap.py
 需要本机 conda 环境已安装 playwright 与 chromium（一次性）。
 """
@@ -8,7 +8,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "docs", "shots")
+OUT = os.path.join(ROOT, "资料", "截图")
 PORT = 8599
 URL = f"http://127.0.0.1:{PORT}"
 

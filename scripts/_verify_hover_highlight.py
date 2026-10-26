@@ -25,7 +25,7 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 from services import parsing  # noqa: E402
 from services.translate import native_page_html  # noqa: E402
 
-PDF = os.path.join(ROOT, "pdf", "1706.03762v7.pdf")
+PDF = os.path.join(ROOT, "论文样本", "1706.03762v7.pdf")
 problems = []
 
 

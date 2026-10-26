@@ -16,15 +16,15 @@ BRAND_TAGLINE = "研究流水线 · 文献 → 问答 → 图谱 → 写作"
 def brand_logo(name: str = "icon.png") -> str:
     """品牌徽标文件路径——页面图标 / 侧栏品牌区 / 「品牌徽标」区块共用同一张图。
 
-    - 开发态：项目根 `assets/<name>`；
-    - 冻结态：随 app_bundle 进 `%APPDATA%/AI4SResearchAgent/app/assets/`（见
+    - 开发态：项目根 `品牌资源/<name>`；
+    - 冻结态：随 app_bundle 进 `%APPDATA%/AI4SResearchAgent/app/品牌资源/`（见
       AI4SResearchAgent.spec 的 BUNDLE_ITEMS）。
     取不到返回空串，由调用方回退（这里不抛异常：图标缺失不该让应用起不来）。
-    设计规范与生成脚本见 `assets/make_logo.py` / `docs/brand_logo_design.md`。
+    设计规范与生成脚本见 `品牌资源/make_logo.py` / `资料/brand_logo_design.md`。
     """
     try:
         here = Path(__file__).resolve().parent
-        for cand in (here / "assets" / name, Path.cwd() / "assets" / name):
+        for cand in (here / "品牌资源" / name, Path.cwd() / "品牌资源" / name):
             if cand.exists():
                 return str(cand)
     except Exception:
@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parent
 if FROZEN:
     # 冻结打包态：业务代码已由 desktop/paths.ensure_app_copy 从 app_bundle 复制到
     # %APPDATA%/AI4SResearchAgent/app/，config.py 即位于该目录；以自身位置作为资源根，
-    # 使 demo_data/、.streamlit/、lib/ 等业务静态资源随热更新目录一起解析。
+    # 使 演示语料/、.streamlit/、lib/ 等业务静态资源随热更新目录一起解析。
     # 可写数据始终放在 %APPDATA%/AI4SResearchAgent 下（与桌面壳共享同一 data_root）。
     RESOURCE_ROOT = Path(__file__).resolve().parent
     # APPDATA 缺失时回落用户主目录，避免 import 期 KeyError 直接崩
@@ -56,9 +56,9 @@ else:
 STORAGE_DIR = DATA_ROOT / "storage"
 UPLOAD_DIR = STORAGE_DIR / "uploads"
 CHROMA_DIR = STORAGE_DIR / "chroma"
-# PDF 与存储同生命周期：桌面态归入 storage/pdf；纯开发态保持项目根 pdf/
-PDF_DIR = (DATA_ROOT / "storage" / "pdf") if DESKTOP_MODE else ROOT / "pdf"
-DEMO_DIR = RESOURCE_ROOT / "demo_data"
+# PDF 与存储同生命周期：桌面态归入 storage/pdf；纯开发态保持项目根 论文样本/
+PDF_DIR = (DATA_ROOT / "storage" / "pdf") if DESKTOP_MODE else ROOT / "论文样本"
+DEMO_DIR = RESOURCE_ROOT / "演示语料"
 LOGS_DIR = DATA_ROOT / "logs" if DESKTOP_MODE else ROOT / "storage"
 
 _mkdirs = [STORAGE_DIR, UPLOAD_DIR, CHROMA_DIR, PDF_DIR]

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Round 12 界面截图采集脚本（v2 · 证明点版）。
 
-范围：`docs/shots/p0.png` … `p6.png` 共 7 张（一图一模块；p7/p8 经 M6 裁定不再使用，旧文件保留）。
+范围：`资料/截图/p0.png` … `p6.png` 共 7 张（一图一模块；p7/p8 经 M6 裁定不再使用，旧文件保留）。
 每张图必须加载对应模块的**证明点**：
 
   p0 文献库管理 → 1b 细粒度解析（元数据 / 标题树 / 表格 / 插图 / LaTeX 公式 / 参考文献）
@@ -481,7 +481,7 @@ FLOWS = [("p1", do_p1), ("p0", do_p0), ("p2", do_p2), ("p3", do_p3),
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8599")
-    ap.add_argument("--out", default=str(ROOT / "docs" / "shots"))
+    ap.add_argument("--out", default=str(ROOT / "资料" / "截图"))
     ap.add_argument("--only", default="")
     ap.add_argument("--mtime-check", action="store_true")
     args = ap.parse_args()

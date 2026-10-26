@@ -77,7 +77,7 @@ if [ -z "$CONDA_ROOT" ]; then
     say "    ① 安装 Miniconda 后重新运行本脚本："
     say "       https://docs.conda.io/projects/miniconda/"
     say "    ② 完全不想装东西：直接用在线演示地址，浏览器打开即可"
-    say "       （见 docs/5分钟快速体验指南.md）"
+    say "       （见 资料/5分钟快速体验指南.md）"
     say "    ③ 装了 Docker："
     say "       docker build -f Dockerfile.quick -t ai4s-quick ."
     say "       docker run -p 8501:8501 ai4s-quick"

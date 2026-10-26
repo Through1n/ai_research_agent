@@ -4,7 +4,7 @@
 也掩盖了「一页要滚十几屏」这个真正的杂乱信号。视口快照才反映用户首屏看到什么。
 
 用法：
-    python scripts/_shot_pages.py --port 8502 --out docs/shots/_pre
+    python scripts/_shot_pages.py --port 8502 --out 资料/截图/_pre
 """
 import argparse
 import subprocess
@@ -42,7 +42,7 @@ def wait_http(url, timeout=180):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8502)
-    ap.add_argument("--out", default="docs/shots/_pre")
+    ap.add_argument("--out", default="资料/截图/_pre")
     ap.add_argument("--serve", action="store_true", help="自己起一个 streamlit 再拍")
     args = ap.parse_args()
 

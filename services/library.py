@@ -961,7 +961,7 @@ def _real_pdf_page_count(filename):
 
     2026-10 R9：add_text_corpus（内置演示语料）原先用 ``full_text.split("\\n\\n")``
     的段数估算页数（v7 得 15，与真实 PDF 页数无关），导致页数字失真。现在只要
-    磁盘上存在同名 PDF（storage/uploads 或 pdf/），一律以 PDF 真实页数为准。
+    磁盘上存在同名 PDF（storage/uploads 或 论文样本/），一律以 PDF 真实页数为准。
     """
     try:
         for base in (UPLOAD_DIR, PDF_DIR):

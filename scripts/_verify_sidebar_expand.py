@@ -15,7 +15,7 @@ DOM 结构依据（streamlit 1.63.0 静态包 index.*.js 的 hb 组件，已逐�
   C. 展开态（按钮不在 DOM）     → 放行规则不泄漏、header 仍隐藏
   D. 旧版 testid 兼容           → stSidebarCollapsedControl 同样被放行
 
-截图输出 docs/shots/round13_sidebar_expand_{bug,fixed}.png——
+截图输出 资料/截图/round13_sidebar_expand_{bug,fixed}.png——
 注意图注：这是按前端结构复刻的 DOM，不是应用真实截图（合成 DOM + 真实 CSS）。
 """
 import os
@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ui.desktop_chrome import _CSS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SHOTS = os.path.join(ROOT, "docs", "shots")
+SHOTS = os.path.join(ROOT, "资料", "截图")
 
 # 修复前版本（git 历史 verbatim）：整段隐藏 header/toolbar，无放行规则。
 # 故意硬编码而非现场 git show：修复提交后 HEAD 即是新版，现场取会把"bug 现场"洗掉。

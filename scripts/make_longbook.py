@@ -3,10 +3,10 @@ import pymupdf as fitz
 from pathlib import Path
 
 # 输出路径按仓库根目录推导，不写死任何机器相关的绝对路径。
-# 此前是 r"C:\Users\<用户名>\ai_research_agent\pdf\..."，scripts/ 会随镜像/仓库
+# 此前是 r"C:\Users\<用户名>\ai_research_agent\论文样本\..."，scripts/ 会随镜像/仓库
 # 一起分发，等于把本机用户名公开出去。
 _ROOT = Path(__file__).resolve().parent.parent
-DST = str(_ROOT / "pdf" / "LongBook_540p_fixture.pdf")
+DST = str(_ROOT / "论文样本" / "LongBook_540p_fixture.pdf")
 PAGES = 540
 
 doc = fitz.open()

@@ -74,8 +74,8 @@ def part1():
                                     bilingual_html, selectable_text_html)
 
     # ---- A1 双栏检测 ----
-    bert = os.path.join(ROOT, "pdf", "1810.04805v2.pdf")
-    att = os.path.join(ROOT, "pdf", "1706.03762v7.pdf")
+    bert = os.path.join(ROOT, "论文样本", "1810.04805v2.pdf")
+    att = os.path.join(ROOT, "论文样本", "1706.03762v7.pdf")
     d = pymupdf.open(bert)
     info2 = detect_columns(d[1])
     check("A1 双栏检测：BERT p2 判定为 2 栏", info2["n_cols"] == 2,

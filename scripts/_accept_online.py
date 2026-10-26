@@ -1,12 +1,12 @@
 """话术 19：线上环境全功能验收。
 对 https://ai4s-research-agent.app.workbuddy.host/ 做逐页面验收 + 完整演示路径 + 线上特有问题检查。
-输出：docs/shots/online/*.png 截图 + JSON 结果（由报告消费）。
+输出：资料/截图/online/*.png 截图 + JSON 结果（由报告消费）。
 """
 import asyncio, json, time, os, sys
 from playwright.async_api import async_playwright
 
 URL = "https://ai4s-research-agent.app.workbuddy.host/"
-OUT = "docs/shots/online"
+OUT = "资料/截图/online"
 os.makedirs(OUT, exist_ok=True)
 
 MENU = [
@@ -240,7 +240,7 @@ async def main():
 
     with open(os.path.join(OUT, "result.json"), "w", encoding="utf-8") as f:
         json.dump(R, f, ensure_ascii=False, indent=2)
-    log("✓ 结果写入 docs/shots/online/result.json")
+    log("✓ 结果写入 资料/截图/online/result.json")
 
 
 asyncio.run(main())

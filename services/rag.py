@@ -907,6 +907,6 @@ def answer(ctx, question, use_rerank=False, history=None, source_filter=None,
             "refused": False, "top_score": round(top, 4), "unverified": unverified}
 
 # ---------- 模块二优化：抗幻觉自适应拒答闸门所需符号 ----------
-# 置于文件末尾，避免改动上方的任何被 docs/technical_doc.md 引用的行号（231/258/290/399/435/449/604/666/722/749/779/785/870）。
+# 置于文件末尾，避免改动上方的任何被 资料/technical_doc.md 引用的行号（231/258/290/399/435/449/604/666/722/749/779/785/870）。
 from core.guardrails import citation_coverage, grade_retrieval
 ADAPTIVE_MEAN_FLOOR = 0.18   # 池整体相关度均值下限：top 过线但池整体无关时仍拒答（CRAG 风格自适应闸门）

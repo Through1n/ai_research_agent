@@ -104,7 +104,7 @@ services:
     #     （官方 volumes 文档的 copy-up 语义；postgres 官方镜像的 PGDATA 同样依赖它），
     #     而 Dockerfile 第 4 层已把 /app/storage 及子目录预置并 chown 给 app:app。
     #   ⚠️ 该 copy-up 是否保留属主**本机无 docker，未实测**。首次 up 后请按
-    #      docs/部署后自检清单.md §1.1 跑一次 `ls -ld` 校验，属主必须是 app。
+    #      资料/部署后自检清单.md §1.1 跑一次 `ls -ld` 校验，属主必须是 app。
     #
     # 【要改回 bind mount（想在宿主机直接看 library.json）时必做的三步】
     #   1) 先把卷里的数据拷出来：docker compose cp ai4s-agent:/app/storage ./storage_backup

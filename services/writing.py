@@ -1,6 +1,6 @@
 """学术写作 Copilot：无幻觉论文框架、拓扑图真实渲染、Figure Caption、中英学术翻译。
 
-本轮整改对应 ``docs/audit_report_20261010.md`` 第五节 E 路（5.1-5.6）：
+本轮整改对应 ``资料/audit_report_20261010.md`` 第五节 E 路（5.1-5.6）：
 - **5.1 无幻觉 References**：``extract_references_from_pdf`` 用 PyMuPDF 从 PDF 末尾真实抽取
   References 段（复用 ``services.parsing.split_reference_entries``），生成后用
   ``validate_reference_whitelist`` 做角标 + 标题双重正则校验，幻觉在 UI 上显式暴露；
@@ -1409,7 +1409,7 @@ def try_compile_tikz(code, timeout=TIKZ_TIMEOUT_SEC, dpi=170):
         with open(tex_path, "w", encoding="utf-8") as f:
             f.write(_build_latex_document(code))
         if engine == "tectonic":
-            cmd = [exe, "--outdir", tmp, "--outfmt", "pdf", "main.tex"]
+            cmd = [exe, "--outdir", tmp, "--outfmt", "论文样本", "main.tex"]
         else:
             cmd = [exe, "-interaction=nonstopmode", "-file-line-error",
                    "-output-directory", tmp, "main.tex"]
@@ -1850,7 +1850,7 @@ def code_fingerprint(code):
 
 # ================================================================ R17：写作质量审计三件套 + 论证单元骨架
 # 本节全部**追加在文件末尾**：既有函数/常量行号零变动，
-# docs/technical_doc.md 的 `path:N sym` 引用不漂移，_check_doc_refs 自动保持绿。
+# 资料/technical_doc.md 的 `path:N sym` 引用不漂移，_check_doc_refs 自动保持绿。
 #
 # 借鉴的业界做法（均取「可离线确定性实现」的部分，CI 无 API Key 也能跑）：
 # 1. **论断-证据对齐**（claim-evidence coverage）——可靠写作系统架构

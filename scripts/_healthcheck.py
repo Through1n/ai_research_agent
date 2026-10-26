@@ -48,10 +48,10 @@ HTTP 200 不等于可用——本项目历史上出过「/_stcore/health 返回 
       · static/mermaid.min.js 存在（缺 → 写作页退化到 CDN，离线失效）
       · lib/vis-9.1.2/vis-network.min.js 存在（缺 → 引用图谱可视化空白，
         只剩表格指标——最难当场定位的一类故障）
-      · demo_data/ 存在（缺 → 演示语料加载按钮无数据可写）
-      · logs/、storage/cache/、storage/pdf/（服务态）、pdf/：均为**懒创建**
+      · 演示语料/ 存在（缺 → 演示语料加载按钮无数据可写）
+      · logs/、storage/cache/、storage/pdf/（服务态）、论文样本/：均为**懒创建**
         目录（app.py 首个错误才建 logs；citation_quality.py:169 才建 cache；
-        config.py 桌面态才建 storage/pdf；fetch_pdfs.sh 才建 pdf/），
+        config.py 桌面态才建 storage/pdf；fetch_pdfs.sh 才建 论文样本/），
         缺失属正常初态，提示而不判失败。
 """
 from __future__ import annotations
@@ -160,7 +160,7 @@ def check_storage() -> None:
     # 两种模式都建 storage/uploads、storage/chroma；桌面态追加 storage/pdf、logs、config
     hard = [st, st / "uploads", st / "chroma"]
     if desktop:
-        hard += [st / "pdf", ROOT / "logs", ROOT / "config"]
+        hard += [st / "论文样本", ROOT / "logs", ROOT / "config"]
     for d in hard:
         rel = _rel(d)
         if _dir_writable(d):
@@ -175,7 +175,7 @@ def check_storage() -> None:
                   "宿主机执行 chown -R 10001:10001 ./storage ./logs 后重启。")
     # 懒创建目录：缺失属正常初态，只提示
     lazy = [st / "cache", ROOT / "logs" if not desktop else None,
-            ROOT / "pdf" if not desktop else None]
+            ROOT / "论文样本" if not desktop else None]
     for d in lazy:
         if d is None:
             continue
@@ -183,7 +183,7 @@ def check_storage() -> None:
             _warn(f"{_rel(d)} 尚不存在（懒创建目录，属正常初态）",
                   "logs/ 由 app.py 首个错误日志时建；storage/cache/ 由 "
                   "services/citation_quality.py:169 首次写缓存时建；"
-                  "服务态 PDF 目录 pdf/ 由 scripts/fetch_pdfs.sh 拉取时建。")
+                  "服务态 PDF 目录 论文样本/ 由 scripts/fetch_pdfs.sh 拉取时建。")
         elif not _dir_writable(d):
             _warn(f"{_rel(d)} 不可写", "懒创建目录不可写只会让对应功能降级（日志/引用缓存/PDF 拉取）。")
 
@@ -269,10 +269,10 @@ def check_static_assets() -> None:
          "lib/vis-9.1.2/vis-network.min.js 缺失",
          "引用图谱可视化会变空白、只剩表格指标（page_graph.py 有兜底不会崩）。"
          "这类「不报错、只丢功能」的故障最难当场定位，看到本项警告请优先恢复。"),
-        (ROOT / "demo_data",
-         "demo_data/ 缺失",
+        (ROOT / "演示语料",
+         "演示语料/ 缺失",
          "「一键加载演示数据」无语料可写（DEMO_PAPERS 文本在 config.py，"
-         "但写作页还读 demo_data/data.csv）。"),
+         "但写作页还读 演示语料/data.csv）。"),
     ]
     for path, msg, hint in checks:
         if path.exists():

@@ -140,7 +140,7 @@ def open_window(port: int) -> None:
     _ensure_webview2_gpu_fallback()
 
     # pywebview 5.4 create_window 不支持 icon 参数；窗口/任务栏图标由 exe 自身决定
-    # （PyInstaller spec 已设置 icon=assets/icon.ico），开发模式使用默认图标。
+    # （PyInstaller spec 已设置 icon=品牌资源/icon.ico），开发模式使用默认图标。
     window = webview.create_window(
         title=APP_NAME,
         url=url,

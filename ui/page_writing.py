@@ -1,6 +1,6 @@
 """页面 6：学术写作与数据可视化 Copilot。
 
-本轮整改（对应 docs/audit_report_20261010.md 第五节 E 路）：
+本轮整改（对应 资料/audit_report_20261010.md 第五节 E 路）：
 - 5.1 无幻觉 References： References 章节由 services.writing 用白名单**确定性拼接**
   （不经过 LLM），UI 逐条展示条目来源何篇入库 PDF 的参考文献表；生成后**自动**跑白名单
   校验，幻觉/章节缺失用 st.error 明确列出并提供「重新生成（强化约束）」按钮；占位串残留
@@ -290,7 +290,7 @@ def _csv_section(ctx):
                 p = os.path.join(str(DEMO_DIR), "data.csv")
                 if os.path.exists(p):
                     st.session_state.df = pd.read_csv(p)
-                    st.session_state.df_name = "demo_data/data.csv"
+                    st.session_state.df_name = "演示语料/data.csv"
                     st.session_state.chart_plan = None
                     st.session_state.auto_captions = {}
                     st.session_state.caption = ""

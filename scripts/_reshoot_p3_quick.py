@@ -26,7 +26,7 @@ from scripts._reshoot_shots import (  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 BASE = "http://127.0.0.1:8599"
-OUT = Path(__file__).resolve().parents[1] / "docs" / "shots" / "p3.png"
+OUT = Path(__file__).resolve().parents[1] / "资料" / "截图" / "p3.png"
 DOC = "1810.04805v2.pdf"
 PAGE = 3
 

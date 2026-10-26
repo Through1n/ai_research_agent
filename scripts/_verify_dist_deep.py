@@ -63,7 +63,7 @@ def main():
                 app.dump_logs()
                 return 1
 
-            shot = ROOT / "docs" / "shots" / "_dist_deep.png"
+            shot = ROOT / "资料" / "截图" / "_dist_deep.png"
             page.screenshot(path=str(shot))
             exc_blocks = page.query_selector_all('[data-testid="stException"]')
             b.close()

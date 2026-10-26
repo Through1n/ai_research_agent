@@ -7,13 +7,13 @@
 布局（PyInstaller 解包后 _MEIPASS 内）：
     AI4SResearchAgent.exe
     desktop/                壳层（路径/启动器/窗口/updater/about/version）
-    assets/icon.ico         窗口图标
+    品牌资源/icon.ico         窗口图标
     app_bundle/             初始业务代码（首次启动复制到 %APPDATA%/.../app/ 后热更新）
         app.py
         config.py
         .env.example
         requirements.txt
-        ui/ services/ core/ tools/ lib/ demo_data/ .streamlit/
+        ui/ services/ core/ tools/ lib/ 演示语料/ .streamlit/
 """
 
 from pathlib import Path
@@ -41,15 +41,15 @@ BUNDLE_ITEMS = [
     ("core", "app_bundle/core"),
     ("tools", "app_bundle/tools"),
     ("lib", "app_bundle/lib"),
-    ("demo_data", "app_bundle/demo_data"),
+    ("演示语料", "app_bundle/演示语料"),
     (".streamlit", "app_bundle/.streamlit"),
     # 前端静态库（mermaid.min.js 等）：随软件本地分发，运行时零外网依赖（/app/static/...）
     ("static", "app_bundle/static"),
     # 品牌徽标：页面图标 + 侧栏品牌区 + 「品牌徽标」区块都在运行时读它，
     # 必须进 app_bundle（冻结态 app.py 跑在 %APPDATA%/.../app/，读不到 exe 根目录）
-    ("assets/icon.png", "app_bundle/assets"),
-    ("assets/logo.png", "app_bundle/assets"),
-    ("assets/logo.svg", "app_bundle/assets"),
+    ("品牌资源/icon.png", "app_bundle/品牌资源"),
+    ("品牌资源/logo.png", "app_bundle/品牌资源"),
+    ("品牌资源/logo.svg", "app_bundle/品牌资源"),
 ]
 
 datas = []
@@ -61,7 +61,7 @@ for src, dest in BUNDLE_ITEMS:
     datas.append((str(src_path), dest))
 
 # 窗口图标打到根目录
-datas.append((str(PROJECT / "assets" / "icon.ico"), "."))
+datas.append((str(PROJECT / "品牌资源" / "icon.ico"), "."))
 
 # ---------------------------------------------------------------- streamlit / chromadb 数据文件
 
@@ -197,7 +197,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(PROJECT / "assets" / "icon.ico"),
+    icon=str(PROJECT / "品牌资源" / "icon.ico"),
     version="version_info.txt",
 )
 

@@ -47,7 +47,7 @@ async def main():
         for e in errs[:10]:
             print(f"      {e[:160]}")
 
-        await pg.screenshot(path="docs/shots/online/_probe_home.png", full_page=False)
+        await pg.screenshot(path="资料/截图/online/_probe_home.png", full_page=False)
         await b.close()
 
 asyncio.run(main())

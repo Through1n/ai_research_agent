@@ -266,7 +266,7 @@ def github_repo_info(url):
 
 # ================= 外部请求缓存层（TTL + 负缓存 + 单飞 + 瞬时重试） =================
 # 全部追加于文件末尾，两个原因：
-#   ① 上方各函数（含 docs/technical_doc.md 引用的 github_repo_info:162 等）行号不变，
+#   ① 上方各函数（含 资料/technical_doc.md 引用的 github_repo_info:162 等）行号不变，
 #      文档引用零漂移；
 #   ② import 完成后才把模块属性包上缓存外壳，调用方 `extern.xxx(...)` 无感，
 #      冒烟脚本的故障注入（整体替换模块属性）也天然绕过缓存。

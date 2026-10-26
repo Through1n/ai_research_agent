@@ -10,7 +10,7 @@
 .streamlit/secrets.toml
 # ↓ 反向放行：把「config.toml 必须进镜像」写成一条可执行规则，而不是只写在注释里。
 #   历史教训：.dockerignore 曾经排除过整个 .streamlit/，导致
-#   docs/在线演示部署指南.md §2.4 第 2 条据此断言「镜像里没有 config.toml」；
+#   资料/在线演示部署指南.md §2.4 第 2 条据此断言「镜像里没有 config.toml」；
 #   该断言在当前的 .dockerignore 下**已经不成立**（本节只排除 secrets.toml）。
 #   加这条 negation 后，将来任何人误加 `.streamlit/` 也不会再把 config.toml 带走。
 !.streamlit/config.toml
@@ -61,17 +61,17 @@ node_modules/
 #       不要把这条重复写在这里 —— 曾出现过两处重复，易被误读成两条不同规则。
 
 # ===== 文档 / 截图 / 评审材料（不参与运行）=====
-# 运行期 grep 确认：ui/ services/ core/ tools/ app.py config.py 均无读取 docs/ 的代码
-# （只有注释里提到 docs/audit_report_*.md；README 是 services/extern.py 从
+# 运行期 grep 确认：ui/ services/ core/ tools/ app.py config.py 均无读取 资料/ 的代码
+# （只有注释里提到 资料/audit_report_*.md；README 是 services/extern.py 从
 #  raw.githubusercontent 现抓的，不读本地文件）→ 排除安全。
-docs/
+资料/
 
 # ⚠️ 下面五个目录**一个都不能加进来**，加了不会报错、只会静默丢功能，最难排查：
-#   · pdf/         —— config.py 的 PDF_DIR（非桌面态）= ROOT/pdf，
+#   · 论文样本/         —— config.py 的 PDF_DIR（非桌面态）= ROOT/论文样本，
 #                     services/library.py:1123 的 rebuild_from_pdf_dir（:1137 取 PDF_DIR）
 #                     与 UI「🔧 一键重建文献库」都从这里读盘
-#   · demo_data/   —— config.py 的 DEMO_DIR + DEMO_PAPERS 演示语料
-#                     （ui/page_writing.py:290 读 demo_data/data.csv）
+#   · 演示语料/   —— config.py 的 DEMO_DIR + DEMO_PAPERS 演示数据
+#                     （ui/page_writing.py:290 读 演示语料/data.csv）
 #   · static/      —— mermaid.min.js（3.2MB），理由见上方 .streamlit 说明
 #   · lib/         —— services/graph.py:528-529 读 lib/vis-9.1.2/vis-network.min.js
 #                     与 vis-network.css 拼引用图谱的 HTML。丢了不会崩（page_graph.py:84-86
@@ -81,7 +81,7 @@ docs/
 #                     该文件被 try/except 包着（page_reading.py:98-102），丢了**不崩**，
 #                     但会静默退化成 _NullProbe（数值恒 0），版式阅读页的内存探针读数全废。
 #                     实测 1,587,272 B（1.6MB），别为这点体积冒险。
-#   （pdf/ 实测 36,407,214 B（36.4MB）会打进镜像，属已知体积代价，见部署报告）
+#   （论文样本/ 实测 36,407,214 B（36.4MB）会打进镜像，属已知体积代价，见部署报告）
 
 # ===== 系统 / 编辑器 =====
 .DS_Store
@@ -92,7 +92,7 @@ Thumbs.db
 # ===== 其他非运行必需 =====
 # ⚠️ tests/ **不再排除**（Round 13 改动，原为 `tests/`）。
 #   理由：容器内要能跑 `python -m unittest discover -s tests`
-#   （docs/部署后自检清单.md §1.4 的四条门禁之一），排掉就只能在宿主机跑。
+#   （资料/部署后自检清单.md §1.4 的四条门禁之一），排掉就只能在宿主机跑。
 #   代价：44KB（只有 test_core.py 一个文件；tests/__pycache__ 由上方规则排除）。
 #   运行时代码不 import tests/，进镜像无任何副作用。
 #   不想付这 44KB 就把下面那行改回 `tests/`，代价是门禁第 2 条在容器内跑不了。

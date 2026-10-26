@@ -348,7 +348,7 @@ def _brand_block() -> None:
     """侧栏品牌区：徽标图 + MoreHand + 副标题（横排，取不到图就退回纯文字）。
 
     徽标图同时用于页面图标（app.py）与「品牌徽标」区块，三处同一张图
-    （assets/icon.png，生成脚本 assets/make_logo.py）。
+    （品牌资源/icon.png，生成脚本 品牌资源/make_logo.py）。
     """
     _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
     _logo = brand_logo("icon.png")
@@ -399,11 +399,11 @@ def _brand_badge_block() -> None:
               '32–63px 中模（去关节节点）；&lt;32px 剪影模（只留五根加粗圆头线）'
               '——16px 下任何内部细节都会糊成一团，宁可只要一只手。</div>'
             + '<div class="ai-brand-badge-cap">规格</div>'
-            + '<div class="ai-muted">assets/icon.ico 含 16/24/32/48/64/128/256 '
-              '七档；logo.png 1024&sup2;、icon.png 256&sup2;；矢量源 assets/logo.svg。</div>'
+            + '<div class="ai-muted">品牌资源/icon.ico 含 16/24/32/48/64/128/256 '
+              '七档；logo.png 1024&sup2;、icon.png 256&sup2;；矢量源 品牌资源/logo.svg。</div>'
             + '</div>',
             unsafe_allow_html=True)
-        st.caption("完整设计规范与实现方案见 docs/brand_logo_design.md")
+        st.caption("完整设计规范与实现方案见 资料/brand_logo_design.md")
 
 
 def render(ctx):

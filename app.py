@@ -33,8 +33,8 @@ try:                                                     # 品牌名取自 confi
 except Exception:                                        # pragma: no cover
     _BRAND = "MoreHand"
 
-# 页面图标（浏览器标签 / 任务栏角标）：开发态在项目根 assets/，冻结态随 app_bundle
-# 进 %APPDATA%/.../app/assets/。两边都取不到就退回 emoji，不让启动失败。
+# 页面图标（浏览器标签 / 任务栏角标）：开发态在项目根 品牌资源/，冻结态随 app_bundle
+# 进 %APPDATA%/.../app/品牌资源/。两边都取不到就退回 emoji，不让启动失败。
 def _page_icon() -> str:
     try:
         from config import brand_logo

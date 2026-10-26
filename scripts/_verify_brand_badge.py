@@ -74,7 +74,7 @@ def main() -> int:
             print("[1/5] 侧栏品牌区：徽标图 + 品牌名 + 副标题")
             imgs = page.locator('[data-testid="stSidebar"] img')
             if imgs.count() == 0:
-                bad("侧栏没有徽标图（brand_logo 没解析到 assets/icon.png？）")
+                bad("侧栏没有徽标图（brand_logo 没解析到 品牌资源/icon.png？）")
             else:
                 src = imgs.first.get_attribute("src") or ""
                 ok(f"侧栏徽标图已渲染（{len(src)} 字符的 data/文件 src）")
@@ -161,7 +161,7 @@ def main() -> int:
                 bad("滚不动（scrollTop 仍为 0）")
             tail = box.evaluate("el => (el.innerText || '').slice(-40)")
             print(f"      滚到底部末行：{tail.strip()!r}")
-            shot = ROOT / "docs" / "shots" / "_brand_badge.png"
+            shot = ROOT / "资料" / "截图" / "_brand_badge.png"
             page.screenshot(path=str(shot))
             print(f"      截图：{shot}")
             b.close()

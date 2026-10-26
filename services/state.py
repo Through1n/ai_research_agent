@@ -304,7 +304,7 @@ def _ensure_lib_dict(data):
 
 
 # ---------- 热点函数缓存（分词 LRU / embed 记忆） ----------
-# 追加于文件末尾：上方各符号（含 docs/technical_doc.md 引用的 _build_bm25:221、
+# 追加于文件末尾：上方各符号（含 资料/technical_doc.md 引用的 _build_bm25:221、
 # embed:214、get_container:287 等）行号全部不变，文档引用零漂移。
 # 两条缓存都遵守「入站存不可变快照、出站复制」纪律：调用方就地改写永不污染缓存。
 from functools import lru_cache  # noqa: E402  置于末尾避免打乱上方行号

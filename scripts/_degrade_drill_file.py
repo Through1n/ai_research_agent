@@ -210,8 +210,8 @@ def s7_corrupt(at):
     print(LINE)
     print("场景 7｜上传损坏的 PDF（头部合法但内容截断 / 结构损坏）")
     print(LINE)
-    good = (ROOT / "pdf" / "1706.03762v1.pdf").read_bytes()
-    print("  基准文件: pdf/1706.03762v1.pdf （%.2f MB，15 页）" % (len(good) / 1e6))
+    good = (ROOT / "论文样本" / "1706.03762v1.pdf").read_bytes()
+    print("  基准文件: 论文样本/1706.03762v1.pdf （%.2f MB，15 页）" % (len(good) / 1e6))
     variants = [
         ("7a 内容截断：保留前 55% 字节（%PDF 头与大部分对象仍在，xref/文件尾丢失）",
          good[:int(len(good) * 0.55)], "truncated_55pct.pdf"),
@@ -248,7 +248,7 @@ def s8_zero(at):
 def _real_textbook_pages():
     try:
         from services import parsing
-        d = parsing.open_doc(str(ROOT / "pdf" / "UnderstandingDeepLearning_02_09_26_C.pdf"))
+        d = parsing.open_doc(str(ROOT / "论文样本" / "UnderstandingDeepLearning_02_09_26_C.pdf"))
         n = int(d.page_count)
         d.close()
         return n
@@ -282,7 +282,7 @@ def s9_oversize(at):
         print("  [取证1] 业务代码里的体积上限常量: 无"
               "（app.py / ui/ / services/ / core/ 全部 .py 全量扫描均未命中）")
         print("  [取证2] 上传入口 ui/page_library.py:205 = "
-              "st.file_uploader(\"选择 PDF\", type=[\"pdf\"], key=\"lib_up\")，未传任何体积参数；"
+              "st.file_uploader(\"选择 PDF\", type=[\"论文样本\"], key=\"lib_up\")，未传任何体积参数；"
               "解析流程里也没有 len(data) 判断")
         print("  [取证3] .streamlit/config.toml 未配置 server.maxUploadSize → 取 Streamlit 默认 200MB；"
               "即 100~200MB 的文件不会被拦在门外，会一路走到解析与入库")
@@ -340,9 +340,9 @@ def s9_oversize(at):
             del data
 
         # (2b) 页数维度标定：真实大 PDF 的成本来自"页数/图像"，不是裸字节
-        print("\n  [标定2] 页数维度（用真实语料 pdf/UnderstandingDeepLearning_02_09_26_C.pdf，"
+        print("\n  [标定2] 页数维度（用真实语料 论文样本/UnderstandingDeepLearning_02_09_26_C.pdf，"
               "22.45 MB / %d 页）" % _real_textbook_pages())
-        tb = ROOT / "pdf" / "UnderstandingDeepLearning_02_09_26_C.pdf"
+        tb = ROOT / "论文样本" / "UnderstandingDeepLearning_02_09_26_C.pdf"
         try:
             from services import parsing
             raw = tb.read_bytes()
@@ -395,7 +395,7 @@ def s10_race(at):
     print(LINE)
 
     print("  ▶ 10a 解析已完成、查重命中（pending 写入 session_state）后立刻点导航切走")
-    _FAKE["data"] = (ROOT / "pdf" / "1810.04805v2.pdf").read_bytes()
+    _FAKE["data"] = (ROOT / "论文样本" / "1810.04805v2.pdf").read_bytes()
     _FAKE["name"] = "1810.04805v2.pdf"
     click_parse(at, _FAKE["data"], _FAKE["name"])
     print("    查重命中 pending=%s（命中时待用户决策，尚未入库）" % bool(ss(at, "pending")))
@@ -431,7 +431,7 @@ def s10_race(at):
     try:
         at.session_state["pending"] = None
         at.session_state["menu"] = "📁 1. 文献库管理"
-        _FAKE["data"] = (ROOT / "pdf" / "1810.04805v2.pdf").read_bytes()
+        _FAKE["data"] = (ROOT / "论文样本" / "1810.04805v2.pdf").read_bytes()
         _FAKE["name"] = "1810.04805v2.pdf"
         at.run()
         btn = find_button(at, "解析并查重")

@@ -7,7 +7,7 @@
 为什么用 runpy 而不是 `from app import *`：Streamlit 应用的逻辑写在**模块顶层**
 （脚本自上而下执行），不是 `main()` 函数。用 `runpy.run_path(..., run_name="__main__")`
 可以让 `app.py` 以 `__main__` 身份执行，模块级副作用、`__file__` 相对路径解析
-（如 `demo_data/`、`static/`、`.streamlit/config.toml`）都与
+（如 `演示语料/`、`static/`、`.streamlit/config.toml`）都与
 `streamlit run app.py` 完全一致。
 
 等价替代方案（二选一即可，不需要同时做）：

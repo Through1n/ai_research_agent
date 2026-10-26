@@ -22,7 +22,7 @@ __pycache__/
 venv/
 
 # ---------- 演示过程产物（运行生成，非源码）----------
-# 注意：docs/shots/ 不再忽略——README 与技术文档引用这些截图，
+# 注意：资料/截图/ 不再忽略——README 与技术文档引用这些截图，
 #      若忽略会导致推送到 GitHub 后文档图片全部裂图。
 .pytest_cache/
 .mypy_cache/
@@ -31,18 +31,18 @@ venv/
 # ---------- 技术文档出图产物（scripts/make_tech_pdf.py）----------
 # 中间 HTML 把截图内联成 base64（单文件 8MB+），成品 PDF 4.4MB，均属构建产物。
 # 交付物以 md 为源，PDF 由 `python scripts/make_tech_pdf.py` 现生成，整目录忽略。
-docs/_build/
+资料/_构建/
 
 # 引用校验器快照：默认当 scratch 忽略，但 _chk_before/_chk_after 是文档第 6 行
 # 「修复前 1-4 章抽样 103 条中 86 条对不上 / 修复后 215 条 0 疑似」的一手证据，
 # 属交付物，单独放行（其它 _chk_* 仍忽略）。
-docs/review/_chk_*.txt
-!docs/review/_chk_before.txt
-!docs/review/_chk_after.txt
+资料/复盘/_chk_*.txt
+!资料/复盘/_chk_before.txt
+!资料/复盘/_chk_after.txt
 
 # 截图工作稿：_crop_*（裁剪试作）/ _full_*（重拍前长图原稿）/ _p*_v（版本稿）。
 # 正式图只有 p0-p6.png，这些是过程稿，不进包。
-docs/shots/_*.png
+资料/截图/_*.png
 
 # ---------- 运行时日志 ----------
 logs/
@@ -75,4 +75,4 @@ build_log.txt
 # UnderstandingDeepLearning_02_09_26_C.pdf 是 22MB 受版权保护教材原著，随公开仓库
 # 分发有法律风险。六件测试 PDF 统一改为 `sh scripts/fetch_pdfs.sh` 现拉现用：
 #   arXiv 三件下载、扫描件/长文档夹具本地生成、教材按官网说明自行放置。
-pdf/*.pdf
+论文样本/*.pdf

@@ -1,7 +1,7 @@
 #!/bin/sh
-# 拉取官方测试 PDF（Round 15：pdf/ 不再随仓库分发，改为现拉现用）
+# 拉取官方测试 PDF（Round 15：论文样本/ 不再随仓库分发，改为现拉现用）
 #
-# 背景：pdf/ 原跟踪 6 个文件共 31 MB，其中 UnderstandingDeepLearning_02_09_26_C.pdf
+# 背景：论文样本/ 原跟踪 6 个文件共 31 MB，其中 UnderstandingDeepLearning_02_09_26_C.pdf
 # 是 22 MB 的受版权保护教材原著。随公开仓库分发它有法律风险，而它又是 541 页长文档
 # 压测用例的核心素材。取舍：仓库只保留生成/下载逻辑，PDF 本身不入库。
 #
@@ -16,7 +16,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PDF_DIR="$ROOT/pdf"
+PDF_DIR="$ROOT/论文样本"
 PY="${PYTHON:-}"
 if [ -z "$PY" ]; then
     # 优先 ai_research 环境（make_* 脚本依赖 pymupdf）；base 环境会误判缺模块
@@ -46,7 +46,7 @@ LongBook_540p_fixture.pdf UnderstandingDeepLearning_02_09_26_C.pdf"
 MISSING=0
 have() { [ -f "$PDF_DIR/$1" ]; }
 
-echo "=== pdf/ 现状 ==="
+echo "=== 论文样本/ 现状 ==="
 for f in $ALL_PDFS; do
     if have "$f"; then
         echo "  ✓ $f  ($(du -h "$PDF_DIR/$f" | cut -f1))"
@@ -115,7 +115,7 @@ else
 
   获取方式（二选一）：
     1. 官网：https://udlbook.github.io/  → 页面内 PDF 链接，下载后改名存到
-       pdf/UnderstandingDeepLearning_02_09_26_C.pdf
+       论文样本/UnderstandingDeepLearning_02_09_26_C.pdf
     2. 若只需验证长文档链路，可跳过它：scripts/setup_real_library.py --files
        只列其余 4 件即可，541 页压测用例会缺一本。
 

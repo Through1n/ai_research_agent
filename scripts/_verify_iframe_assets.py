@@ -14,7 +14,7 @@ _ARCH_HTML。这些资产经 st.components.v1.html 以 srcdoc 渲染，**父窗�
 CSS 变量穿不透 iframe**（实测反证），所以每份文档自带迷你 :root 副本——
 也因此它们不受主文档门禁保护，必须单独验。
 
-五份资产全部用**真实生成器 + 真实输入**产出（native 用 pdf/ 下真实
+五份资产全部用**真实生成器 + 真实输入**产出（native 用 论文样本/ 下真实
 双栏论文），无头 Chromium 三档视口（1440 桌面 / 768 平板 / 390 手机）
 set_content 后断言计算样式：
 
@@ -36,7 +36,7 @@ C. 反向对照（硬纪律）：8 份故意写坏（旧蓝灰底复辟、第二
   15px 脱轨、9999px 圆角），对应断言必须精确翻红；任何一份没翻红
   → 门禁失明，退出码 1。
 
-依赖：playwright + chromium（headless）；pdf/ 下至少一份 PDF（native 资产用）。
+依赖：playwright + chromium（headless）；论文样本/ 下至少一份 PDF（native 资产用）。
 用法：python scripts/_verify_iframe_assets.py
 退出码：全过 0，任一失败/失明 1。
 """
@@ -110,7 +110,7 @@ def build_assets():
     # --- 1. native_page_html：真实双栏论文首页（坐标绝对定位 + #stage 自适应容器）
     pdf = None
     for name in ("1706.03762v7.pdf", "1706.03762v1.pdf", "1810.04805v2.pdf"):
-        p = os.path.join(ROOT, "pdf", name)
+        p = os.path.join(ROOT, "论文样本", name)
         if os.path.isfile(p):
             pdf = p
             break
@@ -123,7 +123,7 @@ def build_assets():
         except Exception as e:                       # noqa: BLE001
             skipped.append(f"native_page_html 生成失败：{e!r}")
     else:
-        skipped.append("native_page_html：pdf/ 下无可用 PDF（跳过=缺陷，需补语料）")
+        skipped.append("native_page_html：论文样本/ 下无可用 PDF（跳过=缺陷，需补语料）")
 
     # --- 2. bilingual_html：长文 + 不间断串 + 长 URL 压力文本（溢出规则验证）
     pairs = [

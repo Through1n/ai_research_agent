@@ -144,7 +144,7 @@ def ensure_papers(*names: str):
     for n in names:
         if n in _LOADED:
             continue
-        p = ROOT / "pdf" / n
+        p = ROOT / "论文样本" / n
         if not p.exists():
             continue
         commit(ctx, prepare_pdf(ctx, path=str(p), filename=n))
@@ -168,7 +168,7 @@ def group_ocr(env: dict, only: set, skip: set) -> None:
         record("ocr", "扫描件 OCR 端到端", None, "已跳过", "")
         return
 
-    pdf = ROOT / "pdf" / "1706.03762v1_img.pdf"
+    pdf = ROOT / "论文样本" / "1706.03762v1_img.pdf"
     if not pdf.exists():
         record("ocr", "扫描件 OCR 端到端", None, f"缺文件 {pdf.name}", "")
         return
@@ -254,7 +254,7 @@ def group_qa(env: dict, only: set, skip: set) -> None:
 
     try:
         from services.rag import answer
-        if not (ROOT / "pdf" / "1706.03762v7.pdf").exists():
+        if not (ROOT / "论文样本" / "1706.03762v7.pdf").exists():
             record("qa", "细粒度问答", None, "缺文件 1706.03762v7.pdf", "")
             return
 
@@ -356,7 +356,7 @@ def group_compare(env: dict, only: set, skip: set) -> None:
         from services.rag import answer
         names = ["1706.03762v7.pdf", "1810.04805v2.pdf"]
         ctx = ensure_papers(*names)
-        loaded = sum(1 for n in names if (ROOT / "pdf" / n).exists())
+        loaded = sum(1 for n in names if (ROOT / "论文样本" / n).exists())
         if loaded < 2:
             record("compare", "多篇跨文献对比", None, f"测试文件不足（仅 {loaded} 篇）", "")
             return
@@ -431,7 +431,7 @@ def group_write(env: dict, only: set, skip: set) -> None:
         return
     try:
         from services.writing import generate_outline_verified
-        if not (ROOT / "pdf" / "1706.03762v7.pdf").exists():
+        if not (ROOT / "论文样本" / "1706.03762v7.pdf").exists():
             record("write", "论文框架生成", None, "缺 1706.03762v7.pdf", "")
             return
         ctx = ensure_papers("1706.03762v7.pdf")
@@ -487,7 +487,7 @@ def group_graph(env: dict, only: set, skip: set) -> None:
         record("graph", "图谱构建", n_nodes >= 2 and n_edges >= 1,
                f"{n_nodes} 节点 / {n_edges} 边 / 簇数={len(m.get('communities', [])) if isinstance(m, dict) else '?'}",
                "" if n_nodes >= 3 else
-               f"⚠️ 语料仅 {n_nodes} 个逻辑节点（pdf/ 下 v1 与 v7 会被版本合并），"
+               f"⚠️ 语料仅 {n_nodes} 个逻辑节点（论文样本/ 下 v1 与 v7 会被版本合并），"
                f"未达赛题『20 篇批量文献』规模，本条只证明链路通、不证明规模能力")
 
         rev = str(generate_review(ctx, G, m, None))

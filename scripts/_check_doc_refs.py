@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""docs/technical_doc.md 行号引用校验器（可重复运行）。
+"""资料/technical_doc.md 行号引用校验器（可重复运行）。
 
 用法：
     python scripts/_check_doc_refs.py                 # 校验全文
@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = ROOT / "docs" / "technical_doc.md"
+DOC = ROOT / "资料" / "technical_doc.md"
 
 _EXT = r"(?:py|md|json|txt|yml|yaml|toml|csv|html)"
 # `路径:行号` / `路径:行号-行号` / `路径:行号 符号名` —— 反引号内允许跟随说明文字
@@ -30,11 +30,14 @@ _EXT = r"(?:py|md|json|txt|yml|yaml|toml|csv|html)"
 # 第二条分支用于点文件（`.gitignore:20` 这类无扩展名的路径）：
 # 这类引用此前恒不匹配，导致「SUSPECT 0」被误当成「全文引用无串位」。
 # 注意：常规分支的 `\.%s` 必须在捕获组**内部**，否则路径会丢掉扩展名。
-REF_RE = re.compile(r"`(?:[A-Za-z_][A-Za-z0-9_.]*@)?([A-Za-z0-9_./\\-]+\.%s|\.[A-Za-z0-9_.-]+):(\d+)(?:-(\d+))?[^`]*`" % _EXT)
+# 路径字符集用 `\w`（Python3 的 str 正则默认 Unicode 感知）——资料目录改中文名后
+# （`资料/复盘/…`），ASCII-only 字符集会**整条漏掉**这些引用：既让总条数凭空少 3 条，
+# 又会让紧随其后的裸行号 `:226` 继承到错误的前驱路径，产出假 SUSPECT。
+REF_RE = re.compile(r"`(?:[A-Za-z_][A-Za-z0-9_.]*@)?([\w./\\-]+\.%s|\.[\w.-]+):(\d+)(?:-(\d+))?[^`]*`" % _EXT)
 # 裸行号 `（`:196-201`）` / `:80 keyword_route`
 BARE_RE = re.compile(r"`(?<![\w./\\-]):(\d+)(?:-(\d+))?[^`]*`")
 # 只给文件路径、不带行号（`services/writing.py`）：用于给后续裸行号定锚
-PATHONLY_RE = re.compile(r"`([A-Za-z0-9_./\\-]+\.%s)`" % _EXT)
+PATHONLY_RE = re.compile(r"`([\w./\\-]+\.%s)`" % _EXT)
 IDENT_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{2,})\b")
 CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{2,})\s*\(")
 
@@ -43,9 +46,10 @@ NOISE = {
     "py", "md", "json", "txt", "yml", "yaml", "toml", "the", "and", "for", "not",
     "import", "from", "def", "class", "return", "self", "None", "True", "False",
     "env", "git", "http", "https", "www", "com", "shots", "png", "pdf", "csv",
+    "论文样本", "品牌资源", "演示语料", "复盘", "截图",
     "streamlit", "python", "pip", "conda", "docker", "api", "url", "json",
     # 模块名/目录名：出现频次高但不足以定位到某一行
-    "core", "tools", "ui", "app", "config", "docs", "storage", "scripts", "tests",
+    "core", "tools", "ui", "app", "config", "资料", "storage", "scripts", "tests",
     "services", "state", "parsing", "library", "rag", "graph", "writing",
     "translate", "extern", "track", "citation_quality", "query_expansion",
     "guardrails", "sandbox", "router", "agent", "planner", "memory", "trace",
@@ -123,7 +127,7 @@ def main():
     ap.add_argument("--start-line", type=int, default=1)
     ap.add_argument("--end-line", type=int, default=10 ** 9)
     ap.add_argument("--show-ok", action="store_true", help="同时打印判定为正确的条目")
-    ap.add_argument("--doc", default=None, help="待校验的 Markdown（默认 docs/technical_doc.md）")
+    ap.add_argument("--doc", default=None, help="待校验的 Markdown（默认 资料/technical_doc.md）")
     args = ap.parse_args()
 
     doc = Path(args.doc).resolve() if args.doc else DOC

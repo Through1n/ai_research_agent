@@ -9,7 +9,7 @@
   注意：不能图省事用 `HEAD`——修复早已合入主干，`HEAD` 版已含 `_title_case_ratio`，
   会导致「修复前 == 修复后」，历史对照失效。
 - 「修复后」用工作区的 `services/library.py`；
-- 两者对同一批 `pdf/*.pdf` + `demo_data/*.pdf` 的首页文本跑 `guess_title_from_text`，
+- 两者对同一批 `论文样本/*.pdf` + `演示语料/*.pdf` 的首页文本跑 `guess_title_from_text`，
   逐份与 EXPECT 期望值核对，末尾打印 `核对通过 n/m`。
 """
 import glob
@@ -54,7 +54,7 @@ EXPECT = {
     "1810.04805v2.pdf": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
     "LongBook_540p_fixture.pdf": "Chapter 1 Deep Learning Foundations and Agent Systems",
     "UnderstandingDeepLearning_02_09_26_C.pdf": "Understanding Deep Learning",
-    # 2026-10 演示语料 3→6 篇时新增的三篇（原先本脚本对 pdf/ 全量断言，缺期望值会直接 AssertionError）
+    # 2026-10 演示语料 3→6 篇时新增的三篇（原先本脚本对 论文样本/ 全量断言，缺期望值会直接 AssertionError）
     "1312.6114v10.pdf": "Auto-Encoding Variational Bayes",
     "1412.6980v9.pdf": "Adam: A Method for Stochastic Optimization",
     "1502.03167v3.pdf": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift",
@@ -62,7 +62,7 @@ EXPECT = {
 
 
 def main():
-    paths = sorted(glob.glob(ROOT + "/pdf/*.pdf")) + sorted(glob.glob(ROOT + "/demo_data/*.pdf"))
+    paths = sorted(glob.glob(ROOT + "/论文样本/*.pdf")) + sorted(glob.glob(ROOT + "/演示语料/*.pdf"))
     lib_before = load_before_lib()
 
     rows = []

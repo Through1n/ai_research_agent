@@ -89,7 +89,7 @@ def _browser_check(url):
         # Streamlit 的异常块：冻结态缺模块时通常以 stException 呈现
         exc_blocks = page.query_selector_all('[data-testid="stException"]')
         try:
-            shot = ROOT / "docs" / "shots" / "_dist_verify.png"
+            shot = ROOT / "资料" / "截图" / "_dist_verify.png"
             page.screenshot(path=str(shot))
             print(f"      截图：{shot}")
         except Exception:  # noqa: BLE001

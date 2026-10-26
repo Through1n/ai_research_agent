@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { JSDOM } from 'jsdom';
 
-const docPath = process.argv[2] || 'docs/technical_doc.md';
+const docPath = process.argv[2] || '资料/technical_doc.md';
 const md = fs.readFileSync(docPath, 'utf8');
 const lines = md.split('\n');
 

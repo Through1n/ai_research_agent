@@ -10,7 +10,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 URL = "https://ai4s-research-agent.app.workbuddy.host/"
-OUT = "docs/shots/online"
+OUT = "资料/截图/online"
 
 MAIN = ["🤖 0. 智能总助手", "📁 1. 文献库管理", "💬 2. 跨文献问答与溯源",
         "📖 3. 版式阅读与智能翻译", "🔍 4. 论文检索与追踪",

@@ -163,7 +163,7 @@ def launch_streamlit(port: int) -> subprocess.Popen:
 
     if paths.FROZEN:
         # 冻结态：exe 重新执行自己，由 __main__.py 识别 --st-server 进入服务模式；
-        # cwd 指向热更新业务目录 app_dir()，使 .streamlit/config.toml、lib/、demo_data/ 相对解析。
+        # cwd 指向热更新业务目录 app_dir()，使 .streamlit/config.toml、lib/、演示语料/ 相对解析。
         work_dir = paths.app_dir()
         argv = [sys.executable, "--st-server", str(port)]
     else:

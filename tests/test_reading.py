@@ -375,7 +375,7 @@ class FiguresRealPdfTest(unittest.TestCase):
 
     def test_scan_fixture_not_rendered_as_figure(self):
         import pymupdf
-        path = os.path.join(ROOT, "pdf", "1706.03762v1_img.pdf")
+        path = os.path.join(ROOT, "论文样本", "1706.03762v1_img.pdf")
         if not os.path.exists(path):
             self.skipTest("img 夹具缺失")
         d = pymupdf.open(path)

@@ -3,7 +3,7 @@
 契约（INTERFACE_CONTRACT.md §2/§3）：
 - 桌面模式环境变量 AI4S_DESKTOP=1；
 - 用户数据根 %APPDATA%\\AI4SResearchAgent\\，含 storage\\(uploads/chroma/pdf)、logs\\、config\\、app\\(热更新业务代码)；
-- 图标 assets\\icon.ico（打包后随 bundle 走 resource_root）。
+- 图标 品牌资源\\icon.ico（打包后随 bundle 走 resource_root）。
 
 热更新模型（v1.1）：
 - 冻结态把业务代码打在 resource_root/app_bundle/（只读，随 exe 分发）；
@@ -68,7 +68,7 @@ def launcher_state_file() -> Path:
 
 def resolve_icon():
     """窗口图标路径；不存在时返回 None（不得抛异常）。"""
-    icon = resource_root() / "assets" / "icon.ico"
+    icon = resource_root() / "品牌资源" / "icon.ico"
     return str(icon) if icon.exists() else None
 
 

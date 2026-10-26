@@ -11,7 +11,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 URL = os.environ.get("TARGET_URL", "https://ai4s-research-agent.app.workbuddy.host/")
-OUT = "docs/shots/online"
+OUT = "资料/截图/online"
 
 
 def main():
@@ -63,7 +63,7 @@ def main():
     with open(os.path.join(OUT, "probe2.json"), "w", encoding="utf-8") as f:
         json.dump({"nav_sec": round(nav_sec, 1),
                    "console": msgs, "pageerrors": errs}, f, ensure_ascii=False, indent=2)
-    print("[probe] 结果写入 docs/shots/online/probe2.json")
+    print("[probe] 结果写入 资料/截图/online/probe2.json")
 
 
 if __name__ == "__main__":
