@@ -864,7 +864,7 @@ def render(ctx):
                 st.caption("⏳ 元数据抽取正在后台运行（实时进度见左侧「任务中心」）——"
                            "可切换其他页面，完成后结果自动出现在本页。")
             if st.session_state.get("meta_view"):
-                with st.expander("🪪 元数据 JSON（点击展开 / 收起）", expanded=True):
+                with st.expander("🪪 元数据 JSON（点击展开 / 收起）", expanded=False):
                     st.json(st.session_state.meta_view)
 
         # ---------------- 细粒度结构 ----------------
