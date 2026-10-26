@@ -48,6 +48,19 @@ _ZH = ("主流序列转导模型基于包含编码器与解码器的复杂循环
        "循环与卷积。")
 PAIRS = [(_EN, _ZH)] * 14
 
+# 第 1 页现场：整页都是「标题 / 单位 / 邮箱」一行一段，align_pairs 只能给出 1 对。
+# 单句段落必须仍然双向联动（旧实现在这里退化成功夫全废：没有 .sn ⇒ 悬停无反应）。
+SHORT_PAIRS = [
+    ("Attention Is All You Need", "注意力即一切所需"),
+    ("Google Brain avaswani@google.com", "谷歌大脑 avaswani@google.com"),
+    ("Google Brain noam@google.com", "谷歌大脑 noam@google.com"),
+    ("Niki Parmar* Google Research nikip@google.com", "尼基·帕马尔* 谷歌研究 nikip@google.com"),
+]
+
+# 2026-10-26 用户截图里那类脏译文（模型把术语表块当正文抄回来）
+DIRTY_ZH = ("【术语表】翻译时必须采用以下首选译法，保持全文一致，不要改用其它译法：\n"
+            "- attention → 注意力\n- encoder → 编码器\n\n注意力就是你所需要的一切。")
+
 FAILS = []
 
 
@@ -118,6 +131,8 @@ def main():
                     help="载入外部 HTML 文件而非现做（反向验证用：把 bug 注回去看门禁是否翻红）")
     args = ap.parse_args()
 
+    from ui import design as _design
+
     if args.html:
         html = Path(args.html).read_text(encoding="utf-8")
     else:
@@ -125,7 +140,6 @@ def main():
         # 生产路径一定会经 embed_html → design.inject_into_head 往 </head> 追加
         # 令牌样式（含 html,body{margin:0;padding:0}），它排在本文件样式之后，
         # 同权重属性会覆盖。探针必须先注入再量，否则测的不是用户看到的 DOM。
-        from ui import design as _design
         html = _design.inject_into_head(html)
     tmp = Path(tempfile.gettempdir()) / "_bi_hover_probe.html"
     tmp.write_text(html, encoding="utf-8")
@@ -259,6 +273,57 @@ def main():
         after_click = _probe(pg)
         _ck("点击段落把对侧同段滚入视野", after_click["scrollTop"] > 0,
             f"scrollTop={after_click['scrollTop']}")
+
+        # ⑥ 短行/单句段落（第 1 页现场：标题、单位、邮箱，一行一段）也必须双向联动。
+        #    这类段落 align_pairs 只能给出 1 对，旧实现直接返回裸文本 ⇒ 一个 .sn 都没有
+        #    ⇒ 悬停英文右栏毫无反应（用户 2026-10-26 原话「右边没有对应合适的反应」）。
+        short_html = _design.inject_into_head(bilingual_html(SHORT_PAIRS))
+        tmp2 = Path(tempfile.gettempdir()) / "_bi_hover_probe_short.html"
+        tmp2.write_text(short_html, encoding="utf-8")
+        pg2 = br.new_page(viewport={"width": VIEW_W, "height": VIEW_H})
+        pg2.goto(tmp2.as_uri(), wait_until="load")
+        pg2.wait_for_timeout(300)
+        n_sn = pg2.evaluate(
+            "() => [document.querySelectorAll('#l .sn').length,"
+            "       document.querySelectorAll('#r .sn').length]")
+        _ck("单句段落两侧都有句单元（.sn）", n_sn[0] == len(SHORT_PAIRS) and n_sn[1] == len(SHORT_PAIRS),
+            f"l={n_sn[0]} r={n_sn[1]} 期望={len(SHORT_PAIRS)}")
+        if n_sn[0] == len(SHORT_PAIRS):
+            # 必须悬在**句单元**上而不是 <p> 的几何中心：短行的 <p> 撑满整栏宽度，
+            # 中心点落在一行文字右侧的空白里，命中的是 <p> 而不是 .sn（实测 .sn.on=0）。
+            pt = pg2.evaluate(
+                """() => {
+              const el = document.querySelectorAll('#l .sn')[1];
+              el.scrollIntoView({block:'center'});
+              const rs = el.getClientRects();
+              const b = rs.length ? rs[0] : el.getBoundingClientRect();
+              return {x: b.left + Math.min(b.width / 2, 30), y: b.top + b.height / 2};
+            }""")
+            pg2.mouse.move(pt["x"] - 20, pt["y"])
+            pg2.mouse.move(pt["x"], pt["y"])
+            pg2.wait_for_timeout(320)
+            _ck("悬停短行英文→右栏同段高亮（p.active 各一）",
+                pg2.evaluate("() => document.querySelectorAll('p.active').length") == 2)
+            _ck("悬停短行英文→对侧句单元同时高亮（.sn.on）",
+                pg2.evaluate("() => document.querySelectorAll('.sn.on').length") >= 2,
+                f"on={pg2.evaluate('() => document.querySelectorAll(`.sn.on`).length')}")
+            # ⑦ 高亮必须**看得见**：8% 透明度的令牌在 760px iframe 里等于没反应，
+            #    这里直接量计算样式的 alpha，钉住「悬停反馈可见」这条交互契约。
+            bg = pg2.evaluate(
+                "() => { const e = document.querySelector('.sn.on');"
+                "        return e ? getComputedStyle(e).backgroundColor : ''; }")
+            alpha = 0.0
+            if "rgba" in bg:
+                try:
+                    alpha = float(bg.rsplit(",", 1)[1].strip().rstrip(")"))
+                except Exception:
+                    alpha = 0.0
+            _ck("句级高亮底色可见（alpha ≥ 0.10）", alpha >= 0.10, f"background={bg or '(空)'}")
+            # ⑧ 污染译文不得上屏（渲染层兜底清洗）
+            dirty_html = bilingual_html([("Attention is all you need.", DIRTY_ZH)])
+            _ck("回显术语表块的脏译文已被清洗", "【术语表】" not in dirty_html
+                and "注意力就是你所需要的一切" in dirty_html)
+        pg2.close()
 
         br.close()
 

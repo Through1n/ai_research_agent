@@ -67,7 +67,9 @@ from services.translate import (native_page_html, bilingual_html, in_place_pdf,
                                 citation_jump_html, selectable_text_html, detect_columns,
                                 build_reference_index, find_reference_start_page,
                                 citation_links_html, protect_math, restore_math,
-                                parse_glossary, extract_terms, DEFAULT_GLOSSARY_TEXT, _glossary_inject, _glossary_apply)
+                                parse_glossary, extract_terms, DEFAULT_GLOSSARY_TEXT,
+                                strip_glossary_echo, looks_like_source_echo, is_dirty_translation,
+                                _glossary_apply)
 
 # ---------------- 常量（集中配置，便于调参） ----------------
 JUMP_KEY = "qa_jump_page"          # 与 ui/page_qa.py 约定（只读 + 消费后清理）
@@ -444,7 +446,12 @@ def _render_scan_result(res):
 
 # ============================ B3：LLM 调用统一超时/并发/兜底 ============================
 def _safe_translate(ctx, text, timeout=LLM_CALL_TIMEOUT, glossary=None):
-    """单次翻译：带超时、带异常兜底；glossary 非空时译前注入首选译法、译后强制统一（为空则行为不变）。"""
+    """单次翻译：带超时、带异常兜底；glossary 非空时译前注入首选译法、译后强制统一（为空则行为不变）。
+
+    术语表交给 ``writing.translate_to_chinese(..., glossary=)`` 放进**指令区**，
+    不再拼进待译正文（2026-10-26：拼进正文时短段落会被模型连块带正文抄进译文）。
+    返回的文本还要过三道闸：剥回显块 → 还原公式 → 术语统一，最后确认不是「回显原文」。
+    """
     txt = str(text or "")
     if not txt.strip():
         return "", "内容为空"
@@ -452,12 +459,19 @@ def _safe_translate(ctx, text, timeout=LLM_CALL_TIMEOUT, glossary=None):
         return "", "未配置 API Key"
     # T3：翻译前把公式/LaTeX/数值表达式占位，翻译后原样还原（模块三要求公式保留英文）
     masked, store = protect_math(txt)
-    ok, val, err = _run_with_timeout(writing.translate_to_chinese, timeout, ctx, _glossary_inject(masked, glossary))
+    ok, val, err = _run_with_timeout(writing.translate_to_chinese, timeout, ctx, masked,
+                                     glossary=glossary)
     if ok:
         out = str(val or "").strip()
         if not out:
             return "", "模型返回空内容"
-        return _glossary_apply(restore_math(out, store), glossary), ""
+        out, _n_echo = strip_glossary_echo(out, glossary)
+        out = _glossary_apply(restore_math(out, store), glossary)
+        if not out.strip():
+            return "", "模型只回显了术语表，未产出译文"
+        if looks_like_source_echo(out, txt):
+            return "", "模型回显原文，未产出译文"
+        return out, ""
     if err and err.startswith("timeout"):
         return "", f"调用超时（> {timeout:.0f}s）"
     return "", (err or "调用失败")
@@ -489,9 +503,17 @@ def _translate_pairs_core(ctx, paras, cache=None, label="段落翻译", glossary
     for i, p in enumerate(paras):
         key = _cache_key(p)
         hit = cache.get(key)
-        if isinstance(hit, str) and hit.strip():
+        # 历史脏值不能续命：旧版本把术语表块一起喂给模型，落进缓存的「译文」其实是
+        # 「【术语表】…+ 英文原文」。若只判类型就命中，用户点重试看到的还是同一段假译文
+        # （2026-10-26 截图现场）。命中也要过一遍污染判定，脏的删掉重译。
+        if isinstance(hit, str) and hit.strip() and not is_dirty_translation(hit, p):
             pairs[i] = (p, hit)
         else:
+            if isinstance(hit, str) and hit.strip():
+                try:
+                    cache.pop(key, None)
+                except Exception:
+                    pass
             todo.append(i)
     stats["cached"] = n - len(todo)
 
@@ -521,7 +543,10 @@ def _translate_pairs_core(ctx, paras, cache=None, label="段落翻译", glossary
                     pairs[i] = (paras[i], zh)
                     try:
                         # 降级占位串不进缓存：否则下次"命中缓存"会把假译文原样重放
-                        if not is_llm_degraded(zh):
+                        # （回显术语表块/回显原文同理——清洗已在 _safe_translate 做过，
+                        #  这里再判一次，避免把清洗不干净的残次品写进缓存）
+                        if (not is_llm_degraded(zh)
+                                and not is_dirty_translation(zh, paras[i])):
                             cache[_cache_key(paras[i])] = zh
                     except Exception:
                         pass

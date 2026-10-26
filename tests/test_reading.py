@@ -338,6 +338,90 @@ class BilingualHtmlTest(unittest.TestCase):
         self.assertIn("one.", b)
         self.assertIn("Second sentence", b)
 
+    def test_single_sentence_still_links(self):
+        # 第 1 页整页都是标题/邮箱这种一行一段，align_pairs 只能给出 1 对。
+        # 旧实现直接返回裸文本 ⇒ 悬停英文右栏毫无反应（2026-10-26 用户实测）。
+        b = bilingual_html([("Attention Is All You Need", "注意力即一切所需")])
+        self.assertEqual(b.count('class="sn"'), 2)     # 左右各一个整段句单元
+        self.assertIn('data-sidx="0"', b)
+
+    def test_dirty_translation_scrubbed_before_render(self):
+        # 渲染层兜底：历史缓存/旧 session_state 里的脏译文不得原样上屏
+        dirty = ("【术语表】翻译时必须采用以下首选译法，保持全文一致，不要改用其它译法：\n"
+                 "- 注意力机制 → 注意力机制\n- 编码器 → 编码器\n\n"
+                 "注意力就是你所需要的一切。")
+        b = bilingual_html([("Attention is all you need.", dirty)])
+        self.assertNotIn("【术语表】", b)
+        self.assertNotIn("- 注意力机制 →", b)       # 条目行已剥除（JS 注释里的 → 不算内容）
+        self.assertIn("注意力就是你所需要的一切", b)
+
+
+class GlossaryEchoTest(unittest.TestCase):
+    """术语表块位置与译文清洗（2026-10-26 用户截图缺陷）。
+
+    现场：右栏每段都以「【术语表】翻译时必须采用以下首选译法…」开头，后面接英文原文，
+    看起来「每段译文都一样」。根因是块被拼到「内容：」之后（待译正文里），短段落
+    （标题 25 字符 vs 块 765 字符）时模型把块当正文一起抄回来。
+    """
+
+    GL = [("attention mechanism", "注意力机制", []), ("encoder", "编码器", [])]
+    DIRTY = ("【术语表】翻译时必须采用以下首选译法，保持全文一致，不要改用其它译法：\n"
+             "- attention mechanism → 注意力机制\n- encoder → 编码器\n\n"
+             "注意力就是你所需要的一切。")
+
+    def test_prompt_puts_block_before_content(self):
+        import types
+        from services import writing
+
+        seen = {}
+
+        def fake_call(messages, **kw):
+            seen["prompt"] = messages[0]["content"]
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(
+                message=types.SimpleNamespace(content="注意力即一切所需"))])
+
+        orig = writing.call_llm_with_retry
+        writing.call_llm_with_retry = fake_call
+        try:
+            out = writing.translate_to_chinese(
+                types.SimpleNamespace(llm=types.SimpleNamespace(api_key=None, base_url=None, model=None)),
+                "Attention Is All You Need", glossary=self.GL)
+        finally:
+            writing.call_llm_with_retry = orig
+        self.assertEqual(out, "注意力即一切所需")
+        p = seen["prompt"]
+        self.assertIn("【术语表】", p)
+        # 块必须在「内容：」之前；「内容：」之后只允许是待译正文
+        self.assertLess(p.index("【术语表】"), p.index("内容："))
+        tail = p.split("内容：", 1)[1]
+        self.assertNotIn("术语表", tail)
+        self.assertEqual(tail.strip(), "Attention Is All You Need")
+
+    def test_strip_glossary_echo(self):
+        from services.translate import strip_glossary_echo
+        out, n = strip_glossary_echo(self.DIRTY)
+        self.assertNotIn("【术语表】", out)
+        self.assertNotIn("→", out)
+        self.assertIn("注意力就是你所需要的一切", out)
+        self.assertGreaterEqual(n, 3)
+
+    def test_strip_keeps_clean_translation(self):
+        from services.translate import strip_glossary_echo
+        zh = "主流序列转导模型基于编码器与解码器。性能最好的模型通过注意力机制连接两者。"
+        out, n = strip_glossary_echo(zh)
+        self.assertEqual(out, zh)
+        self.assertEqual(n, 0)
+
+    def test_dirty_detection(self):
+        from services.translate import is_dirty_translation, looks_like_source_echo
+        self.assertTrue(is_dirty_translation(self.DIRTY))
+        self.assertFalse(is_dirty_translation("注意力就是你所需要的一切。"))
+        self.assertTrue(is_dirty_translation(""))
+        src = ("The dominant sequence transduction models are based on complex recurrent or "
+               "convolutional neural networks in an encoder-decoder configuration and more text.")
+        self.assertTrue(looks_like_source_echo(src, src))
+        self.assertFalse(looks_like_source_echo("一个邮箱 avaswani@google.com", "a@b.com"))
+
 
 class FiguresTest(unittest.TestCase):
     def test_page_image_rects_sorted_and_filtered(self):

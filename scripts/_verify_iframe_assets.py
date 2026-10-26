@@ -231,7 +231,17 @@ _JS_MEASURE = r"""
         if (ox === 'auto' || ox === 'scroll') { inHScroll = true; break; }
       }
       if (!inHScroll) {
-        const clip = el.scrollWidth - el.clientWidth;
+        // **行内元素量不出裁切**：inline 盒的 clientWidth/scrollWidth 恒为 0，
+        // 直接量会得到 clip=0 → 门禁失明。句级对齐把句子包进 <span class="sn"> 后
+        // 叶子文本就全成了 inline，这里必须上溯到最近的块级祖先来量。
+        // （2026-10-26 实测：反向对照「去掉 overflow-wrap」因此一度假绿。）
+        let box = el;
+        if (box.clientWidth === 0 || cs.display.indexOf('inline') === 0) {
+          let a = el.parentElement;
+          while (a && getComputedStyle(a).clientWidth === 0) a = a.parentElement;
+          if (a) box = a;
+        }
+        const clip = box.scrollWidth - box.clientWidth;
         if (clip > 1) out.clips.push({sel: sel, clip: Math.round(clip), text: txt.slice(0, 24)});
       }
     }

@@ -1832,10 +1832,26 @@ def translate_to_english(ctx, text):
     return _llm_text(ctx, prompt, temperature=0.2)
 
 
-def translate_to_chinese(ctx, text):
+def translate_to_chinese(ctx, text, glossary=None):
+    """英译中（学术口径）；glossary 非空时把术语表块放进**指令区**。
+
+    术语表块的位置是这个函数的唯一讲究（2026-10-26 用户截图缺陷的根因）：
+    旧实现把块拼在待译文本前面，于是 `内容：` 之后落的是一段「【术语表】…」指令
+    再加正文。遇到短段落（标题 25 字符、邮箱 32 字符）时块体积是正文的 20 倍，
+    模型会把整块当成"待译内容"原样抄进译文——右栏每段都以「【术语表】…」开头、
+    看起来全都一样，后面才接真正的译文。块属于**对译文的要求**，必须排在
+    「内容：」之前；正文里只放待翻译的材料。
+    """
+    block = ""
+    if glossary:
+        try:
+            from services.translate import glossary_prompt_block
+            block = glossary_prompt_block(glossary)
+        except Exception:
+            block = ""      # 术语表不可用不得影响翻译本身
     prompt = f"""请将以下英文学术内容精准翻译为中文：保留专业术语（首次出现时可在括号内标注原文）、
 公式与引用标记，保持段落结构；只输出中文译文，不要解释。
-内容：
+{block}内容：
 {text}"""
     return _llm_text(ctx, prompt, temperature=0.2)
 

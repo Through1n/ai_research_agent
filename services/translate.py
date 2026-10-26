@@ -656,12 +656,18 @@ white-space:normal;overflow-wrap:break-word;word-break:break-word;user-select:te
 # A2：中英同步滚动（按比例 + isSyncing + rAF 节流 + data-index 高亮）
 # =====================================================================
 def bilingual_html(pairs, glossary=None, align=True):
-    """中英对比：两栏独立滚动，比例同步 + data-index 联动；句级对齐 + 术语高亮（Round13）。"""
+    """中英对比：两栏独立滚动，比例同步 + data-index 联动；句级对齐 + 术语高亮（Round13）。
+
+    渲染层兜底清洗：译文里若还留着回显的术语表块（历史缓存 / 旧 session_state 快照 /
+    模型不听话），在这里统一剥掉再上屏——脏值一旦渲染出去，用户看到的就是「每段译文
+    都一样」的假象，且缓存会给它续命（2026-10-26 实测）。
+    """
     import json
     left, right = [], []
     for i, (_en, _zh) in enumerate(pairs):
-        en, zh = _aligned_pair_html(_en, _zh, i, align)
-        zh = _glossary_mark(zh, glossary) if (_zh and glossary) else zh
+        zh_src = strip_glossary_echo(_zh)[0] if _zh else _zh
+        en, zh = _aligned_pair_html(_en, zh_src, i, align)
+        zh = _glossary_mark(zh, glossary) if (zh_src and glossary) else zh
         left.append('<p data-index="%d" data-i="%d">%s</p>' % (i, i, en))
         right.append('<p data-index="%d" data-i="%d">%s</p>' % (i, i, zh))
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
@@ -687,7 +693,10 @@ p{{font-size:var(--fs-body,13.5px);line-height:1.65;margin:0 0 var(--s-3,12px);
 padding:var(--s-2,8px) var(--s-3,12px);border-radius:var(--r,8px);
 border-bottom:1px solid var(--c-border,#e4e4e7);color:var(--c-text,#18181b);cursor:default;
 overflow-wrap:anywhere;}}
-p.active{{background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));
+/* 联动高亮用**显式色值**，不取 --c-accent-soft：该令牌是 8% 透明度的界面底纹，
+   在 760px 高的 iframe 里作为「悬停反馈」实测几乎看不见（用户 2026-10-26 的原话是
+   「悬停英文右边没有反应」）。交互反馈要能一眼看到，故本视图内单独给一档 12%。 */
+p.active{{background:rgba(31,95,174,0.12);
 box-shadow:inset 3px 0 0 var(--c-accent,#1f5fae);}}
 /* 提示条走常规流（不再 position:fixed）：固定定位会永久压在正文第一段上方
    （实测 bar=[8,34]、首段 top=24，顶部 10px 被盖），用户把鼠标移到那条位置时
@@ -1591,9 +1600,12 @@ def math_safe_translate(ctx, text, call=None):
 # =====================================================================
 # T3+：流式翻译（公式保护 + 流式还原，供「划词翻译」消等待）
 # =====================================================================
-# 与 services.writing.translate_to_chinese 的 prompt 保持一致（改那边记得同步这里）
-_STREAM_TRANSLATE_PROMPT = ("请将以下英文学术内容精准翻译为中文：保留专业术语（首次出现时可在括号内标注原文）、"
-                            "公式与引用标记，保持段落结构；只输出中文译文，不要解释。\n内容：\n%s")
+# 与 services.writing.translate_to_chinese 的 prompt 保持一致（改那边记得同步这里）。
+# 术语表块刻意不写进 _STREAM_TRANSLATE_PROMPT：它得插在「内容：」**之前**（见下），
+# 模板固定成「指令 + 内容」两段后，块夹在中间不会挤进待译正文。
+_STREAM_TRANSLATE_INSTR = ("请将以下英文学术内容精准翻译为中文：保留专业术语（首次出现时可在括号内标注原文）、"
+                           "公式与引用标记，保持段落结构；只输出中文译文，不要解释。")
+_STREAM_TRANSLATE_PROMPT = _STREAM_TRANSLATE_INSTR + "\n内容：\n%s"
 _STREAM_FALLBACK_PREFIX = "【LLM 暂时不可用"   # core.llm 全部重试失败时的兜底文案前缀
 
 
@@ -1669,7 +1681,11 @@ def stream_translate_to_chinese(ctx, text, temperature=0.2, glossary=None):
     if not getattr(getattr(ctx, "llm", None), "available", False):
         return
     masked, store = protect_math(src)
-    prompt = _STREAM_TRANSLATE_PROMPT % _glossary_inject(masked[:6000], glossary)
+    # 术语表块落在「内容：」之前（指令区），正文只放待译材料——
+    # 旧实现把块拼进正文，短段落会被模型连同块一起抄进译文（2026-10-26 用户截图）。
+    _block = glossary_prompt_block(glossary) if glossary else ""
+    prompt = _STREAM_TRANSLATE_INSTR + (("\n\n" + _block) if _block else "") \
+        + "\n内容：\n" + masked[:6000]
     try:
         chunks = ctx.llm.stream(
             [{"role": "user", "content": prompt}],
@@ -1891,7 +1907,11 @@ def _aligned_pair_html(en, zh, idx, align=True):
 
     句数一致且对齐成功时每对句子包 <span class="sn" data-sidx="k">，悬停/点击一侧
     句子即高亮并滚动到另一侧对应句子（_SENT_LINK_JS）；对齐不可用（空译文/
-    单句/异常）时退化为整段一个容器，输出与旧实现完全一致。
+    单句/异常）时退化为**整段一个句单元**——仍然带 .sn，整段与对侧整段联动。
+
+    「单句退化」这一支是必须的：第 1 页整页都是标题/单位/邮箱这种一行一段，
+    align_pairs 只能给出 1 对，旧实现直接返回裸文本 ⇒ 悬停英文时右栏毫无反应
+    （2026-10-26 用户实测「鼠标悬浮在英文上右边没有对应反应」）。
     """
     try:
         en_esc = _esc(en)
@@ -1899,10 +1919,12 @@ def _aligned_pair_html(en, zh, idx, align=True):
             return en_esc, "<em>（待翻译）</em>"
         zh_esc = _esc(zh)
         if not align:
-            return en_esc, zh_esc
+            return ('<span class="sn" data-sidx="0">%s</span>' % en_esc,
+                    '<span class="sn" data-sidx="0">%s</span>' % zh_esc)
         pairs = align_pairs(en, zh)
         if len(pairs) <= 1:
-            return en_esc, zh_esc
+            return ('<span class="sn" data-sidx="0">%s</span>' % en_esc,
+                    '<span class="sn" data-sidx="0">%s</span>' % zh_esc)
         l_parts, r_parts = [], []
         for k, (es, zs) in enumerate(pairs):
             if es:
@@ -1910,7 +1932,8 @@ def _aligned_pair_html(en, zh, idx, align=True):
             if zs:
                 r_parts.append('<span class="sn" data-sidx="%d">%s</span>' % (k, _esc(zs)))
         if not l_parts or not r_parts:
-            return en_esc, zh_esc
+            return ('<span class="sn" data-sidx="0">%s</span>' % en_esc,
+                    '<span class="sn" data-sidx="0">%s</span>' % zh_esc)
         # 英文句子之间必须补回一个空格：split_sentences 会吃掉句间空白，
         # 直接 "".join 会渲染成 "decoder.The best" / "mechanism.We propose"
         # （2026-10-26 截图实测）。中文不用补，句末标点自带断句。
@@ -1922,8 +1945,11 @@ def _aligned_pair_html(en, zh, idx, align=True):
 # 句级联动 JS（注入 bilingual_html）：悬停/点击 .sn → 另一侧同 data-sidx 句子高亮 + 滚动到位
 _SENT_LINK_JS = """
 <style>
-.sn{cursor:default;border-radius:2px;transition:background .12s;}
-.sn.on{background:var(--c-accent-soft,rgba(31, 95, 174, 0.08));
+/* 句级高亮同理用显式色值：18% 蓝底 + 2px 下划，悬停时右栏对应句必须一眼可辨。
+   不加 border-radius：`_verify_iframe_assets.py` 要求孤岛内圆角统一 8px，
+   而句级高亮是**行内文本块**，8px 圆角会在换行处破形，索性纯底色。 */
+.sn{cursor:default;transition:background .12s;}
+.sn.on{background:rgba(31,95,174,0.18);
 box-shadow:inset 0 -2px 0 var(--c-accent,#1f5fae);}
 </style>
 <script>
@@ -2090,9 +2116,103 @@ def glossary_prompt_block(glossary, max_entries=40):
 
 
 def _glossary_inject(text, glossary):
-    """翻译前注入：把术语表块前置到待译文本（公式占位之后调用，避免术语被 mask）。"""
+    """翻译前注入：把术语表块前置到待译文本（公式占位之后调用，避免术语被 mask）。
+
+    ⚠️ **不要再用它构造送模型的内容**（2026-10-26 起）：块被拼到「内容：」之后时，
+    短段落（标题/邮箱）会被模型连同块一起抄进译文。正规路径是把术语表交给
+    ``services.writing.translate_to_chinese(ctx, text, glossary=...)``，
+    块自动落到指令区。此函数保留只为兼容既有测试与外部引用。
+    """
     block = glossary_prompt_block(glossary)
     return (block + str(text or "")) if block else str(text or "")
+
+
+# ---------------- 译文污染清洗（模型回显术语表块 / 回显原文） ----------------
+# 现场（2026-10-26 用户截图）：短段落送译时模型把整块术语表当正文抄回来，右栏每段
+# 都以「【术语表】翻译时必须采用以下首选译法…」开头 + 一串「- A → B」条目，末尾再接
+# 英文原文。清洗必须**确定性**（不依赖模型听话），因为同一段脏译文还会进缓存、
+# 进 session_state，重试时原样重放。
+_GLOSSARY_ECHO_HDR = "【术语表】"
+# 条目行两种形态：带项目符号的「- 术语 → 译法」，以及模型重排后无符号的「术语 → 译法」。
+# 判据是「整行只有一个箭头且没有句读标点」——公式/箭头表达式在清洗前已被 protect_math
+# 换成占位符（@FM0@），因此不会误伤正文里的数学箭头。
+_GLOSSARY_ENTRY_RE = re.compile(r"^\s*[-*•·]\s+[^→\n]{1,80}→\s*\S")
+_GLOSSARY_ENTRY_LOOSE_RE = re.compile(r"^[^。，；！？\n]{1,80}→[^。，；！？\n]{1,60}$")
+_CONTENT_LABEL_RE = re.compile(r"^\s*内容\s*[:：]\s*")
+
+
+def strip_glossary_echo(text, glossary=None):
+    """剥掉译文里回显的术语表块与「内容：」残留；返回 (清洗后文本, 剥掉的行数)。
+
+    判定保守：只删「【术语表】开头的标题行」与「形如 - 术语 → 译法 的条目行」，
+    以及行首孤立的「内容：」。正常中文译文不可能整行长成这样，因此不会误伤正文。
+    空/异常输入原样返回 (原值, 0)。
+    """
+    try:
+        raw = str(text or "")
+        if not raw.strip():
+            return raw, 0
+        lines = raw.splitlines()
+        kept, removed = [], 0
+        for ln in lines:
+            s = ln.strip()
+            if _GLOSSARY_ECHO_HDR in ln:
+                # 标题行后面若同一行还接了别的字（模型把块压成一行），整行丢弃
+                removed += 1
+                continue
+            if _GLOSSARY_ENTRY_RE.match(s) or _GLOSSARY_ENTRY_LOOSE_RE.match(s):
+                removed += 1
+                continue
+            if _CONTENT_LABEL_RE.match(s) and len(s) <= 8:
+                removed += 1
+                continue
+            kept.append(ln)
+        out = "\n".join(kept).strip()
+        out = _CONTENT_LABEL_RE.sub("", out, count=1).strip()
+        return out, removed
+    except Exception:
+        return str(text or ""), 0
+
+
+def looks_like_source_echo(zh_text, src_text, min_len=40):
+    """译文是否只是把英文原文抄了一遍（模型没翻）。
+
+    判定条件三条同时满足才算回显：①原文 ≥ min_len 字符且含 ≥3 个 ≥4 字母的英文词
+    （纯邮箱/公式/数值行本来就可能原样保留，不算回显）；②扁平化后译文**完整包含**
+    原文；③译文里中文字符占比 < 20%（真译文必然以中文为主）。
+    """
+    try:
+        z = "".join(str(zh_text or "").split())
+        raw_s = str(src_text or "")
+        s = "".join(raw_s.split())
+        if len(s) < int(min_len) or not z:
+            return False
+        # 词数要在**去空白之前**数：扁平化后整段英文会连成一个长 token，
+        # 数出来永远 <3，判定会永远为假（本轮实测踩过）。
+        if len(re.findall(r"[A-Za-z]{4,}", raw_s)) < 3:
+            return False
+        if s not in z:
+            return False
+        cjk = len(re.findall(r"[\u4e00-\u9fff]", z))
+        return (cjk / float(len(z))) < 0.20
+    except Exception:
+        return False
+
+
+def is_dirty_translation(zh_text, src_text=""):
+    """一条译文是否被污染（回显术语表块 / 条目行 / 回显原文 / 空）。
+
+    供缓存命中时复核：历史脏值不清理掉，用户重试仍会看到同一段假译文。
+    """
+    t = str(zh_text or "")
+    if not t.strip():
+        return True
+    if _GLOSSARY_ECHO_HDR in t:
+        return True
+    if any(_GLOSSARY_ENTRY_RE.match(ln.strip()) or _GLOSSARY_ENTRY_LOOSE_RE.match(ln.strip())
+           for ln in t.splitlines()):
+        return True
+    return looks_like_source_echo(t, src_text)
 
 
 def apply_glossary(zh_text, glossary):
