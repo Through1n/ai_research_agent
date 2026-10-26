@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-"""把 docs/technical_doc.md 渲染成 A4 PDF，用于**实测页数**（不是比值估算）。
+"""把 资料/technical_doc.md 渲染成 A4 PDF，用于**实测页数**（不是比值估算）。
 
 用法：
     python scripts/make_tech_pdf.py                 # 默认 A4 / 图高上限 115mm
     python scripts/make_tech_pdf.py --img-max 90    # 改图高上限（mm）
     python scripts/make_tech_pdf.py --no-img        # 完全不计图（量纯文本页数）
+    python scripts/make_tech_pdf.py --max-pages 0   # 关掉页数硬门禁（仅页数敏感性实验用）
 
 输出：
-    docs/_build/technical_doc.html   中间 HTML（放在 docs/ 下，shots/ 相对路径才成立）
-    docs/_build/technical_doc.pdf    成品
-    控制台打印：页数 / 字符数 / 图数 / 每页字符密度
+    资料/_构建/technical_doc.html   中间 HTML（放在 资料/ 下，截图/ 相对路径才成立）
+    资料/_构建/technical_doc.pdf    成品
+    控制台打印：页数 / 字符数 / 图数 / 每页字符密度 / 版式缩放自检
 
 设计说明（为什么要自己写这条链）：
 技术文档要求 25–30 页，此前所有页数都是"去空白字符 ÷ 常数"的比值估算，
@@ -18,6 +19,17 @@
 - 图片：`--img-max` 限制高度。截图是全页滚动长图（最高 12000px），
   不限制的话单张就占 2.85 页，必须显式约束；
 - Mermaid：无渲染引擎时按 `--mermaid-h` 高度的占位框计，避免把 DOT 源码当正文码。
+
+**为什么必须有 `--zoom`（2026-10-26 实测定案，别删）**：
+Chrome 打印时对"宽于纸张"的元素会悄悄做 shrink-to-fit，把**整版**按比例缩小
+（实测旧版交付物：正文 10.2pt 被印成 9.27pt、图片 94mm 变 85.3mm、页数 30）。
+这个比例取决于**表格 min-content 宽度**——改个路径长度就可能让某张表不再超宽，
+于是 Chrome 不再缩放，页数从 30 跳到 35（实测）。**页面数因此不可复现**。
+现在把缩放写成 CSS `zoom` 显式参数：缩放因子固定、页数固定，且脚本会自检
+"PDF 里有没有出现预期字号"来发现浏览器又叠了一层自动缩放。
+    zoom 0.895–0.900 → 30 页（官方取值 0.900）
+    zoom ≤ 0.890    → 29 页
+    zoom ≥ 0.905    → 31 页
 """
 import argparse
 import os
@@ -25,11 +37,12 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = ROOT / "docs" / "technical_doc.md"
-OUT_DIR = ROOT / "docs" / "_build"
+DOC = ROOT / "资料" / "technical_doc.md"
+OUT_DIR = ROOT / "资料" / "_构建"
 
 # 说明：默认档（10.2pt / 1.55 / 17mm）比 Word 默认（五号 10.5pt / 单倍行距）还松，
 # 用它量出来的页数会系统性偏高。`--compact` 给出一档"紧凑但仍可读"的排版，
@@ -40,6 +53,8 @@ CSS = """
 body {{
   font-family: "Microsoft YaHei", "SimSun", "Segoe UI", sans-serif;
   font-size: {font}pt; line-height: {leading}; color: #111;
+  /* 整版缩放：显式固化版式比例，不依赖 Chrome 的 shrink-to-fit 启发式 */
+  zoom: {zoom};
 }}
 h1 {{ font-size: {h1}pt;  margin: 0 0 7pt; page-break-before: always; }}
 h1:first-of-type {{ page-break-before: avoid; }}
@@ -123,6 +138,11 @@ def main():
     ap.add_argument("--leading", type=float, default=None, help="覆盖行距倍数")
     ap.add_argument("--no-chapbreak", action="store_true",
                     help="取消 h1 强制另起一页（用于量化「每章另起页」到底吃掉几页）")
+    ap.add_argument("--zoom", type=float, default=0.90,
+                    help="整版缩放系数（写入 body 的 CSS zoom）：固化版式比例，"
+                         "0.895–0.900 ⇒ 30 页；≤0.890 ⇒ 29 页；≥0.905 ⇒ 31 页")
+    ap.add_argument("--max-pages", type=int, default=30,
+                    help="页数硬上限（赛题 25–30 页）；0 = 不检查（页数敏感性实验用）")
     a = ap.parse_args()
     css_vars = dict(PRESET[a.preset])
     if a.margin:
@@ -163,8 +183,11 @@ def main():
     n_img_inlined = [0]
 
     def _inline(m):
-        rel = m.group(1)
-        fp = (ROOT / "docs" / rel) if not os.path.isabs(rel) else Path(rel)
+        # Markdown→HTML 会把非 ASCII 路径 URL 编码（`截图/p1.png` → `%E6%88%AA%E5%9B%BE/p1.png`），
+        # 直接拿它拼文件系统路径必然找不到图 ⇒ 图片全被丢弃、页数测量失真。
+        # 落盘前必须 unquote 回原名（浏览器侧同样按解码后的路径去取，属标准行为）。
+        rel = urllib.parse.unquote(m.group(1))
+        fp = (ROOT / "资料" / rel) if not os.path.isabs(rel) else Path(rel)
         if not fp.exists():
             return m.group(0)
         import base64
@@ -178,7 +201,7 @@ def main():
     tag = ("_" + a.tag) if a.tag else ""
     html_path = OUT_DIR / ("technical_doc%s.html" % tag)
     pdf_path = OUT_DIR / ("technical_doc%s.pdf" % tag)
-    css = CSS.format(img_max=a.img_max, mermaid_h=a.mermaid_h, **css_vars)
+    css = CSS.format(zoom=a.zoom, img_max=a.img_max, mermaid_h=a.mermaid_h, **css_vars)
     if a.no_chapbreak:
         css = css.replace("page-break-before: always", "page-break-before: auto")
     html = ("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>%s</style></head>"
@@ -207,7 +230,19 @@ def main():
     d = pymupdf.open(str(pdf_path))
     pages = d.page_count
     chars = sum(len(p.get_text()) for p in d)
+    sizes = set()
+    for p in d:
+        for b in p.get_text("dict")["blocks"]:
+            for l in b.get("lines", []):
+                for s in l["spans"]:
+                    sizes.add(round(s["size"], 2))
     d.close()
+
+    # 版式缩放自检（2026-10-26）：PDF 里必须出现「CSS 字号 × zoom」这组字号。
+    # 一个都没命中 ⇒ 浏览器又叠了一层 shrink-to-fit ⇒ 页数会随内容漂移，必须报错。
+    expect = {k: round(css_vars[k] * a.zoom, 2)
+              for k in ("font", "h1", "h2", "h3", "h4", "tfont", "cfont", "pfont")}
+    hit = [k for k, v in expect.items() if any(abs(o - v) <= 0.06 for o in sizes)]
 
     nows = len(re.sub(r"\s+", "", src))
     print("=" * 62)
@@ -217,12 +252,23 @@ def main():
     print("Markdown  : %d 行 / %s 去空白字符" % (src.count("\n") + 1, format(nows, ",")))
     # 复核 PDF 里到底落了几张图：HTML 计数与 PDF 内嵌计数必须相等，否则测量作废
     n_pdf_img = sum(len(p.get_images(full=True)) for p in pymupdf.open(str(pdf_path)))
-    print("图片      : HTML %d 张 / 内联 %d 张 / PDF 内嵌 %d 张（高上限 %.0fmm）%s"
-          % (n_img, n_img_inlined[0], n_pdf_img, a.img_max,
+    print("图片      : HTML %d 张 / 内联 %d 张 / PDF 内嵌 %d 张（高上限 %.0fmm×zoom %.3f）%s"
+          % (n_img, n_img_inlined[0], n_pdf_img, a.img_max, a.zoom,
              "" if n_pdf_img >= n_img else "  ⚠️ 有图未渲染，本测量不可信"))
     print("Mermaid   : %d 块（占位 %.0fmm）" % (n_mermaid, a.mermaid_h))
+    print("版式缩放  : zoom %.3f（正文预期 %.2fpt / 表格预期 %.2fpt）%s"
+          % (a.zoom, expect["font"], expect["tfont"],
+             ("✅ 命中 %s" % ",".join(hit)) if hit
+             else "❌ PDF 实测字号 %s 未命中预期 ⇒ 浏览器二次缩放，页数不可复现"
+                  % sorted(sizes)[:6]))
     print("密度      : %.0f 去空白字符/页" % (nows / pages))
     print("=" * 62)
+    if not hit:
+        print("❌ 版式缩放自检失败：Chrome 又叠了一层自动缩放，本次页数不可信，请修溢出元素或重跑")
+        return 5
+    if a.max_pages and pages > a.max_pages:
+        print("❌ 页数 %d 超上限 %d —— 交付物不合规（需删减正文或调 --zoom）" % (pages, a.max_pages))
+        return 4
     return 0
 
 
