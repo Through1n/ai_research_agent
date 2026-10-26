@@ -31,18 +31,18 @@
 
 大语言模型（LLM）的通用推理与生成能力已经成熟，但把通用聊天模型直接用于学术科研这一**高门槛、强证据、重引用**的场景，会遭遇三类结构性问题。
 
-**第一类是检索与引用幻觉。** 通用模型对文献的记忆停留在预训练语料，让它"给这篇论文的出处"时，页码、年份甚至整条参考文献都可能被编造；更隐蔽的是"半编造"——真实标题配错误的被引数、张冠李戴的期刊。科研场景中一条错误引用的代价远高于一句错误观点，因为它会沿引用链继续传播。
+**第一类是检索与引用幻觉。** 通用模型对文献的记忆停留在预训练语料，让它"给这篇论文的出处"时，页码、年份甚至整条参考文献都可能被编造；更隐蔽的是"半编造"：真实标题配错误的被引数、张冠李戴的期刊。科研场景中一条错误引用的代价远高于一句错误观点，因为它会沿引用链继续传播。
 
-**第二类是版面感知缺失。** 学术 PDF 中超过半数是双栏排版，naive 的文本提取按 PDF 对象流输出，左右栏会交叉串读；图表与图注分离、标题树缺失、扫描件无文本层，都让 RAG 上下文在进入向量库之前就已语义断裂——垃圾进、垃圾出。
+**第二类是版面感知缺失。** 学术 PDF 中超过半数是双栏排版，naive 的文本提取按 PDF 对象流输出，左右栏会交叉串读；图表与图注分离、标题树缺失、扫描件无文本层，都让 RAG 上下文在进入向量库之前就已语义断裂：垃圾进、垃圾出。
 
-**第三类是科研流程割裂。** 读文献用 PDF 阅读器、管文献用 Zotero、查新用 arXiv 网页、问答丢给 ChatGPT、画图用 draw.io、写框架再回 Word——每次手动搬运都是一次上下文丢失。研究员需要的不是六个更强的工具，而是一个**能理解意图、自主调用工具、且处处可溯源**的统一入口。
+**第三类是科研流程割裂。** 读文献用 PDF 阅读器、管文献用 Zotero、查新用 arXiv 网页、问答丢给 ChatGPT、画图用 draw.io、写框架再回 Word，每次手动搬运都是一次上下文丢失。研究员需要的不是六个更强的工具，而是一个**能理解意图、自主调用工具、且处处可溯源**的统一入口。
 
-本项目从 0 到 1 构建了这样一个**意图驱动的科研助手 Agent**：以自研 Agent 内核统一编排六大科研模块，把「文献解析 → 抗幻觉问答 → 版式阅读 → 检索追踪 → 引用图谱 → 学术写作」串成闭环，并把"抗幻觉"作为第一设计原则——不是在答案后加一句"以上内容可能不准确"，而是用**拒答闸门、逐句引用校验、修复环、References 白名单**四道工程化防线，让"不知道"可以被系统诚实地说出来。
+本项目从 0 到 1 构建了这样一个**意图驱动的科研助手 Agent**：以自研 Agent 内核统一编排六大科研模块，把「文献解析 → 抗幻觉问答 → 版式阅读 → 检索追踪 → 引用图谱 → 学术写作」串成闭环，并把"抗幻觉"作为第一设计原则：不是在答案后加一句"以上内容可能不准确"，而是用**拒答闸门、逐句引用校验、修复环、References 白名单**四道工程化防线，让"不知道"可以被系统诚实地说出来。
 
 ## 1.2 目标用户与使用场景
 
 - **研究生 / 科研人员**：需要快速读懂一批英文论文、跨文献对比方法与结果、追踪方向最新进展、起草开题或论文框架。系统的「跨文献问答」「图谱综述」「写作 Copilot」直接服务这一主线。
-- **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级——无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:97` 演示图谱兜底）。
+- **教学与评审场景**：常无真实 API Key 或外网受限。系统为此做了完整离线降级：无 Key 时 PDF 原生解析、混合检索、语义去重、引用图谱、追踪增量比对照常运行，演示数据一键加载（`ui/sidebar.py :: render` + `_build_demo@ui/page_graph.py:97` 演示图谱兜底）。
 - **工程复现场景**：关键指标（入库耗时、去重命中率、建图耗时）均可由 `scripts/verify_official.py`、`scripts/bench_graph.py`、`scripts/selftest.py` 一键复跑（**三者都会清空文献库**：库非空时直接拒绝运行，备份后加 `--force` 才执行）；单元测试 238 项（全套 `tests/`，其中 `test_core.py` 23 项）。
 
 ## 1.3 赛题定位
@@ -65,7 +65,7 @@
 
 与通用 RAG 框架相比：检索前有双栏感知的解析层保证上下文质量，检索后有逐句"覆盖率"引用校验（而非仅校验角标越界），生成后有修复环自动改写，评分侧接入 OpenAlex/Semantic Scholar/Crossref 的**真实被引数据**且"取不到就明说"。
 
-与文献管理工具（Zotero 及插件）相比：Zotero 强于"管"，本系统强于"懂"——内容级语义去重（改名的同一篇依然命中）、版本差异总结、引用图挖掘、综述与 Future Work 判定，都是 Zotero 生态不做的事。
+与文献管理工具（Zotero 及插件）相比：Zotero 强于"管"，本系统强于"懂"：内容级语义去重（改名的同一篇依然命中）、版本差异总结、引用图挖掘、综述与 Future Work 判定，都是 Zotero 生态不做的事。
 
 ## 1.5 当前状态一句话总结
 
@@ -109,7 +109,7 @@ Round 7/8 真实 API Key 全链路实测后：9 页面 UI 冒烟 0 未捕获异�
 
 ## 2.2 功能需求（按五大类逐条）
 
-**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1253 group_versions`、`services/library.py:1337 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:80 detect_scanned`、`services/parsing.py:383 ocr_page_text`）；标题树（书签优先 `services/parsing.py:659 extract_toc`，无书签走 `services/parsing.py:597 infer_headings_from_text`）；表格抽取（`services/parsing.py:677 extract_tables`）；插图↔图注关联（`services/parsing.py:765 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:734 _nearest_caption`）；公式识别与 LaTeX 转换（提示词要求「完整等式」而非碎片，模板 `ui/page_library.py:268 _FORMULA_PROMPT`；输出经 `ui/page_library.py:192-227` 结构修补 `\hat{}` 挂空/套错位与括号失衡）；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
+**① 多模态与细粒度文档感知**：单/批量上传；内容级语义去重（不依赖文件名，`services/library.py:384 check_duplicate`）；版本识别与差异总结（`services/library.py:1253 group_versions`、`services/library.py:1337 version_diff`）；扫描件检测与多模态 OCR（`services/parsing.py:80 detect_scanned`、`services/parsing.py:383 ocr_page_text`）；标题树（书签优先 `services/parsing.py:659 extract_toc`，无书签走 `services/parsing.py:597 infer_headings_from_text`）；表格抽取（`services/parsing.py:677 extract_tables`）；插图↔图注关联（`services/parsing.py:765 extract_figures`，水平重叠 ≥15% 取垂直最近图注 `services/parsing.py:734 _nearest_caption`）；公式识别与 LaTeX 转换（提示词要求「完整等式」而非碎片，模板 `ui/page_library.py:282 _FORMULA_PROMPT`；输出经 `ui/page_library.py:194-235` 结构修补 `\hat{}` 挂空/套错位与括号失衡）；损坏/截断/加密 PDF 拦截（`services/library.py:597 _validate_prepared`，缺页 >30% 拒收）。
 
 **② 抗幻觉 RAG**：单篇问答（超参数/硬件/BLEU 类细粒度问题）；多篇跨文献对比（2–5 篇，`MAX_COMPARE_PAPERS=5`）；单篇范围锁定；查询扩展（中文问英文文献）；内联【n】溯源与可点击页码锚点；引用一致性逐句校验；拒答与自动修复。
 
@@ -206,7 +206,7 @@ flowchart TD
 **品牌与内部标识是两条线**（2026-10-25 改名时定）：用户可见名称统一取
 `config.py:12 BRAND`（MoreHand）与 `config.py:13 BRAND_TAGLINE`；而
 `AI4SResearchAgent` 这个**内部标识**（exe 名 / `%APPDATA%` 目录 /
-`AI4S_DESKTOP` 环境变量前缀 / 更新包定位）**保持不变**——改它会搬走用户已有的
+`AI4S_DESKTOP` 环境变量前缀 / 更新包定位）**保持不变**：改它会搬走用户已有的
 文献库与配置，属于数据迁移，不随品牌改名一起做。桌面壳不导入业务包，
 `desktop/about.py` 自带一份 `APP_NAME`。
 
@@ -304,7 +304,7 @@ flowchart TD
 | 项 | 结论 |
 |---|---|
 | 选了什么 | `networkx`（`services/graph.py:19 import networkx as nx`）计算 PageRank / 入度 / 介数 / 特征向量中心性与社区结构 |
-| 为什么选 | ①**零部署成本**：不引入 C 扩展或图数据库服务；②**算法齐全且可控**：每类中心性单独包异常回退，社区发现可做 greedy_modularity → louvain → 弱连通分量三级降级（`_communities@services/graph.py:599`）；③可解释性好——"图谱结构明细"直接取自 nx 计算结果而非 LLM 生成 |
+| 为什么选 | ①**零部署成本**：不引入 C 扩展或图数据库服务；②**算法齐全且可控**：每类中心性单独包异常回退，社区发现可做 greedy_modularity → louvain → 弱连通分量三级降级（`_communities@services/graph.py:599`）；③可解释性好："图谱结构明细"直接取自 nx 计算结果而非 LLM 生成 |
 | 放弃了什么 / 代价 |  igraph / graph-tool 在十万节点级的性能；Neo4j 的图查询语言与持久化 ；代价： 节点规模上万时退化明显  |
 | 如何对冲 | 本场景引用图规模为数十至数百节点（官方数据集最多 3 篇文献 / 133 chunks），完全在 nx 舒适区；未来万级节点可替换内核，`services/graph.py` 的接口不变 |
 
@@ -313,7 +313,7 @@ flowchart TD
 | 项 | 结论 |
 |---|---|
 | 选了什么 | PyMuPDF 提取原生文本层 + **字符级 bbox** |
-| 为什么选 | ①双栏判定、图↔图注空间匹配、版式原生渲染全部依赖坐标信息——这是纯文本抽取库给不了的；②开页毫秒级，541 页 / 22MB 文档的**解析阶段仅 4.02s**（官方用例 B 实测） |
+| 为什么选 | ①双栏判定、图↔图注空间匹配、版式原生渲染全部依赖坐标信息：这是纯文本抽取库给不了的；②开页毫秒级，541 页 / 22MB 文档的**解析阶段仅 4.02s**（官方用例 B 实测） |
 | 放弃了什么 / 代价 |  pdfplumber / pdfminer.six 在表格结构识别上的某些便利性 ；代价： PyMuPDF 为 AGPL/商业双许可，商用需授权；版本间 API 敏感  |
 | 如何对冲 | `services/parsing.py:50 open_doc` 统一入口收敛所有 `fitz.open` 调用；`requirements.txt` 锁定版本 |
 
@@ -321,7 +321,7 @@ flowchart TD
 
 ### 4.2.1 统一 LLM 调用层（`core/llm.py`）
 
-业务代码（`core/ services/ tools/ ui/`）内 `client.chat.completions.create` 仅 **2 处运行时调用点**：`chat.completions.create@core/llm.py:489`（`LLMClient._create`，同步）与 `chat.completions.create@core/llm.py:555`（`LLMClient.stream`，流式）；`dist/` 构建产物、`version_history/` 历史版本、`chat.completions.create@scripts/_degrade_drill_api.py:337`（演练脚本 docstring）均不在运行链路——**调用层之外零裸调用**。对外一切经两处入口：`chat@core/llm.py:511`（同步）与 `stream@core/llm.py:531`（流式）；视觉调用与 JSON 调用走 `call_llm_with_retry@core/llm.py:652` + `parse_json@core/llm.py:743`（兼容 ```json 围栏、围栏被截断、噪声文本、LaTeX 单反斜杠这类非法转义，以及数组未闭合的截断输出）。
+业务代码（`core/ services/ tools/ ui/`）内 `client.chat.completions.create` 仅 **2 处运行时调用点**：`chat.completions.create@core/llm.py:489`（`LLMClient._create`，同步）与 `chat.completions.create@core/llm.py:555`（`LLMClient.stream`，流式）；`dist/` 构建产物、`version_history/` 历史版本、`chat.completions.create@scripts/_degrade_drill_api.py:337`（演练脚本 docstring）均不在运行链路：**调用层之外零裸调用**。对外一切经两处入口：`chat@core/llm.py:511`（同步）与 `stream@core/llm.py:531`（流式）；视觉调用与 JSON 调用走 `call_llm_with_retry@core/llm.py:652` + `parse_json@core/llm.py:743`（兼容 ```json 围栏、围栏被截断、噪声文本、LaTeX 单反斜杠这类非法转义，以及数组未闭合的截断输出）。
 
 - **重试与容错**：`RETRY_BACKOFF = (1.5, 3.0, 4.5)`（`core/llm.py:42`）集中管理，SDK 自带重试置 0（`core/llm.py:43 SDK_MAX_RETRIES = 0`），避免 3×3 叠加放大；第 4 次仍失败 → 把失败明细 append 到 `storage/llm_failures.log`（字段含 `ts / error_type / model / caller / n_messages / messages_preview(前2000字)`）→ **返回结构化伪响应而非抛异常**。
 - **Provider 切换**：侧边栏选 Provider/填 Key → 写回 `ctx.llm`，全服务层无感知。
@@ -391,17 +391,17 @@ flowchart TD
 
 ### 4.3.4 版面判定优化：双栏误判 19.1% → 0%
 
-朴素"中线二分"会把长正文行横跨中线的单栏论文误判成双栏。优化后的 `_detect_two_columns`（`services/parsing.py:196`）要求 4 条必要条件同时成立，其中**"横跨 split_x 否决"**（`services/parsing.py:263-268`，阈值 `_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18`）对**全部文本块生效，包括已被剔除出候选集的宽块**——旧实现正是漏检这些宽块才误判；另一处是 `_gutter_free_ratio`（`services/parsing.py:175`）沿 y 采样统计中缝空白带占比。
+朴素"中线二分"会把长正文行横跨中线的单栏论文误判成双栏。优化后的 `_detect_two_columns`（`services/parsing.py:196`）要求 4 条必要条件同时成立，其中**"横跨 split_x 否决"**（`services/parsing.py:263-268`，阈值 `_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18`）对**全部文本块生效，包括已被剔除出候选集的宽块**：旧实现正是漏检这些宽块才误判；另一处是 `_gutter_free_ratio`（`services/parsing.py:175`）沿 y 采样统计中缝空白带占比。
 
 **实测**：1111 页单栏语料误判率 **19.1% → 0%**，同时真双栏论文（BERT）正文页 10/10 仍被正确识别（没有用"永远判单栏"换取指标）。
 
 ### 4.3.5 缓存与降级优化
 
 - **被引数两级缓存**：按归一化标题缓存结果（`services/citation_quality.py:72 _CACHE`）+ 标题归一化结果缓存（`services/citation_quality.py:73 _TITLE_CACHE`），重复评估同一篇文献不再重复打三次 API。
-- **三级降级**：OpenAlex → Semantic Scholar → Crossref（`services/citation_quality.py:689 _LOOKUPS`），任一被限流即切换并显式打 `low_confidence` + 口径说明；选优策略改为"高置信标题匹配内取被引数最大"（`services/citation_quality.py:472 _pick_best`），修复了"同名噪声记录靠年份加成反超正主"——AlexNet 被引数 **760 → 108512**，与真值一致。
+- **三级降级**：OpenAlex → Semantic Scholar → Crossref（`services/citation_quality.py:689 _LOOKUPS`），任一被限流即切换并显式打 `low_confidence` + 口径说明；选优策略改为"高置信标题匹配内取被引数最大"（`services/citation_quality.py:472 _pick_best`），修复了"同名噪声记录靠年份加成反超正主"：AlexNet 被引数 **760 → 108512**，与真值一致。
 - **OCR 前置判定**：`services/parsing.py:368 ocr_supported` 在无可用视觉 Key 时不再逐页重试网络，15 页扫描件耗时 **140.06s → 0.63s**。
 - **GitHub 限流降级**：未认证 60 次/小时，限流时返回"因限流不做推测性评级"而非编造星级。
-- **完整降级矩阵见 4.7**——8 类外部依赖全部有确定行为，且每一类都在 UI 上说明"发生了什么 + 可能原因 + 怎么办"。
+- **完整降级矩阵见 4.7**：8 类外部依赖全部有确定行为，且每一类都在 UI 上说明"发生了什么 + 可能原因 + 怎么办"。
 
 ### 4.3.6 内存与临时文件控制
 
@@ -453,7 +453,7 @@ flowchart LR
 
 - **学术系统提示**（`core/guardrails.py:470 ACADEMIC_SYSTEM`）：约束"只依据资料、每条事实带【n】、资料不足时明说"；
 - **对比模式 prompt**（`services/rag.py:749 compare_messages`）：强制分论文陈述 + Markdown 对比表，且角标必须是【Pn-m】格式，否则校验不过触发修复；
-- **综述 prompt**（`services/graph.py:774 generate_review`）：注入社区簇代表/时间线/骨干边/PageRank Top，硬性约束"只用给出的论文与边、禁止引入库外文献"，并要求固定四个小标题；LLM 不可用时 `_deterministic_review`（`services/graph.py:716`）用图结构数据确定性生成同构 Markdown。**时间线按论文年份排序**（`services/graph.py:716 _deterministic_review`），元数据缺年份时明确输出"文献元数据中无可用年份，时间线维度不可得（**不做推断**）"——不存在"年份跨度粒度"这类阈值控制；
+- **综述 prompt**（`services/graph.py:774 generate_review`）：注入社区簇代表/时间线/骨干边/PageRank Top，硬性约束"只用给出的论文与边、禁止引入库外文献"，并要求固定四个小标题；LLM 不可用时 `_deterministic_review`（`services/graph.py:716`）用图结构数据确定性生成同构 Markdown。**时间线按论文年份排序**（`services/graph.py:716 _deterministic_review`），元数据缺年份时明确输出"文献元数据中无可用年份，时间线维度不可得（**不做推断**）"，不存在"年份跨度粒度"这类阈值控制；
 - **写作强化 prompt**（`services/writing.py:1121 _outline_prompt`）：注入白名单后**明令禁止模型自行输出 References 章节**（强约束版追加"宁可不引也不编造"）。Round 8 教训：只要 References 的产出权还在模型手里，偷懒概率就无法靠措辞消除，最终靠确定性拼接解决（见 4.6 / 第 9 章）。
 - **Caption prompt**（`services/writing.py:1795 figure_caption`）：整段注入"关键数值事实（必须真实引用其中的数字，禁止编造未出现的数字）"。
 
@@ -462,7 +462,7 @@ flowchart LR
 ## 4.6 抗幻觉机制（核心卖点，四道防线）
 
 > 与 4.3.1 的关系：4.3.1 从"优化策略"角度列出四道防线的参数与实测效果，本节给出完整实现链路与失败路径。
-> **防线零（前置）**：在四道防线之前还有一道"范围锁定"——`services/rag.py:513 retrieve(source_filter=...)` 可把检索域锁死在用户指定的单篇（锁定时先把召回面放大到 `final_k×3` 再过滤，见 `:520-523`；单来源池不截断，见 `:290`），从源头消除"用 A 论文的细节答 B 论文的提问"这类跨文献串引。
+> **防线零（前置）**：在四道防线之前还有一道"范围锁定"：`services/rag.py:513 retrieve(source_filter=...)` 可把检索域锁死在用户指定的单篇（锁定时先把召回面放大到 `final_k×3` 再过滤，见 `:520-523`；单来源池不截断，见 `:290`），从源头消除"用 A 论文的细节答 B 论文的提问"这类跨文献串引。
 
 ### 4.6.0 四道防线总流程图
 
@@ -500,7 +500,7 @@ flowchart TD
 
 ### 防线二：引用一致性逐句校验（生成侧）
 
-`core/guardrails.py`：答案按句切分 → 每句归属其标注的【n】→ 与第 n 条来源 chunk 做锚点覆盖率比对（`core/guardrails.py:64 _overlap`，刻意用**覆盖率**而非 Jaccard——来源 chunk 约 1200 字，Jaccard 会把正常引用稀释到 ~3% 误杀）→ 覆盖率低于 `core/guardrails.py:30 SUSPICION_THRESHOLD = 0.15` 的句子被标记"可疑引用【n】：重叠仅 x%"。同时校验角标越界（`core/guardrails.py:140 validate_citations`）与分组角标【Pn-m】存在性（`core/guardrails.py:165 validate_grouped_citations`）。
+`core/guardrails.py`：答案按句切分 → 每句归属其标注的【n】→ 与第 n 条来源 chunk 做锚点覆盖率比对（`core/guardrails.py:64 _overlap`，刻意用**覆盖率**而非 Jaccard：来源 chunk 约 1200 字，Jaccard 会把正常引用稀释到 ~3% 误杀）→ 覆盖率低于 `core/guardrails.py:30 SUSPICION_THRESHOLD = 0.15` 的句子被标记"可疑引用【n】：重叠仅 x%"。同时校验角标越界（`core/guardrails.py:140 validate_citations`）与分组角标【Pn-m】存在性（`core/guardrails.py:165 validate_grouped_citations`）。
 
 实测：编造句 "Training used 512 Google TPU v4 chips【1】" 被标记"重叠仅 10%"；真实句 "Training used eight NVIDIA P100 GPUs【1】" 覆盖率 84.5% 通过。诚实边界：纯中文句无英文/数字锚点时**无法判定**，系统不谎报"通过"（见第 8 章局限）。
 
@@ -508,14 +508,14 @@ flowchart TD
 
 ### 防线三：修复环（自动改写，上限 1 次）
 
-`answer@services/rag.py:785` 内的修复环（上限 `MAX_REPAIR@services/rag.py:47` = 1 次）：校验失败时，把原答案 + 修正指令（"确保每条事实都带有效角标且角标指向的资料确实包含该事实；删除资料中没有依据的内容"）追加进对话，以 `temperature=0.0` 重生成一次（重生成调用点 `services/rag.py:870`），再校验；`MAX_REPAIR=1` 保证不死循环、可控成本（实测一次完整修复共 2 次 LLM 调用）。修复后仍有问题则以醒目 warning 逐条展示——**宁可明示也不静默**。
+`answer@services/rag.py:785` 内的修复环（上限 `MAX_REPAIR@services/rag.py:47` = 1 次）：校验失败时，把原答案 + 修正指令（"确保每条事实都带有效角标且角标指向的资料确实包含该事实；删除资料中没有依据的内容"）追加进对话，以 `temperature=0.0` 重生成一次（重生成调用点 `services/rag.py:870`），再校验；`MAX_REPAIR=1` 保证不死循环、可控成本（实测一次完整修复共 2 次 LLM 调用）。修复后仍有问题则以醒目 warning 逐条展示，**宁可明示也不静默**。
 
 ### 防线四：References 白名单（写作侧）
 
 这是区别于"通用 RAG + 提示词约束"的实质性机制，链路如下（`services/writing.py`）：
 
 1. **白名单构建** `reference_whitelist`（`services/writing.py:879`）：从**上传 PDF 的 References 段真实抽取**（`:569 _locate_reference_section` 定位标题 + 附录截断 → `:461 _split_author_year_flow` 作者-年份切分 → `:356 _flow_text` 连字还原 → `:639 _is_noise` 噪声过滤），经 `_quality_report`（`:699`）自检；失败回退库 chunks 的 References 段、再回退库元数据，来源标签全程透出。
-2. **确定性拼接 + 校验** `generate_outline_verified`（`services/writing.py:1234`）：prompt 明令**禁止模型自行输出 References**，正文返回后走五段流水线——`_strip_generated_references`（`:212`）→ `sanitize_placeholders`（`:154`）→ `_sanitize_citations`（`:950`，越界 `[n]`→`[?]`）→ `build_references_section`（`:195`，按白名单逐条照抄）→ `validate_reference_whitelist`（`:999`）。校验抽全部 `[n]` 角标 + 标题实质匹配（difflib 阈值 0.8）；**Round 8 新增"章节缺失 / 条目数不足"即判 FAIL**；违规角标改 `[?]`、编造条目逐条列出，UI 提供"🔁 重新生成（强化约束）"。
+2. **确定性拼接 + 校验** `generate_outline_verified`（`services/writing.py:1234`）：prompt 明令**禁止模型自行输出 References**，正文返回后走五段流水线：`_strip_generated_references`（`:212`）→ `sanitize_placeholders`（`:154`）→ `_sanitize_citations`（`:950`，越界 `[n]`→`[?]`）→ `build_references_section`（`:195`，按白名单逐条照抄）→ `validate_reference_whitelist`（`:999`）。校验抽全部 `[n]` 角标 + 标题实质匹配（difflib 阈值 0.8）；**Round 8 新增"章节缺失 / 条目数不足"即判 FAIL**；违规角标改 `[?]`、编造条目逐条列出，UI 提供"🔁 重新生成（强化约束）"。
 
 实测：BERT 论文 References 修复前只抽出 9 条（字段错位 + 附录噪声混入），修复后 **56 条全对、0 噪声**；无 References 的 541 页书籍如实返回空列表；毒样本中越界 `[9]` 与编造条目（相似度 0.14–0.36）全部被报出。
 
@@ -550,7 +550,7 @@ Round 7 首次接真实 Key 时，这一"核心卖点"在实测中当场崩掉�
 | 指标 | 修复前 | 修复后 |
 |---|---|---|
 | 输出总字数 | 4515 字 | **14364 字** |
-| References 章节实际内容 | `[1-40] (List all the references according to the given numbers)` —— **一行占位符，0 条真实条目** | **40 条真实条目** |
+| References 章节实际内容 | `[1-40] (List all the references according to the given numbers)` ： **一行占位符，0 条真实条目** | **40 条真实条目** |
 | 与白名单逐字一致 | — | **40/40** |
 | 占位串（`scan_placeholders` 产品口径 + 独立正则双口径） | 1 处 | **0 处** |
 | `validate_reference_whitelist` | `ok=True`（**假阳性**：0 条也能通过） | `ok=True`，40 条条目 / 47 处角标 / 40 条白名单 |
@@ -586,7 +586,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 # 5. 核心功能实现（分模块 + 截图）
 
-> 本章 7 张截图摄于 2026-10-14 界面重构之后（采集时间可用 `ls -l --time-style=long-iso 资料/截图/` 复核）。文件名与页面导航顺序不一一对应，各图下方已标注对应页面。
+> 本章 7 张截图摄于 2026-10-26 界面重构之后（采集时间可用 `ls -l --time-style=long-iso 资料/截图/` 复核）。文件名与页面导航顺序不一一对应，各图下方已标注对应页面。
 
 **模块总览**（截图 ↔ 页面 ↔ 赛题大类）：
 
@@ -606,13 +606,13 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 本图为「上传与解析」页签（上传即解析：元数据与排版识别结果以 JSON 展开，可直接复核）；语义去重与版本管理见「版本差异」页签，双栏判定实测见 4.3.4。
 
-上传即自动解析入库：分批（20 页/批）解析建块 + 内容级语义去重 + 版本识别。**双栏判定**是本轮重点修复项——`_detect_two_columns@services/parsing.py:196` 现在要求 4 条必要条件同时满足：两侧块数 ≥3、横跨否决（任何块横跨候选分栏线每侧重叠 >5pt 即判单栏，`_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18` 判据落点 `services/parsing.py:18`）、竖直空白带占比 >0.6、栏宽平衡 ≥0.3。实测单栏语料 1111 页误判率从 19.1% 降至 **0%**，真双栏 BERT 正文页 10/10 正确识别。
+上传即自动解析入库：分批（20 页/批）解析建块 + 内容级语义去重 + 版本识别。**双栏判定**是本轮重点修复项：`_detect_two_columns@services/parsing.py:196` 现在要求 4 条必要条件同时满足：两侧块数 ≥3、横跨否决（任何块横跨候选分栏线每侧重叠 >5pt 即判单栏，`_COLUMN_STRADDLE_MIN_OVERLAP@services/parsing.py:18` 判据落点 `services/parsing.py:18`）、竖直空白带占比 >0.6、栏宽平衡 ≥0.3。实测单栏语料 1111 页误判率从 19.1% 降至 **0%**，真双栏 BERT 正文页 10/10 正确识别。
 
 **长文档工程化**（`services/library.py:646 prepare_pdf`）：541 页《Understanding Deep Learning》官方实测 **537 页成功提取 / 25.32s（46.8ms/页）/ 0 失败页**；4 个无原生文本层的空白页不计入失败页，`failed_pages = 0`。注入挂死页时单页 30s 超时线程跳过，其余页照常入库。**幽灵文献拦截**（`_validate_prepared :206`）：损坏/加密/0 页/成功页 <70% 的 PDF 一律拒绝入库，commit 双保险（`:888 commit`），24/24 拦截用例通过。
 
 细粒度解析区提供：标题树（书签优先，无书签走字号/编号推断）、表格抽取、插图↔图注关联展示、公式 LaTeX 提取、结构化参考文献。扫描件（`1706.03762v1_img.pdf`）自动判定并走多模态 OCR（整页转 PNG + vision 模型，prompt 要求按阅读顺序、公式转 LaTeX、表格转 Markdown），**Round 7/8 首次真实实测**：前 3 页原生文本 0 字符 → `detect_scanned=True`，单页 OCR **2833 字符 / 9.3s**，词级准确率 93.9% / 召回 98.5%（详见 4.1.2）。
 
-**Round 8 标题抽取缺陷修复**（`services/library.py:233`）：真实入库链路下 BERT 论文（`1810.04805v2.pdf`）的标题曾被抽成 `Language Understanding`——`_DANGLING_RE` 词表含 `for`，而 BERT 标题首行恰以 `for` 断行，首行被整行丢弃，后续合并分支又只认 `:`/`-` 收尾，**永远执行不到**（反讽之处：该函数 docstring 举的例子正是 BERT 自己）。修法是把悬垂词表拆成"强悬垂（拼不出续行才丢弃）"与"弱悬垂（含 `for`，只触发拼接）"两层，并加 `_title_case_ratio ≥ 0.5` 门槛防止样板残片吞掉真标题。全量 8 个 PDF 修复前/后对照 **8/8 符合预期**（复跑 `scripts/verify_title_extract.py`，修复前基线钉 `5dbf937`；对照表 `PDF@资料/复盘/round8_fixR7_title.md:163`），v1/v7 去重预警（`dup_sim=0.9632`）与版本分组行为未回归。
+**Round 8 标题抽取缺陷修复**（`services/library.py:233`）：真实入库链路下 BERT 论文（`1810.04805v2.pdf`）的标题曾被抽成 `Language Understanding`：`_DANGLING_RE` 词表含 `for`，而 BERT 标题首行恰以 `for` 断行，首行被整行丢弃，后续合并分支又只认 `:`/`-` 收尾，**永远执行不到**（反讽之处：该函数 docstring 举的例子正是 BERT 自己）。修法是把悬垂词表拆成"强悬垂（拼不出续行才丢弃）"与"弱悬垂（含 `for`，只触发拼接）"两层，并加 `_title_case_ratio ≥ 0.5` 门槛防止样板残片吞掉真标题。全量 8 个 PDF 修复前/后对照 **8/8 符合预期**（复跑 `scripts/verify_title_extract.py`，修复前基线钉 `5dbf937`；对照表 `PDF@资料/复盘/round8_fixR7_title.md:163`），v1/v7 去重预警（`dup_sim=0.9632`）与版本分组行为未回归。
 
 ## 5.2 跨文献问答与溯源（模块②）
 
@@ -638,13 +638,13 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![版式阅读与翻译页](截图/p3.png)
 
-原生版式渲染（`native_page_html@services/translate.py:552`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + **块按 PDF bbox 定框、块内每行再按原始坐标绝对定位**（行高不再随浏览器字体度量涨高而压住下一块），词间空格由词级坐标回补（`_words_of_page`，治逐字形定位 PDF 抽出「无空格长串」的拆行塌陷），结构上杜绝串栏与重叠（夹具实测越栏块 0 个、行级重叠对 40→4）；中英对照（`bilingual_html@services/translate.py:658`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:416`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:917`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:843`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
+原生版式渲染（`native_page_html@services/translate.py:552`）：覆盖率剖面判栏（`detect_columns@services/translate.py:109`）+ 分栏独立容器 + **块按 PDF bbox 定框、块内每行再按原始坐标绝对定位**（行高不再随浏览器字体度量涨高而压住下一块），词间空格由词级坐标回补（`_words_of_page`，治逐字形定位 PDF 抽出「无空格长串」的拆行塌陷），结构上杜绝串栏与重叠（夹具实测越栏块 0 个、行级重叠对 40→4）；中英对照（`bilingual_html@services/translate.py:658`）用**比例同步 + 段落对齐 + isSyncing 防回弹 + rAF 节流**四重机制实现两栏同步滚动；划词翻译（`SELECTION_JS@services/translate.py:416`）捕获即清空选区、自动复制剪贴板、2.5s hash 去重，经后端代理调用模型（浏览器端零密钥）；引用↔参考文献双向跳转（`citation_jump_html@services/translate.py:926`）；中文译文可原位写回 PDF（`in_place_pdf@services/translate.py:852`，china-s 字体 + 字号递降/省略号截断/逐行三级回退，实测反解 79 个连续汉字无 U+FFFD）。长文档扫描内置内存探针（`scripts/_memory_probe.py`，psutil→tracemalloc 自动降级）与 24h 陈旧临时目录清理（`cleanup_stale_figure_dirs@ui/page_reading.py:256`）。
 
 ## 5.4 论文检索、追踪与推荐（模块③主体）
 
 ![检索与追踪页](截图/p6.png)
 
-本图是「检索与下载」页签（不含被引列；被引指标画面见图 p4）。arXiv/PubMed/DuckDuckGo 三路检索 → 一键/批量下载入库（语义查重自动拦截重复）；**引用含金量**：`fetch_citation_count@services/citation_quality.py:713` 走 DOI/arXiv ID 精确匹配优先（带标题复核防错指）→ OpenAlex→Semantic Scholar→Crossref 三级降级；选优策略"高置信标题匹配内取**被引数最大**"（`_pick_best@services/citation_quality.py:472`），修复了"同名噪声记录因年份加成反超正主"的选错缺陷（AlexNet 最小复现 760 → 108512，与真值一致）。主数据源被限流降级时显式打 `low_confidence` 标记并说明口径差异——**宁可说"这个数不可靠"，不伪造漂亮数字**。
+本图是「检索与下载」页签（不含被引列；被引指标画面见图 p4）。arXiv/PubMed/DuckDuckGo 三路检索 → 一键/批量下载入库（语义查重自动拦截重复）；**引用含金量**：`fetch_citation_count@services/citation_quality.py:713` 走 DOI/arXiv ID 精确匹配优先（带标题复核防错指）→ OpenAlex→Semantic Scholar→Crossref 三级降级；选优策略"高置信标题匹配内取**被引数最大**"（`_pick_best@services/citation_quality.py:472`），修复了"同名噪声记录因年份加成反超正主"的选错缺陷（AlexNet 最小复现 760 → 108512，与真值一致）。主数据源被限流降级时显式打 `low_confidence` 标记并说明口径差异：**宁可说"这个数不可靠"，不伪造漂亮数字**。
 
 **Round 7/8 限流场景真实实测（三条"宁缺毋假"纪律的硬证据）**：本次实测期间 OpenAlex 与 Semantic Scholar 均处于 **IP 级 429 限流**（OpenAlex 返回 `Retry-After: 25066`，约 6.96 小时）。系统行为：
 
@@ -678,7 +678,7 @@ Python 工具执行前经 `core/sandbox.py:27 validate_code` AST 白名单（num
 
 ![写作辅助页](截图/p5.png)
 
-四大能力：①**无幻觉框架**（4.6 防线四）——Round 8 真实 API 实测：References **40 条与白名单逐字一致 40/40**、占位串 **0 处**、输出 **14364 字**、耗时 **44.6s**（修复前是 4515 字但整章占位符、139.3s）；UI 侧新增 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:426`）把 40 条逐条摊平成表格（作者/标题/年份/出处/来路 PDF），使"无编造空间"可被逐条核对；②**拓扑图**——Mermaid 前端渲染、TikZ 编译（检测 tectonic/pdflatex/xelatex/lualatex，编译产物经 PyMuPDF 转 PNG 展示；无编译器时展示源码 + Overleaf/tikz.dev 链接；**当前部署镜像未装 TeX，实测即走此降级路径**）、Graphviz 三级降级（graphviz 包+dot → matplotlib+networkx → 纯标准库 DOT→SVG 分层布局 `services/wcopilot_dotrender.py`，界面明示"降级渲染（等价拓扑图）"）；③**CSV→图表**——列类型自动分类、最多 3 张推荐图（每张带中文推荐依据）、数值事实（min/max/趋势/Pearson r）注入 Caption prompt 且生成后校验必须含真实数字；④**中英学术互译**。全部模型调用经统一重试入口，伪响应不会被当正文展示。
+四大能力：①**无幻觉框架**（4.6 防线四），Round 8 真实 API 实测：References **40 条与白名单逐字一致 40/40**、占位串 **0 处**、输出 **14364 字**、耗时 **44.6s**（修复前是 4515 字但整章占位符、139.3s）；UI 侧新增 `_render_reference_provenance`（`_render_reference_provenance@ui/page_writing.py:426`）把 40 条逐条摊平成表格（作者/标题/年份/出处/来路 PDF），使"无编造空间"可被逐条核对；②**拓扑图**：Mermaid 前端渲染、TikZ 编译（检测 tectonic/pdflatex/xelatex/lualatex，编译产物经 PyMuPDF 转 PNG 展示；无编译器时展示源码 + Overleaf/tikz.dev 链接；**当前部署镜像未装 TeX，实测即走此降级路径**）、Graphviz 三级降级（graphviz 包+dot → matplotlib+networkx → 纯标准库 DOT→SVG 分层布局 `services/wcopilot_dotrender.py`，界面明示"降级渲染（等价拓扑图）"）；③**CSV→图表**：列类型自动分类、最多 3 张推荐图（每张带中文推荐依据）、数值事实（min/max/趋势/Pearson r）注入 Caption prompt 且生成后校验必须含真实数字；④**中英学术互译**。全部模型调用经统一重试入口，伪响应不会被当正文展示。
 
 ---
 
@@ -720,7 +720,7 @@ docker compose down         # 停止
 ```
 
 - **Dockerfile**（`python:3.11-slim`）：先 COPY `requirements.txt` 装依赖（利用层缓存），再 `COPY . .`；启动命令 `streamlit run app.py --server.port=8501 --server.address=0.0.0.0`（CLI 显式指定，容器内无需 `.streamlit/config.toml`）。
-- **`.dockerignore`**（本次新增）：排除 `.env`/`.git/`/`storage/`/`logs/`/`dist/`/`build/`/`__pycache__/`/`*.pyc`/`node_modules/`/`.streamlit/`/`资料/`/`tests/`/`version_history/` 等。**修复前 `COPY . .` 会把含真实 API Key 的 `.env` 打进镜像层——这是安全事故，已通过 `.dockerignore` 根治**；密钥现在只经 `docker-compose.yml` 的 `env_file: .env` 在运行时注入环境变量，不落镜像层。
+- **`.dockerignore`**（本次新增）：排除 `.env`/`.git/`/`storage/`/`logs/`/`dist/`/`build/`/`__pycache__/`/`*.pyc`/`node_modules/`/`.streamlit/`/`资料/`/`tests/`/`version_history/` 等。**修复前 `COPY . .` 会把含真实 API Key 的 `.env` 打进镜像层：这是安全事故，已通过 `.dockerignore` 根治**；密钥现在只经 `docker-compose.yml` 的 `env_file: .env` 在运行时注入环境变量，不落镜像层。
 - **docker-compose.yml**：`8501:8501` 端口映射、`env_file: .env` 运行时注入密钥、`./storage:/app/storage` 卷挂载持久化向量库与账本（容器重建不丢文献库）、`restart: unless-stopped`。
 - 建议项（未改动 Dockerfile，仅建议）：增加非 root 运行用户（`USER` 指令）与 healthcheck；`requirements.txt` 可补充 matplotlib/graphviz 可选依赖以减少镜像内降级层级。
 
@@ -772,7 +772,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 过程纪律：每名修复者只动独占文件清单内的代码、改动前后 `py_compile` + 单元测试 + AppTest 回归、实测脚本留存可复查、修复报告中"诚实交代"小节记录未修复项与风险。本文档的全部性能数字均以该过程实测为准，不沿用旧文档口径。
 
-**交付前必复跑清单**：①`_check_doc_refs.py` 引用复跑（SUSPECT 0）；②`make_tech_pdf.py` 实测页数（唯一硬门禁，不外推）；③`_mermaid_check.mjs` Mermaid 真解析；④**校验器自身也要验证**——改格式或脚本后须用故意写错的样本反测，确认能判出 SUSPECT 而非被静默跳过（**门禁变绿有两种可能：引用真的对了，或脚本看不见了**）；"唯一 / 零 / 仅 N 处"这类可被 `grep` 证伪的断言须回仓 grep——脚本只校验行号，校验不了数量；⑤**降级/失败场景须走真实交互**——渲染冒烟只渲染不点击，凡"失败时显示什么"的改动须用 AppTest 模拟点击并断言横幅出现/消失；⑥**禁止 `head -N` 断存在性**——输出为空不等于不存在，存在性一律 `grep` 全量；⑦**截图 mtime 变化 → 强制复核图注**，且出图前按宽高比换算 PDF 内实际宽度（要求 ≥100mm）。
+**交付前必复跑清单**：①`_check_doc_refs.py` 引用复跑（SUSPECT 0）；②`make_tech_pdf.py` 实测页数（唯一硬门禁，不外推）；③`_mermaid_check.mjs` Mermaid 真解析；④**校验器自身也要验证**：改格式或脚本后须用故意写错的样本反测，确认能判出 SUSPECT 而非被静默跳过（**门禁变绿有两种可能：引用真的对了，或脚本看不见了**）；"唯一 / 零 / 仅 N 处"这类可被 `grep` 证伪的断言须回仓 grep：脚本只校验行号，校验不了数量；⑤**降级/失败场景须走真实交互**：渲染冒烟只渲染不点击，凡"失败时显示什么"的改动须用 AppTest 模拟点击并断言横幅出现/消失；⑥**禁止 `head -N` 断存在性**：输出为空不等于不存在，存在性一律 `grep` 全量；⑦**截图 mtime 变化 → 强制复核图注**，且出图前按宽高比换算 PDF 内实际宽度（要求 ≥100mm）。
 
 ## 6.7 里程碑与组织形式
 
@@ -789,8 +789,8 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 ## 7.1 技术创新点
 
 1. **"四道防线"抗幻觉体系（核心创新）**。通用 RAG 只做"检索 + 生成"，幻觉校验至多是提示词里的一句"请不要编造"。本系统把抗幻觉拆成四个工程化组件：检索侧**拒答闸门**（相关度不足 0 次 LLM 调用直接拒答）、生成侧**逐句引用一致性校验**（覆盖率口径逐句比对来源，能抓"角标存在但内容无据"的半幻觉）、闭环**修复环**（带原答案与修正指令的重生成，上限 1 次）、写作侧 **References 白名单**（从 PDF References 段真实抽取 + 质量自检 + 角标/条目双重校验）。四道防线全部有实测证据（评审沙箱复现），且失败路径全部"明示而不静默"。
-2. **版面感知先于检索**（实现详见 4.3.4）。双栏判定不靠朴素中线二分，而是 4 条必要条件（横跨否决是关键——对全部块生效，含被剔除出候选集的宽块），把"上下文质量"问题拦在向量化之前；同一套栏判定同时服务文本入库（RAG chunks）与视觉渲染（阅读页），保证"看到的版面 = 检索到的上下文"。实测单栏语料 1111 页误判率 19.1% → 0%，同时真双栏论文识别能力保留（10/10 正文页正确）。
-3. **为演示鲁棒性做的系统工程**（实现详见 4.2.1 / 4.7）。LLM 统一重试 + 伪响应兜底 + 失败落盘带 caller 定位；每个 UI 区块独立异常边界；flash 提示跨 rerun 存活；演示模式图谱/综述双层兜底且诚实标注"演示模式"；无 Key 离线链路完整可用。实测 7/7 条演示路径 0 未捕获异常、9 页面 + 9 项故障注入 UI 冒烟 exception=0——这是评审现场最直接的护城河。
+2. **版面感知先于检索**（实现详见 4.3.4）。双栏判定不靠朴素中线二分，而是 4 条必要条件（横跨否决是关键：对全部块生效，含被剔除出候选集的宽块），把"上下文质量"问题拦在向量化之前；同一套栏判定同时服务文本入库（RAG chunks）与视觉渲染（阅读页），保证"看到的版面 = 检索到的上下文"。实测单栏语料 1111 页误判率 19.1% → 0%，同时真双栏论文识别能力保留（10/10 正文页正确）。
+3. **为演示鲁棒性做的系统工程**（实现详见 4.2.1 / 4.7）。LLM 统一重试 + 伪响应兜底 + 失败落盘带 caller 定位；每个 UI 区块独立异常边界；flash 提示跨 rerun 存活；演示模式图谱/综述双层兜底且诚实标注"演示模式"；无 Key 离线链路完整可用。实测 7/7 条演示路径 0 未捕获异常、9 页面 + 9 项故障注入 UI 冒烟 exception=0：这是评审现场最直接的护城河。
 
 ## 7.2 应用创新点
 
@@ -838,7 +838,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 本项目**不是把通用大模型套一层学术皮肤，而是围绕"科研结论必须可溯源、不可编造"这一约束，从零设计并实现了整套工程链路**：用版面感知解析保证进入向量库的上下文不串栏，用四道防线让"不知道"能被系统诚实说出并拒答，用真实外部数据源（OpenAlex/S2/Crossref/GitHub）替代规则打分，用统一降级矩阵保证任何外部依赖失效时都"明示而不静默"。
 
-在技术取舍上我们有一条贯穿始终的纪律：**宁缺毋假**——被引数取不到就写明"该维度不计分"，OCR 不可用就明确拒绝空扫描件入库，参考文献抽取质量不足就直接判失败而不拿索引页凑数。这条纪律让部分数字看起来不够漂亮（例如 v1/v7 整篇相似度低于阈值、靠分段指纹才命中），但它保证了评委看到的每一个数字都能被复现。
+在技术取舍上我们有一条贯穿始终的纪律：**宁缺毋假**：被引数取不到就写明"该维度不计分"，OCR 不可用就明确拒绝空扫描件入库，参考文献抽取质量不足就直接判失败而不拿索引页凑数。这条纪律让部分数字看起来不够漂亮（例如 v1/v7 整篇相似度低于阈值、靠分段指纹才命中），但它保证了评委看到的每一个数字都能被复现。
 
 ## 8.2 当前局限（诚实清单）
 
@@ -898,7 +898,7 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 **决策一：「LLM 只写正文 + 系统确定性拼接 References」。** 抗幻觉能力的总架构决策（详见 4.6）：真实文献的作者/标题/年份/出处本来就在白名单数据结构里，**拼一遍即可，让模型重写等于把唯一不可出错的产物交给出错率非零的组件**。把卖点从"prompt 约束住模型"升级为"模型没有机会碰这块内容"，同时端到端耗时从 139.3s 压到 44.6s。
 
-**决策二：用真实 API 端到端实测取代离线推断。** Round 7 之前项目 31 处 LLM 调用点从未真跑过，文档中所有 AI 数据都是推断值。人工决定填入真实 Key 做一次全链路实测，代价是当场暴露 6 个缺陷、并被外部审计打出 5.5/10。**这是主动选择**——与其在演示现场被发现，不如自己先跑一遍。
+**决策二：用真实 API 端到端实测取代离线推断。** Round 7 之前项目 31 处 LLM 调用点从未真跑过，文档中所有 AI 数据都是推断值。人工决定填入真实 Key 做一次全链路实测，代价是当场暴露 6 个缺陷、并被外部审计打出 5.5/10。**这是主动选择**：与其在演示现场被发现，不如自己先跑一遍。
 
 **决策三：接受放水核查结论并重写验收断言。** 评委 G 判定 19 条断言中 4 条恒真/零断言、6~7 条阈值过松，有效判别力仅 8 条（42%）。人工没有辩解"反正都通过了"，而是把硬编码 `True` 改为检验 `chunks > 0`、`n_fw >= 0` 改为"条数 >0 且状态合法"、只验长度的三条改为验结构/验占位符/验 References 真实条目、QA 改为"必须全命中"，用例数 19 → **21**。**收紧后仍 21/21 全绿**：功能判断没被冤枉，也说明此前"19/19"含金量确实虚高。
 
@@ -907,20 +907,20 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 
 ### 经验一：能在系统侧确定性生成的东西，就不要放进 prompt 让模型生成
 
-**现象**：初版写作 prompt 要求模型在同一份输出里既写正文、又照抄 40 条参考文献（白名单以 9322 字符注入）。模型没有照抄，而是用一行元指令替代整章——`# References` 之后只有 `[1-40] (List all the references according to the given numbers)`。原因不难理解：让它输出 ~9300 字符（≈2.6k tokens）近乎逐字重复的内容，偷懒是最优解。
+**现象**：初版写作 prompt 要求模型在同一份输出里既写正文、又照抄 40 条参考文献（白名单以 9322 字符注入）。模型没有照抄，而是用一行元指令替代整章：`# References` 之后只有 `[1-40] (List all the references according to the given numbers)`。原因不难理解：让它输出 ~9300 字符（≈2.6k tokens）近乎逐字重复的内容，偷懒是最优解。
 
-**调优的三步进退**：①prompt 加"必须逐字照抄、禁止改写、宁可不引也不编造"——无效；②加 Strict 强化约束版——仍可能再犯；③**最终认识到这不是 prompt 技巧问题而是架构问题**：只要这一节的产出权仍在模型手里，偷懒概率就永远 >0。改为 prompt 明确**禁止**输出 References，由 `build_references_section`（`services/writing.py:195 build_references_section`）确定性拼接。
+**调优的三步进退**：①prompt 加"必须逐字照抄、禁止改写、宁可不引也不编造"，无效；②加 Strict 强化约束版，仍可能再犯；③**最终认识到这不是 prompt 技巧问题而是架构问题**：只要这一节的产出权仍在模型手里，偷懒概率就永远 >0。改为 prompt 明确**禁止**输出 References，由 `build_references_section`（`services/writing.py:195 build_references_section`）确定性拼接。
 > 通用结论：prompt 调优只能提升"模型遵循指令的概率"，**不能把概率降到零**。当一个字段不允许出错（参考文献、页码、数值事实）时，正确做法是把它从生成链路里摘出来，而不是把 prompt 写得更狠。这条后来复用到图谱确定性综述（`_deterministic_review@services/graph.py:716`）：离线时用与注入 prompt 完全相同的数据生成同构输出，保证"有无 LLM，事实一致"。
 
 ### 经验二：抗幻觉的关键不在"prompt 里说不要编造"，而在生成后必须有可执行的 Detection
 
 **本轮最痛的教训。** 写作链路里"References 是否真实"由 `validate_reference_whitelist` 判定，而它犯了**假阳性**：占位废稿被判 `ok=True`。失败链条（每步单独看都"合理"）：占位行 `[1-40] (List the references…)` 既不匹配 `^\[(\d{1,4})\]\s*`（`1-40` 含分隔符）、也不以项目符号开头 → 被 `_generated_reference_entries` 整行忽略 → 解析出 **0 条** → 标题相似度循环一次都没进 → `hallucinated` 为空 → `ok=True`（坏输出被认证为"无幻觉"）。
 
-**根因是"缺 Detection"而非"阈值松"**，因此修复只做收紧、一个阈值都没放宽（`TITLE_SIM_THRESHOLD` 仍为 0.8）：新增两条结构性判定——References 章节缺失即 FAIL；条目数 < `min(MIN_REF_ENTRIES, n_allowed)` 即 FAIL。反向验证：把 `_llm_text` 打桩成含 `[1..3]`/`[Placeholder]`/`TODO`/`待补充` 的垃圾输出，管线仍产出干净文本；对"完全无 References 章节"和"编造条目 `Totally Fabricated Paper`"两种坏输入，新版判 FAIL、旧版判 PASS。
+**根因是"缺 Detection"而非"阈值松"**，因此修复只做收紧、一个阈值都没放宽（`TITLE_SIM_THRESHOLD` 仍为 0.8）：新增两条结构性判定：References 章节缺失即 FAIL；条目数 < `min(MIN_REF_ENTRIES, n_allowed)` 即 FAIL。反向验证：把 `_llm_text` 打桩成含 `[1..3]`/`[Placeholder]`/`TODO`/`待补充` 的垃圾输出，管线仍产出干净文本；对"完全无 References 章节"和"编造条目 `Totally Fabricated Paper`"两种坏输入，新版判 FAIL、旧版判 PASS。
 
 > 通用结论：**生成后的校验必须能通过显式布尔判据失败，不能依赖"没检出问题"来隐式通过。** 凡是"某列表为空 → 判定通过"的写法都要警惕，因为"解析失败"与"确实没有"在这类写法下不可区分。占位符检测同理（`scan_placeholders@services/writing.py:129`）：检出结果须显式上报 `placeholder_issues` 由 UI 提示，而不是静默输出。
 
-### 经验三：相似不等于同一 —— 词袋相似度 0.88 会骗人，需要词序校验 + 归属确认标注
+### 经验三：相似不等于同一：词袋相似度 0.88 会骗人，需要词序校验 + 归属确认标注
 
 **现象**：查询标题 `Attention Is All You Need`，Crossref 最佳候选是 `Is Attention All You Need?`，**词袋相似度 0.88，高于 0.85 强匹配阈值**，于是被当成同一篇，把它的被引数 55 记到 Transformer 论文头上（那其实是 2025 年、作者 Mineault Patrick 的另一篇论文）。BERT 侧同样命中标题被截断的候选（相似度 0.794）。
 
@@ -929,12 +929,12 @@ Round 7 是本项目的**分水岭**：此前 31 处 LLM 调用点从未真跑�
 | Round 7（R5，数据层） | 新增 `_token_order_same`：归一化后比较**词序**，不一致即打 `title_attribution_unconfirmed=True`；`assess_reference` 据此把计分字段置 `None` | ✅ `real_citations=None`，reasons 写明"很可能不是同一篇论文，其被引数不计入本篇" |
 | Round 8（R8，消费层） | 发现平行出口 `detect_frontier`（前沿打分）只检查 `isinstance(count, int)`、**完全没读这些标注**，补统一闸门 `_external_citation_trust` | ✅ 前沿分 `14.3 → 3.3`；reasons 改为中性表述"该维度不计分、按剩余维度归一化" |
 
-> 通用结论三条：①**相似度阈值救不了你**——0.88 高于多数人的阈值直觉，必须补一个正交判据（这里是词序）；②**数据层诚实 ≠ 系统层诚实**，标注必须被**每一个消费者**读取，修一处要立刻全仓排查其余出口（R8 报告附 13 行消费者排查清单）；③系统产出应保留"自我怀疑"的表达能力：把归属未确认的原始候选留在 `evidence["raw_candidate"]` 供审计，同时确保它不会被当成真值展示。
+> 通用结论三条：①**相似度阈值救不了你**：0.88 高于多数人的阈值直觉，必须补一个正交判据（这里是词序）；②**数据层诚实 ≠ 系统层诚实**，标注必须被**每一个消费者**读取，修一处要立刻全仓排查其余出口（R8 报告附 13 行消费者排查清单）；③系统产出应保留"自我怀疑"的表达能力：把归属未确认的原始候选留在 `evidence["raw_candidate"]` 供审计，同时确保它不会被当成真值展示。
 
 ## 9.4 AI 使用边界与诚实声明
 
 - **可追溯性**：本节每条经验都对应一次真实运行，证据落在 Round 7/8 各修复报告（路径见附录 B）。
-- **AI 生成代码的验证方式**：三重验证——`py_compile` 零报错、`unittest discover -s tests` 238/238、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
+- **AI 生成代码的验证方式**：三重验证：`py_compile` 零报错、`unittest discover -s tests` 238/238、**真实 API 实跑并留存修复前后对照输出**；仅通过前两项而未实跑的改动，不写进本文档的"实测"口径。
 - **AI 未参与**：真实 API Key 的获取与管理、演示视频录制、`资料/团队信息.md` 署名内容。
 - **尚未做到**：AI 目前主要覆盖"修复已知缺陷"与"撰写文档"，**不足以独立判断哪些功能该做**（如是否自建 ≥20 篇图谱 fixture），优先级决策仍由人工承担。
 
