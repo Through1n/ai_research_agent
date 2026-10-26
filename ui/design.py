@@ -339,6 +339,15 @@ img{max-width:100%; height:auto; display:block;}
 }
 [data-testid="stHtml"]{max-width:100%; overflow-x:auto;}
 [data-testid="stTable"],[data-testid="stDataFrame"]{max-width:100%; overflow-x:auto;}
+/* 表格与卡片同族：1px 中性描边 + --r 圆角，避免数据区像贴在页面上的浮层 */
+[data-testid="stTable"],[data-testid="stDataFrame"]{
+  border:1px solid var(--c-border);
+  border-radius:var(--r);
+}
+[data-testid="stDataFrame"] [role="columnheader"]{
+  background:var(--c-subtle);
+  color:var(--c-text-2);
+}
 /* 固定比例容器（可选工具）；比例由调用方通过 --ai-ratio 传入 */
 .ai-ratio{
   position:relative; width:100%;
