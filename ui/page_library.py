@@ -1038,8 +1038,16 @@ def render(ctx):
                 _rm_key = "lib_rm_sel"
                 if st.session_state.get(_rm_key) not in ctx.files:
                     st.session_state[_rm_key] = None
-                delf = st.selectbox("选择要删除的文献", ctx.files, key=_rm_key)
-                if st.button("🗑️ 确认删除所选文献", key="lib_rm_btn"):
+                # 卡片头行结构（Element Card header）：标题/选择器在左、唯一主操作在右，
+                # 同一行。原来按钮独占一行，卡片里形成"上下两截"的堆叠感；改成列之后
+                # 「这一块是干什么的 + 点哪里」在一眼之内，纵向也少一行。
+                _c_sel, _c_del = st.columns([3, 1], vertical_alignment="bottom")
+                with _c_sel:
+                    delf = st.selectbox("选择要删除的文献", ctx.files, key=_rm_key)
+                with _c_del:
+                    _do_del = st.button("🗑️ 确认删除所选文献", key="lib_rm_btn",
+                                        use_container_width=True)
+                if _do_del:
                     if not delf:
                         st.caption("📭 请先在上方选择要删除的文献。")
                     else:
