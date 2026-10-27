@@ -1442,6 +1442,38 @@ def bg_running(kinds=None):
     return False
 
 
+def bg_watch(kinds):
+    """本页有后台任务在跑时挂一个 2 秒自轮询：任务一结束立刻整页重绘，让 bg_consume 当场交付。
+
+    为什么需要（2026-10-26 真机实证的缺口）：侧边栏任务中心的「完成即整页重绘」是
+    **每个 tid 一次**（`_SEEN_TASKS_KEY` 记账，防重绘风暴）。用户提交后切到别的页面，
+    那一次重绘被别的页面用掉；再切回来时任务可能还在跑，此后就再没有任何重绘触发，
+    答案会一直停在"没有记录"的空状态，直到用户随手点一下别的东西。
+    page_qa 的真实浏览器门禁正是在这个场景下抓到的（提交 → 切到文献库 → 切回来 → 永不出现）。
+
+    只在"本页 kind 正在跑"时挂载：任务结束的下一次 fragment tick 就退出，不会常驻轮询。
+    """
+    if not bg_running(kinds=kinds):
+        return
+    try:
+        decorator = st.fragment(run_every="2s")
+    except Exception:                      # 旧版本无 fragment：退化为不轮询（不报错）
+        return
+
+    @decorator
+    def _poll():
+        if not bg_running(kinds=kinds):
+            try:
+                st.rerun(scope="app")
+            except Exception:
+                pass
+
+    try:
+        _poll()
+    except Exception:
+        pass
+
+
 def bg_consume(handlers):
     """页面渲染顶部调用：按 kind 把已完成的后台任务交付给本页处理器。
 
@@ -1487,3 +1519,8 @@ def bg_consume(handlers):
             st.rerun()
         except Exception:
             pass
+        return
+    # 什么都没交付、但本页 kind 还在跑 ⇒ 挂 2s 自轮询（见 bg_watch 长注释）。
+    # 放在最后：真正交付那一轮已经 st.rerun()（RerunException 是 BaseException，
+    # 会直接穿出本函数），不会再走到这里白挂一个 fragment。
+    bg_watch(set(handlers.keys()))

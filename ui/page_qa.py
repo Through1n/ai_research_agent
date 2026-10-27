@@ -21,13 +21,13 @@ Round 9 改动（S1）：
   引用净化记录；溯源卡片编号与答案角标由 rag.sanitize_citations 保证一一对应。
 """
 import html as _html
-import time
 
 import streamlit as st
 from services import rag
 from ui import design as _design
-from ui.common import (require_library, page_header, show_error, at,
-                       is_llm_degraded, llm_degraded_banner, empty_state_card)
+from ui.common import (require_library, page_header, at,
+                       is_llm_degraded, llm_degraded_banner, empty_state_card,
+                       bg_submit, bg_consume, bg_running)
 
 
 # 本页局部样式：仅作用于问答页，不改动 ui/common.py；让答案/来源分层更清爽。
@@ -76,6 +76,7 @@ MAX_COMPARE_PAPERS = 5       # 多篇对比最多勾选篇数
 JUMP_KEY = "qa_jump_page"    # 跨页联动 session_state key
 READING_PAGE_IDX = 3         # 📖 版式阅读页在 MENU 中的索引（ui/sidebar.py MENU / app.py）
 SMALL_LIBRARY_CHUNKS = 8     # 与 services/rag.py 保持一致：片段少于此值给出补充引导
+_K_QA = "qa_answer"          # 后台任务 kind：问答生成（bg_submit/bg_consume 认领用）
 
 # 查询扩展模式 → 人话说明（debug["expansion_mode"]）
 _EXPAND_MODE_LABELS = {
@@ -271,6 +272,63 @@ def _render_debug(run):
         st.caption(f"✅ 双路共同命中 {len(hit)} 条——混合检索交叉验证降低漏检")
 
 
+def _qa_worker(ctx, question, scope_label, use_rerank, source_filter, compare_papers, progress):
+    """后台任务体：跑 rag.answer 并组装成一条可入库的 run 记录。
+
+    ⚠️ worker 线程内**禁止**任何 st.*（会抛 ScriptRunContext 缺失并污染会话）：
+    这里只做纯计算 + 数据组装，渲染交给 _consume_qa 在主线程完成。
+    为什么必须后台化：原实现把 rag.answer 直接跑在主线程上，单次问答 7～20s
+    （多篇对比可达 1～2 分钟），期间 Streamlit 无法处理任何新事件——侧边栏
+    导航点击全部排队，用户反馈「切到别的页面会卡顿，切不出去」。
+    """
+    def _say(stage):
+        try:
+            progress(str(stage), None)
+        except Exception:
+            pass
+
+    result = rag.answer(ctx, question, use_rerank=use_rerank,
+                        source_filter=source_filter,
+                        compare_papers=list(compare_papers) if compare_papers else None,
+                        progress=_say)
+    if not result:
+        return None
+    return {
+        "q": question,
+        "a": result.get("answer", ""),
+        "sources": result.get("sources", []),
+        "issues": result.get("issues", []),
+        "unverified": result.get("unverified", []),
+        "debug": result.get("debug", {}),
+        "refused": bool(result.get("refused")),
+        "top_score": result.get("top_score", 0.0),
+        "scope": scope_label,
+    }
+
+
+def _consume_qa(kind, task):
+    """bg_consume 处理器：把后台问答结果登记进 qa_runs（主线程执行）。
+
+    一次性语义：失败时只 flash 错误，不写半成品；成功时同时置「清空输入框」标记，
+    由 render 顶部消费（那时 st.text_input 还没实例化，写 key 才合法）。
+    """
+    if task.get("state") != "done":
+        try:
+            from ui.sidebar import set_flash
+            set_flash("error", "⚠️ 问答生成失败：%s" % str(task.get("error") or "")[:160])
+        except Exception:
+            pass
+        return
+    run = task.get("result")
+    if not isinstance(run, dict) or not run.get("q"):
+        return
+    run = dict(run)
+    run["id"] = st.session_state.get("qa_run_seq", 0)
+    st.session_state.setdefault("qa_runs", []).append(run)
+    st.session_state["qa_run_seq"] = int(st.session_state.get("qa_run_seq", 0)) + 1
+    st.session_state["_qa_need_clear_input"] = True
+
+
 def render(ctx):
     page_header("跨文献问答与溯源",
                 "Dense+Sparse 混合检索（多查询变体 RRF）→ 可选 LLM 重排 → 引用校验 + 一次自动修复；"
@@ -280,6 +338,12 @@ def render(ctx):
         return
     _init_state()
 
+    # 后台任务交付必须放在所有 widget 之前：consume 会写 qa_runs / 清空标记，
+    # 并触发一次整页重绘，本轮后续渲染读到的直接就是新结果。
+    # "提交后切走再切回来"的自动出结果由 bg_consume 内部的 bg_watch 兜住
+    # （每个已后台化页面通用，无需在页面里单独挂轮询）。
+    bg_consume({_K_QA: _consume_qa})
+
     # 上一轮提交成功后留下的「清空输入框」标记：必须在这里消费——此刻带
     # key="qa_input" 的 st.text_input 还没实例化，写它合法。晚一步（在提交完成的
     # 当轮直接写）会抛 StreamlitWidgetAlreadyInstantiatedError，整页崩成错误卡片：
@@ -287,6 +351,12 @@ def render(ctx):
     if st.session_state.pop("_qa_need_clear_input", False):
         st.session_state["qa_input"] = ""
         st.session_state["qa_q"] = ""
+        # 复位胶囊选中态 + 影子键（2026-10-26 用户缺陷：「点示例问题没反应」）。
+        # 原实现只清输入框，胶囊仍处选中态、影子键仍记着上一次的值 ⇒ 用户再点
+        # 同一个胶囊时，先取消选中（_sel=None 不写），再选回来（_val == _qa_ex_prev
+        # 不写），输入框永远是空的；界面上还留着「已选中但输入框空」的矛盾状态。
+        st.session_state["qa_ex_pills"] = None
+        st.session_state["_qa_ex_prev"] = ""
 
     # ---------- 一行状态带（首屏唯一的说明性文字，其余提示收进折叠区 / 答案区） ----------
     try:
@@ -331,10 +401,28 @@ def render(ctx):
             st.session_state["_qa_ex_prev"] = _val   # 影子键：非 widget key，可安全写
 
     # ---------- 主操作区：问题输入 + 提交（首屏第一视线） ----------
-    with st.form("qa_form", clear_on_submit=True):
+    # ⚠️ 这里**不能**用 st.form（2026-10-26 真机最小复现的结论，见
+    #    scripts/_tmp_form_probe.py 与 scripts/_probe_qa_reclick.py）：
+    #    st.form 一旦提交过，前端会为表单内 widget 钉住"表单态"（含
+    #    clear_on_submit 清零值），**服务端下发的 value 不再生效**。于是
+    #    "点示例问题胶囊 → 写 st.session_state['qa_input'] → 输入框填入"这条链路
+    #    在第一次提问之后就永久断掉（实测：提交后点任意胶囊，DOM value 恒为 ''）。
+    #    换 form key 强制重挂载**也无效**（真实浏览器实测），只能放弃 st.form。
+    #    代价：失去"回车提交"，改为显式点「提问」按钮——与胶囊文案
+    #    「点击填入下方输入框，再点「提问」」本来就说的一致。
+    # AppTest 读的是脚本侧 widget 值，完全看不见这个缺陷（一直是绿的），
+    # 所以本条只能靠真实浏览器门禁兜住。
+    _qa_run = bg_running(kinds={_K_QA})
+    _c_q, _c_go = st.columns([4, 1], vertical_alignment="bottom")
+    with _c_q:
         q = st.text_input("请输入问题", key="qa_input",
                           placeholder="例如：这篇论文提出了什么模型？（支持中文提问，自动做中英检索扩展）")
-        go = st.form_submit_button("提问")
+    with _c_go:
+        go = st.button("提问", key="qa_ask", type="primary", use_container_width=True,
+                       disabled=_qa_run,
+                       help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」")
+    if _qa_run:
+        st.caption("⏳ 正在后台检索并生成答案（进度见左侧「任务中心」）——可随时切换到其他页面。")
 
     # ---------- 检索范围与高级设置（首屏不铺开；功能逐项保留） ----------
     # 顺序说明：范围 / 对比 / 重排的值在下方 `if go` 之前完成计算，提交当轮即可读到，
@@ -375,81 +463,36 @@ def render(ctx):
             icon="💬",
         )
 
+    # 提交了空问题时的显式反馈（2026-10-26 用户缺陷：「点提问也不出结果」）。
+    # 原实现 `if go and q.strip():` 之外没有任何分支——表单提交成功、问题为空时
+    # 页面一个像素都不变，用户完全看不出发生了什么（真机实测：qa_runs 不变、
+    # 无 warning、无 info，纯静默）。配合上面的胶囊复位，这里给出可操作下一步。
+    if go and not q.strip():
+        st.info("还没有输入问题：请在上方输入框写一句，或点上方任意示例问题胶囊"
+                "自动填入内容，再点「提问」。")
+
     if go and q.strip():
         if not getattr(ctx.llm, "available", False):
             st.warning("请先在左侧填入 API Key。")
         else:
-            # 话术 7：静态 spinner 改为「阶段进度 + 流式正文」。
-            # 流式只提前"看到字的时机"，rag.answer 仍照常执行引用校验/净化/修复环；
-            # 因此流式期间明确标注"未校验"，完成后由下方已校验结果覆盖。
-            note_ph = st.empty()
-            stage_ph = st.empty()   # 阶段进度（rag.answer 的 progress 回调驱动）
-            stream_ph = st.empty()  # 流式正文
-            _buf = []
-            _last = [0.0]
-            _t0 = [time.perf_counter()]
-            _ttft = [0.0]           # time to first token
-
-            def _progress(stage):
-                try:
-                    stage_ph.caption(f"⏳ {stage}")
-                except Exception:
-                    pass
-
-            def _on_token(tok):
-                _buf.append(tok)
-                if _ttft[0] == 0.0:
-                    _ttft[0] = time.perf_counter() - _t0[0]
-                    try:
-                        note_ph.caption(
-                            f"✍️ 流式生成中（首字 {_ttft[0]:.1f}s，内容尚未经引用校验，"
-                            f"完成后自动替换为已校验结果）")
-                    except Exception:
-                        pass
-                now = time.perf_counter()
-                if now - _last[0] >= 0.08:   # 节流约 12 帧/秒，避免高频重绘拖慢 UI
-                    _last[0] = now
-                    try:
-                        stream_ph.markdown("".join(_buf) + "▌")
-                    except Exception:
-                        pass
-
+            # 后台化（2026-10-26）：原实现把 rag.answer 跑在主线程 + 内联 st.empty
+            # 流式渲染，单次问答 7～20s（多篇对比 1～2 分钟）整页冻结，期间侧边栏
+            # 导航点击全部排队 ⇒ 用户反馈「切页卡顿、切不出去」。改为 bg_submit
+            # 提交到 services/tasks 线程池：提交后即可自由切页，进度见左侧任务中心，
+            # 完成时由 bg_consume 交付（答案仍然只以**已校验**版本呈现，流式预览的
+            # 那层"未校验占位"随之取消）。
+            _scope_label = (f"单篇：{source_filter}" if source_filter
+                            else ("对比：" + "、".join(compare_papers) if compare_papers
+                                  else "全部文献"))
+            bg_submit(f"跨文献问答：{q.strip()[:24]}",
+                      lambda progress, _q=q.strip(), _sl=_scope_label: _qa_worker(
+                          ctx, _q, _sl, use_rerank, source_filter,
+                          list(compare_papers) or None, progress),
+                      kind=_K_QA)
             try:
-                result = rag.answer(ctx, q.strip(), use_rerank=use_rerank,
-                                    source_filter=source_filter,
-                                    compare_papers=list(compare_papers) or None,
-                                    progress=_progress, on_token=_on_token)
-                if result is not None and _ttft[0]:
-                    result.setdefault("debug", {})["ttft_sec"] = round(_ttft[0], 2)
-            except Exception as e:
-                show_error("生成回答", e)
-                result = None
-            finally:
-                for ph in (note_ph, stage_ph, stream_ph):
-                    try:
-                        ph.empty()
-                    except Exception:
-                        pass
-            if result:
-                st.session_state["qa_runs"].append({
-                    "id": st.session_state["qa_run_seq"],
-                    "q": q.strip(),
-                    "a": result.get("answer", ""),
-                    "sources": result.get("sources", []),
-                    "issues": result.get("issues", []),
-                    "unverified": result.get("unverified", []),
-                    "debug": result.get("debug", {}),
-                    "refused": bool(result.get("refused")),
-                    "top_score": result.get("top_score", 0.0),
-                    "scope": f"单篇：{source_filter}" if source_filter else (
-                        "对比：" + "、".join(compare_papers) if compare_papers else "全部文献"),
-                })
-                st.session_state["qa_run_seq"] += 1
-                # ⚠️ 禁止在这里写 st.session_state["qa_input"]：本轮的 st.text_input
-                # 早已实例化，Streamlit 会抛 WidgetAlreadyInstantiatedError 并把整页
-                # 换成错误卡片（答案流式显示后整页消失）。改为置标记，下一轮开头消费。
-                st.session_state["_qa_need_clear_input"] = True
-                st.rerun()
+                st.toast("💬 已提交到后台生成，可随时切换到其他页面")
+            except Exception:
+                pass
 
     # ---------- 历史问答渲染（答案优先，证据/调试默认折叠，保持界面整洁） ----------
     for run in reversed(st.session_state.get("qa_runs", [])):
