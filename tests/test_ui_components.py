@@ -111,3 +111,24 @@ class TestJumpPayload(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ErrorStateCardTest(unittest.TestCase):
+    """错误态卡片：与空态同骨架、不同语义（「算失败」不能冒充「没算过」）。"""
+
+    def test_error_card_structure(self):
+        from ui.common import _error_state_card_html
+        h = _error_state_card_html("文献解析失败", desc="第 3 页无文本层。",
+                                   hints=["换一份带文本层的 PDF", "或先运行 OCR"])
+        self.assertIn("ai-empty is-error", h)          # 复用空态骨架 + 错误态标记
+        self.assertIn("ai-error-tag", h)
+        self.assertIn("未能完成", h)
+        self.assertIn("第 3 页无文本层", h)
+        self.assertIn("· 换一份带文本层的 PDF", h)      # 怎么办：每条独立成行
+        self.assertNotIn('class="ai-num"', h)          # 错误态不谈"三步教学"，用圆点而非序号
+
+    def test_error_card_empty_hints(self):
+        from ui.common import _error_state_card_html
+        h = _error_state_card_html("生成失败")
+        self.assertIn("is-error", h)
+        self.assertNotIn("·", h)

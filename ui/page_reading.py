@@ -58,6 +58,7 @@ import streamlit as st
 
 from ui.common import (embed_html, page_header, section_header, show_error, empty_state,
                        is_llm_degraded, llm_degraded_banner,
+                       error_state_card,
                        bg_submit, bg_consume, bg_running)
 from ui.sidebar import set_flash
 
@@ -1815,7 +1816,13 @@ def render(ctx):
                         embed_html(bilingual_html(pairs, glossary=_gl_mark),
                                    height=760, scrolling=False)
                     except Exception as e:
-                        st.warning(f"⚠️ 双语视图渲染失败：{str(e)[:160]}")
+                        # 这是「算失败」不是「还没算」：走错误态卡片，别用空态话术冒充
+                        error_state_card(
+                            "双语视图渲染失败",
+                            desc="译文已经拿到，但两栏没能画出来。",
+                            hints=["刷新页面重试一次",
+                                   "仍失败时缩小页码范围（长文档单页过大）",
+                                   "技术细节：%s" % str(e)[:120]])
                 elif (isinstance(_prev_bi, dict)      # rerun 恢复：快照的文档/页码都与当前一致时重渲染
                         and str(_prev_bi.get("doc") or "") == str(doc_id)
                         and int(_prev_bi.get("page", 0) or 0) == int(p2)

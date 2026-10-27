@@ -241,6 +241,21 @@ _COMPONENT_CSS = """<style>
 .ai-empty-hint{                 /* 空状态引导行（会出现什么 / 下一步点哪里 / 口径边界） */
   font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--c-text-2);
 }
+/* 错误态卡片：与空态同一骨架、**不同的左标与徽标**。
+   刻意不引入语义红：全站只有强调蓝一种彩色是纪律，红色只留给 Streamlit 自己的
+   st.error/warning 语义条。这里靠「灰左标 + 未能完成徽标 + 怎么办三行」把
+   「算失败了」和「还没算过」在结构上分开，而不是靠再加一种颜色。 */
+.ai-empty.is-error{             /* 整块内容区计算失败的落点（区别于空态的教学卡） */
+  border-left:3px solid var(--c-border-strong);
+}
+.ai-error-tag{                  /* 「未能完成」徽标：小号、描边、不与标题争层级。
+                                   不给圆角：全站圆角收敛集合只认 --r 一档，
+                                   徽标是纯文字标签，直角反而更像"状态戳"。 */
+  display:inline-block;margin-left:var(--s-2);
+  font-size:var(--fs-micro);line-height:var(--lh-micro);font-weight:400;
+  color:var(--c-text-2);border:1px solid var(--c-border);
+  padding:0 var(--s-1);
+}
 .ai-muted{                      /* 次级文字：解释性、补充说明性内容 */
   color:var(--c-text-2);
 }
@@ -1140,6 +1155,45 @@ def empty_state_card(title: str, desc: str = "", actions=(), icon: str = "🧭",
     _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
     st.markdown(_empty_state_card_html(title, desc=desc, actions=actions,
                                        icon=icon, footer=footer),
+                unsafe_allow_html=True)
+
+
+def _error_state_card_html(title: str, desc: str = "", hints=(), icon: str = "❌",
+                           tag: str = "未能完成") -> str:
+    """错误态卡片 HTML（纯函数）：与空态同骨架，靠左标与徽标区分。
+
+    为什么不另起一套样式：空态与错误态在版式上是同类物件（占位一块内容区），
+    差别只有语义。复用 `.ai-empty` 能保证两者在 9 页里尺寸、圆角、内边距完全一致，
+    「未算过」与「算失败」只差左标颜色（强调蓝 vs 中性深灰）和一枚徽标。
+    """
+    _ensure_tokens()
+    _desc_html = ("" if not str(desc or "").strip() else
+                  '<div class="ai-empty-hint" style="margin-top:var(--s-1);line-height:1.75;">%s</div>'
+                  % _esc(desc))
+    _hint_html = "".join(
+        '<div class="ai-empty-hint" style="margin-top:var(--s-1);line-height:1.7;">· %s</div>'
+        % _esc(str(h)) for h in (hints or ()) if str(h).strip())
+    _tag_html = ("<span class=\"ai-error-tag\">%s</span>" % _esc(tag)) if str(tag or "").strip() else ""
+    return (
+        '<div class="ai-empty is-error">'
+        '<div class="ai-empty-title">%s %s%s</div>'
+        '%s%s</div>'
+        % (_esc(icon), _esc(title), _tag_html, _desc_html, _hint_html))
+
+
+def error_state_card(title: str, desc: str = "", hints=(), icon: str = "❌",
+                     tag: str = "未能完成"):
+    """整块内容区计算失败时的落地卡片（st.* 包装，见 _error_state_card_html）。
+
+    与 empty_state_card 的分工（两者不可混用，混用等于告诉用户"这里什么都没有"，
+    而实际上是我们算失败）：
+      · empty_state_card：还没有执行过 → 教学三步（会出现什么 / 点哪里 / 口径边界）；
+      · error_state_card：执行过但失败 → 失败原因 + 怎么办，不冒充空态。
+    红色只留给 Streamlit 的 st.error/warning 语义条，本卡片不引入第二色彩。
+    """
+    _ensure_tokens()
+    _inject_css_once(_COMPONENT_CSS, _CSS_FLAG_COMPONENT)
+    st.markdown(_error_state_card_html(title, desc=desc, hints=hints, icon=icon, tag=tag),
                 unsafe_allow_html=True)
 
 
