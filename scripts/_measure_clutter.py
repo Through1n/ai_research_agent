@@ -4,15 +4,35 @@
 不进 scrollHeight，屏数会把「塞在小折叠里的 12 张卡片」和「首屏平铺 4 个区块」
 算成同一个数——实测改版前后 p1_library 屏数只差 0.3，但平铺区块数差 4 倍。
 
-本脚本量的四件事（全部只取**用户可见**的元素：display/visibility/opacity 不过滤）：
+本脚本量的四件事（全部只取**用户可见**的元素）：
     1. 可见元素总数      —— 密度直觉
     2. 可见文字字符数    —— 信息量
     3. 色块数（stAlert 等有底色的容器）—— 视觉噪音源
     4. 交互控件数（按钮/输入框/胶囊/折叠区）—— 操作噪音源
 
+「可见」的判据（2026-10-27 重写，此前只看元素自身 rect，会大幅虚高）：
+  · display/visibility/opacity 消失的不算；
+  · `closest('details:not([open])')` 非空的不算 —— Streamlit 1.63 把折叠内容渲染成
+    `<details>` 子节点，收起时**布局盒子照旧存在**（实测 stExpanderDetails 1024×1162），
+    只是不绘制。旧口径把「默认收起的两块输入框」当成首屏控件，检索页被估成 20 控件，
+    截图里其实只有 4 个；
+  · 祖先 `overflow:hidden/clip` 且元素整个落在其盒子外的不算（`auto/scroll` 不算，
+    滚动能到的内容仍然可见）。
+四件事都只取 stMain 里面，侧栏单独量。
+
+实测基线（2026-10-27，1440×900，无外网，元素数）：
+    p0_agent 83 / p1_library 108 / p2_qa 84 / p3_reading 112 /
+    p4_search 60 / p5_graph 76 / p6_writing 103
+    最密的三处（页签口径见 --tabs）：p1「文献库」161（篇目表）/
+    p3「引用跳转」140 / p4「订阅与推荐」119。数字带日期，改版后要重录。
+
 用法：
-    python scripts/_measure_clutter.py --port 8512 --serve
+    python scripts/_measure_clutter.py --port 8651                # 首屏口径
+    python scripts/_measure_clutter.py --port 8651 --tabs         # 再加各页签视图
+    python scripts/_measure_clutter.py --port 8651 --tabs --out 资料/_构建/clutter.json
 """
+
+
 import argparse
 import json
 import subprocess
@@ -43,7 +63,29 @@ PROBE = r"""
     const s = getComputedStyle(el);
     if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
     const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
+    if (!(r.width > 0 && r.height > 0)) return false;
+    // 默认收起的折叠区内容不算可见（2026-10-27 修）。Streamlit 1.63 把折叠内容渲染成
+    // `<details>` 的子节点，`open=false` 时**布局盒子照旧存在**（实测 stExpanderDetails
+    // 1024×1162、子控件 rect 正常），只是不绘制。只看 rect 会把「默认收起的两块数据源
+    // 输入框」当成首屏可见控件（检索页被估成 20 个控件，截图里其实只有 4 个）。
+    // 这条也只能靠浏览器：AppTest / 静态扫描都看不见"展开态"。
+    if (el.closest('details:not([open])')) return false;
+    // 祖先被裁掉也算不可见：遇到 overflow:hidden/clip 且元素整个落在它的盒子之外。
+    // 只认 hidden/clip —— overflow:auto/scroll 是滚动容器，滚动能到的内容算可见。
+    let a = el.parentElement, guard = 0;
+    while (a && a !== document.body && guard++ < 48) {
+      const as = getComputedStyle(a);
+      if (as.display === 'none' || as.visibility === 'hidden') return false;
+      const clips = as.overflowY === 'hidden' || as.overflowY === 'clip'
+                 || as.overflow === 'hidden' || as.overflow === 'clip';
+      if (clips) {
+        const ar = a.getBoundingClientRect();
+        if (ar.height <= 0) return false;
+        if (r.bottom <= ar.top + 1 || r.top >= ar.bottom - 1) return false;
+      }
+      a = a.parentElement;
+    }
+    return true;
   };
   const all = Array.from(main.querySelectorAll('*'));
   const shown = all.filter(vis);
@@ -103,6 +145,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8512)
     ap.add_argument("--out", default="")
+    ap.add_argument("--tabs", action="store_true",
+                    help="额外逐个点开页签再量一遍（口径覆盖「切到该页签后的视图」）")
     args = ap.parse_args()
 
     proc = None
@@ -142,6 +186,28 @@ def main():
                 print(f"  {slug:12} 元素={m['elements']:5d} 文字={m['chars']:6d} "
                       f"色块={m['blocks']:3d} 控件={m['controls']:3d} "
                       f"侧栏项={m['sideItems']:3d} 侧栏emoji={m['sideEmoji']:3d}")
+                # 页签口径：st.tabs 的切换是纯前端，各面板都在 DOM 里、非当前页签被
+                # display:none 藏掉；PROBE 的 vis() 已按可见性过滤，所以点一下再量
+                # 得到的就是「切到这个页签时用户看到的密度」。不点就永远是首屏那一格。
+                if not args.tabs:
+                    continue
+                tabs = page.locator('[data-testid="stMain"] [role="tab"]')
+                n_tab = tabs.count()
+                for ti in range(n_tab):
+                    try:
+                        name = tabs.nth(ti).inner_text().strip()
+                        if not name:
+                            continue
+                        tabs.nth(ti).click(timeout=8000)
+                        page.wait_for_timeout(600)
+                        mt = page.evaluate(PROBE)
+                    except Exception as exc:
+                        print(f"    [WARN] 页签 {ti} 切换失败：{type(exc).__name__}")
+                        continue
+                    mt["page"] = f"{slug}/{name}"
+                    rows.append(mt)
+                    print(f"    └ {name:14} 元素={mt['elements']:5d} 文字={mt['chars']:6d} "
+                          f"色块={mt['blocks']:3d} 控件={mt['controls']:3d}")
             b.close()
         if args.out:
             out = ROOT / args.out
