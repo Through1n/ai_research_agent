@@ -223,7 +223,14 @@ TOKENS_CSS = r"""
 
   /* 布局 */
   --layout-max:1280px;                   /* 主区最大宽度 */
-  --col-basis:280px;                     /* 列的最小基准宽度（低于此值触发换行） */
+  --col-basis:200px;                     /* 列的最小基准宽度（低于此值触发换行）。
+                                            2026-10-27 从 280 降到 200：问答页用
+                                            st.columns([4,1]) 放「输入框 + 提问按钮」，
+                                            1/5 列按 basis 只有 ~236px，被 280 的下限抬到
+                                            280 后，947+280+16 超出 1200 容器宽 ⇒ flex-wrap
+                                            把按钮挤到下一行、撑成整条通栏（实测 1200px 宽、
+                                            按钮 x=350 w=1200）。整份三／二等分列的 basis
+                                            都在 373 以上，降这个下限不影响它们。 */
   --header-h:60px;                       /* stHeader 实测高度，用于顶部让位 */
   --pad-top:32px; --pad-x:40px; --pad-bottom:48px;   /* ≥1200px 档 */
 }
@@ -483,12 +490,22 @@ textarea{
 }
 /* 卡片头行：卡片内第一个元素（通常是 section_header 标题）与正文之间拉一条分隔线，
    形成 Element Card header / body 的结构感——否则卡片只是"有个框"，内部仍是一堆平铺。
+   ⚠️ 2026-10-27 真机实测：卡片的**直接子元素就是 stElementContainer**，中间并没有
+   再套一层 stVerticalBlock。旧规则多写了一级 `> [data-testid="stVerticalBlock"]`，
+   于是从未匹配成功——肉眼以为有分隔线，其实是 .ai-section 的上边距在视觉上分开的。
    只作用于 card 前缀的卡片，不影响其它容器。 */
 [data-testid="stVerticalBlock"][class*="st-key-card"]
-  > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:first-child{
+  > [data-testid="stElementContainer"]:first-child{
   border-bottom:1px solid var(--c-border);
   padding-bottom:var(--s-3);
   margin-bottom:var(--s-3);
+}
+/* 卡内首块的分区标题：区块上边距归零。
+   .ai-section 默认带上间距（给"页面内相邻区块拉开节奏"用），放进卡片就是重复留白——
+   卡片 padding 已经给了呼吸，再叠一次会让标题悬在卡片中间，头行也离顶边太远。 */
+[data-testid="stVerticalBlock"][class*="st-key-card"]
+  > [data-testid="stElementContainer"]:first-child .ai-section{
+  margin-top:0;
 }
 [data-testid="stExpander"]{box-shadow:none; min-width:0;}
 [data-testid="stExpander"] details,
