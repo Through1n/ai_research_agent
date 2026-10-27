@@ -753,12 +753,18 @@ def render(ctx):
                 "先写正文框架（References 白名单校验），CSV 出图、拓扑图与翻译收在下方页签。")
     # 首屏信息预算（2026-10-25 降杂乱）：只铺「写作主操作」一块——输入 Idea + 生成按钮；
     # 其余三类工具收进 tabs，同一时刻只展开一类，避免 4 个同级区块并列铺满第一屏。
-    _outline_section(ctx)
+    # 每个 section 首元素都是 section_header，套一层 card 容器后 CSS 会给它拉头行分隔线
+    # （design.py「卡片头行」规则），四块工具于是各有 header / body 结构。
+    with st.container(border=True, key="card18"):
+        _outline_section(ctx)
     _t_csv, _t_dia, _t_tr = st.tabs(["CSV 自动出图", "架构拓扑图", "学术翻译"],
                                     key="writing_tools_tabs")
     with _t_csv:
-        _csv_section(ctx)
+        with st.container(border=True, key="card19"):
+            _csv_section(ctx)
     with _t_dia:
-        _diagram_section(ctx)
+        with st.container(border=True, key="card20"):
+            _diagram_section(ctx)
     with _t_tr:
-        _translate_section(ctx)
+        with st.container(border=True, key="card21"):
+            _translate_section(ctx)

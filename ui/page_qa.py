@@ -391,15 +391,6 @@ def render(ctx):
     # key，实例化前写入即默认值），不变化就不写——防止用户手改输入框后被选中态覆盖。
     # 说明：点击仅「填入」输入框（与改造前示例按钮语义一致），需用户再点「提问」才真正
     # 发起检索——避免误触就直接打真实模型。
-    _sel = st.pills("试试这些问题（点击填入下方输入框，再点「提问」）",
-                    EX, key="qa_ex_pills", selection_mode="single", default=None)
-    if _sel:
-        _val = _sel if isinstance(_sel, str) else (_sel[0] if _sel else "")
-        if _val and _val != st.session_state.get("_qa_ex_prev"):
-            st.session_state["qa_q"] = _val
-            st.session_state["qa_input"] = _val   # 输入框显式 key：实例化前写入即默认值
-            st.session_state["_qa_ex_prev"] = _val   # 影子键：非 widget key，可安全写
-
     # ---------- 主操作区：问题输入 + 提交（首屏第一视线） ----------
     # ⚠️ 这里**不能**用 st.form（2026-10-26 真机最小复现的结论，见
     #    scripts/_tmp_form_probe.py 与 scripts/_probe_qa_reclick.py）：
@@ -412,17 +403,29 @@ def render(ctx):
     #    「点击填入下方输入框，再点「提问」」本来就说的一致。
     # AppTest 读的是脚本侧 widget 值，完全看不见这个缺陷（一直是绿的），
     # 所以本条只能靠真实浏览器门禁兜住。
-    _qa_run = bg_running(kinds={_K_QA})
-    _c_q, _c_go = st.columns([4, 1], vertical_alignment="bottom")
-    with _c_q:
-        q = st.text_input("请输入问题", key="qa_input",
-                          placeholder="例如：这篇论文提出了什么模型？（支持中文提问，自动做中英检索扩展）")
-    with _c_go:
-        go = st.button("提问", key="qa_ask", type="primary", use_container_width=True,
-                       disabled=_qa_run,
-                       help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」")
-    if _qa_run:
-        st.caption("⏳ 正在后台检索并生成答案（进度见左侧「任务中心」）——可随时切换到其他页面。")
+    # 卡片：示例胶囊 + 输入框 + 提交按钮属于同一次「提问」动作，包成一张卡，
+    # 否则三者在页面上是散落的控件，与下方答案区（card10）也不成体系。
+    with st.container(border=True, key="card22"):
+        _sel = st.pills("试试这些问题（点击填入下方输入框，再点「提问」）",
+                        EX, key="qa_ex_pills", selection_mode="single", default=None)
+        if _sel:
+            _val = _sel if isinstance(_sel, str) else (_sel[0] if _sel else "")
+            if _val and _val != st.session_state.get("_qa_ex_prev"):
+                st.session_state["qa_q"] = _val
+                st.session_state["qa_input"] = _val   # 输入框显式 key：实例化前写入即默认值
+                st.session_state["_qa_ex_prev"] = _val   # 影子键：非 widget key，可安全写
+
+        _qa_run = bg_running(kinds={_K_QA})
+        _c_q, _c_go = st.columns([4, 1], vertical_alignment="bottom")
+        with _c_q:
+            q = st.text_input("请输入问题", key="qa_input",
+                              placeholder="例如：这篇论文提出了什么模型？（支持中文提问，自动做中英检索扩展）")
+        with _c_go:
+            go = st.button("提问", key="qa_ask", type="primary", use_container_width=True,
+                           disabled=_qa_run,
+                           help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」")
+        if _qa_run:
+            st.caption("⏳ 正在后台检索并生成答案（进度见左侧「任务中心」）——可随时切换到其他页面。")
 
     # ---------- 检索范围与高级设置（首屏不铺开；功能逐项保留） ----------
     # 顺序说明：范围 / 对比 / 重排的值在下方 `if go` 之前完成计算，提交当轮即可读到，

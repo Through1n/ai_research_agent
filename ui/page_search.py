@@ -246,50 +246,56 @@ def _consume_track(kind, t):
 # ============================ 页面各区（提交闸门 + 结果渲染） ============================
 
 def _arxiv(ctx):
-    section_header("arXiv 检索 / 下载")
-    q = st.text_input("标题 / 关键词 / ID", key="aq")
+    # 搜索区与结果区拆成两张卡：卡片的意义是「一个区块一件事」。把结果列表塞进
+    # 搜索卡的 body 里，卡片会随结果条数无限拉长，头行分隔线也就失去分区作用了。
     _running = bg_running(kinds={_K_ARXIV})
-    if st.button("搜索 arXiv", disabled=_running,
-                 help="后台检索：提交后可切换其他页面，实时进度见左侧「任务中心」"):
-        if not (q or "").strip():
-            st.warning("⚠️ 请先输入标题、关键词或 arXiv ID。")
-        else:
-            bg_submit("arXiv 检索：" + q.strip()[:40],
-                      lambda progress, _q=q.strip(): _w_arxiv_search(_q, progress),
-                      kind=_K_ARXIV)
-            _toast("🔍 已转入后台检索，可切换其他页面")
-    if _running:
-        st.caption("⏳ arXiv 检索正在后台运行（实时进度见左侧「任务中心」）——"
-                   "可切换其他页面，完成后结果自动出现在本页。")
+    with st.container(border=True, key="card13"):
+        section_header("arXiv 检索 / 下载")
+        q = st.text_input("标题 / 关键词 / ID", key="aq")
+        if st.button("搜索 arXiv", disabled=_running,
+                     help="后台检索：提交后可切换其他页面，实时进度见左侧「任务中心」"):
+            if not (q or "").strip():
+                st.warning("⚠️ 请先输入标题、关键词或 arXiv ID。")
+            else:
+                bg_submit("arXiv 检索：" + q.strip()[:40],
+                          lambda progress, _q=q.strip(): _w_arxiv_search(_q, progress),
+                          kind=_K_ARXIV)
+                _toast("🔍 已转入后台检索，可切换其他页面")
+        if _running:
+            st.caption("⏳ arXiv 检索正在后台运行（实时进度见左侧「任务中心」）——"
+                       "可切换其他页面，完成后结果自动出现在本页。")
 
     res = st.session_state.get("arxiv_res") or []
-    if st.session_state.get("arxiv_searched") and not res:
-        empty_state("arXiv 未返回任何结果。",
-                    hints=["换个更宽泛的关键词（如 transformer）",
-                           "直接输入 arXiv ID（如 1706.03762）", _SEARCH_DEMO_HINT])
-    for i, p in enumerate(res):
-        if not isinstance(p, dict):
-            continue
-        st.markdown(f"**{i+1}. {p.get('title','(无标题)')}**（{p.get('published','')}，{p.get('arxiv_id','')}）")
-        long_block(p.get("summary", ""), title=f"摘要 · {p.get('arxiv_id','')}", limit=160)
-        if p.get("github"):
-            st.markdown("💻 开源代码：" + str(p["github"][0]))
-        key = str(p.get("id") or p.get("arxiv_id") or i)
-        _ing = bg_running(kinds={_K_INGEST})
-        if st.button("⬇️ 下载并入库", key=f"ad_{key}", disabled=_ing,
-                     help="后台下载：提交后可切换其他页面，进度见左侧「任务中心」"):
-            bg_submit("下载入库：" + str(p.get("title") or "")[:40],
-                      lambda progress, _p=p: _w_ingest(ctx, _p, progress),
-                      kind=_K_INGEST, goal=key)
-            _toast("⬇️ 已转入后台下载，可切换其他页面")
-        # 该篇的入库结果：后台交付写入，渲染在按钮下方（与原内联同位置）
-        _st = (st.session_state.get("ingest_status") or {}).get(key)
-        if _st:
-            _lvl, _msg = _st
-            {"success": st.success, "warning": st.warning}.get(_lvl, st.error)(_msg)
-    if bg_running(kinds={_K_INGEST}):
-        st.caption("⏳ 下载入库任务正在后台运行（实时进度见左侧「任务中心」）——"
-                   "可切换其他页面，完成后结果自动出现在对应论文下方。")
+    if st.session_state.get("arxiv_searched") or res:
+        with st.container(border=True, key="card14"):
+            section_header("检索结果")
+            if st.session_state.get("arxiv_searched") and not res:
+                empty_state("arXiv 未返回任何结果。",
+                            hints=["换个更宽泛的关键词（如 transformer）",
+                                   "直接输入 arXiv ID（如 1706.03762）", _SEARCH_DEMO_HINT])
+            for i, p in enumerate(res):
+                if not isinstance(p, dict):
+                    continue
+                st.markdown(f"**{i+1}. {p.get('title','(无标题)')}**（{p.get('published','')}，{p.get('arxiv_id','')}）")
+                long_block(p.get("summary", ""), title=f"摘要 · {p.get('arxiv_id','')}", limit=160)
+                if p.get("github"):
+                    st.markdown("💻 开源代码：" + str(p["github"][0]))
+                key = str(p.get("id") or p.get("arxiv_id") or i)
+                _ing = bg_running(kinds={_K_INGEST})
+                if st.button("⬇️ 下载并入库", key=f"ad_{key}", disabled=_ing,
+                             help="后台下载：提交后可切换其他页面，进度见左侧「任务中心」"):
+                    bg_submit("下载入库：" + str(p.get("title") or "")[:40],
+                              lambda progress, _p=p: _w_ingest(ctx, _p, progress),
+                              kind=_K_INGEST, goal=key)
+                    _toast("⬇️ 已转入后台下载，可切换其他页面")
+                # 该篇的入库结果：后台交付写入，渲染在按钮下方（与原内联同位置）
+                _st = (st.session_state.get("ingest_status") or {}).get(key)
+                if _st:
+                    _lvl, _msg = _st
+                    {"success": st.success, "warning": st.warning}.get(_lvl, st.error)(_msg)
+            if bg_running(kinds={_K_INGEST}):
+                st.caption("⏳ 下载入库任务正在后台运行（实时进度见左侧「任务中心」）——"
+                           "可切换其他页面，完成后结果自动出现在对应论文下方。")
 
 
 def _batch(ctx):
@@ -626,19 +632,24 @@ def render(ctx):
                                                key="search_tab")
 
     with tab_sub:
-        section_header("动态追踪订阅")
-        try:
-            _track(ctx)
-        except Exception as e:
-            show_error("渲染「动态追踪」区块", e)
-            st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
+        # 一块功能一张卡：卡内首个元素是 section_header，CSS 会给它拉一条头行分隔线
+        # （design.py 的「卡片头行」规则），于是每张卡都有明确的 header / body 结构，
+        # 而不是一堆控件平铺在同一张底上。
+        with st.container(border=True, key="card15"):
+            section_header("动态追踪订阅")
+            try:
+                _track(ctx)
+            except Exception as e:
+                show_error("渲染「动态追踪」区块", e)
+                st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
 
-        section_header("个性化推荐")
-        try:
-            _recommend(ctx)
-        except Exception as e:
-            show_error("渲染「个性化推荐」区块", e)
-            st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
+        with st.container(border=True, key="card16"):
+            section_header("个性化推荐")
+            try:
+                _recommend(ctx)
+            except Exception as e:
+                show_error("渲染「个性化推荐」区块", e)
+                st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
 
     with tab_search:
         # 首屏只留一个主输入（arXiv）；PubMed / 网页搜索与批量抓取收进折叠区，
@@ -664,8 +675,10 @@ def render(ctx):
                 st.caption("🛠️ 怎么办：其余检索模块不受影响，可继续使用。")
 
     with tab_quality:
-        try:
-            _quality(ctx)
-        except Exception as e:
-            show_error("渲染「引用含金量」区块", e)
-            st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
+        with st.container(border=True, key="card17"):
+            section_header("引用含金量")
+            try:
+                _quality(ctx)
+            except Exception as e:
+                show_error("渲染「引用含金量」区块", e)
+                st.caption("🛠️ 怎么办：其余模块不受影响，可继续使用。")
