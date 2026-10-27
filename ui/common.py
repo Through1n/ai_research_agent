@@ -1291,12 +1291,15 @@ def _render_task_result(t):
     return True
 
 
-def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
+def render_task_panel(tasks_mod, on_finish=None, expanded_max=3, show_recent=True):
     """后台任务面板：运行中的任务显示当前节点与已耗时，完成后交 on_finish 消费。
 
     tasks_mod: services.tasks 模块（由调用方传入，避免本模块顶层依赖）。
     on_finish: 可选回调 fn(task_dict)，任务完成后第一次渲染时在主线程内调用
                （可安全写 session_state）；调用后该任务被标记 consumed 不再重复。
+    show_recent: 是否展示已完成/失败的历史卡片。录制演示素材时置 False：
+               任务表是进程级共享的，历史卡会把前一段刚跑完的任务堆在侧栏，
+               既杂乱、又会提前剧透后几段要讲的功能。
     使用 st.fragment 每 2 秒自动刷新；fragment 内不调用 st.rerun，避免整页抖动。
     """
     try:
@@ -1308,7 +1311,26 @@ def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
     def _panel():
         snaps = tasks_mod.snapshot()
         active = [t for t in snaps if t["state"] in ("pending", "running")]
-        recent = [t for t in snaps if t["state"] in ("done", "error")][:expanded_max]
+        done = [t for t in snaps if t["state"] in ("done", "error")]
+        # 「完成即整页重绘」必须与「是否展示历史卡」解耦。
+        # 板块 1-6（非 agent）任务：完成/失败都触发一次整页重绘，让提交页的
+        # bg_consume 当场交付结果——否则用户提交后没有其他交互，页面主体会一直
+        # 停在旧状态，只有侧边栏进度在跳。每任务仅一次（tid 先进 seen），
+        # RerunException 继承 BaseException，不会被外层的 except Exception 吞掉
+        # （2026-10-22 实证 MRO）。
+        # ⚠️ 2026-10-27 教训：这段原先写在 `for t in recent` 里，于是 show_recent=False
+        #    （录制素材时不想让历史卡刷屏）连重绘一起关掉了 —— 表现是任务确实跑完了，
+        #    页面却一直不出结果（检索 / Figure Caption 各白等 200s）。
+        for t in done:
+            tid = t["id"]
+            if (t.get("kind") != "agent" and not t.get("consumed")
+                    and tid not in _task_id_set(_SEEN_TASKS_KEY)):
+                _task_id_set(_SEEN_TASKS_KEY).add(tid)
+                try:
+                    st.rerun(scope="app")
+                except Exception:
+                    pass
+        recent = done[:expanded_max] if show_recent else []
         if not active and not recent:
             return
         if active:
@@ -1330,17 +1352,6 @@ def render_task_panel(tasks_mod, on_finish=None, expanded_max=3):
             label = f"{icon} {t['name']} — {t['stage']}" + (f"（用时 {used}）" if used else "")
             tid = t["id"]
             fresh = not t.get("consumed")
-            # 板块 1-6（非 agent）任务：完成/失败都触发一次整页重绘，让提交页的
-            # bg_consume 当场交付结果——否则用户提交后没有其他交互，页面主体会
-            # 一直停在旧状态，只有侧边栏进度在跳。每任务仅一次（tid 先进 seen），
-            # RerunException 继承 BaseException，不会被 render_task_panel 外层的
-            # except Exception 吞掉（2026-10-22 实证 MRO）。
-            if t.get("kind") != "agent" and fresh and tid not in _task_id_set(_SEEN_TASKS_KEY):
-                _task_id_set(_SEEN_TASKS_KEY).add(tid)
-                try:
-                    st.rerun(scope="app")
-                except Exception:
-                    pass
             if t["state"] == "error":
                 with st.expander(label):
                     st.caption("失败原因：" + str(t.get("error", ""))[:200])

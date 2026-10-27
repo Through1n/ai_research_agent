@@ -530,7 +530,11 @@ def render(ctx):
                     return True
                 return False
 
-            render_task_panel(_tasks, on_finish=_consume_task)
+            # 录制演示素材时（MOREHAND_RECMODE=1）只显示运行中的任务：
+            # 任务表是进程级共享的，历史卡会把前面段落跑完的任务堆在侧栏，
+            # 成片里既杂乱、也提前剧透后几段的功能。
+            render_task_panel(_tasks, on_finish=_consume_task,
+                              show_recent=not os.environ.get("MOREHAND_RECMODE"))
         except Exception:
             pass
 

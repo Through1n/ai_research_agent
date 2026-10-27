@@ -1464,6 +1464,9 @@ def _resolve_doc(ctx, prefer=None):
     idx = 1 if files else 0
     if prefer and prefer in sel_opts:
         idx = sel_opts.index(prefer)
+    # 注意：选项表首项是空占位（"Choose an option"），所以 idx 必须从 1 开始。
+    # 不要在这里"兜底强制选中第一篇"——那会让用户永远清不掉选择（2026-10-27 试过，
+    # 实测副作用大于收益：录制脚本取错索引才是当时的真因）。
     try:
         sel = st.selectbox("从文献库选择", sel_opts, index=idx, key="read_sel")
     except Exception:
