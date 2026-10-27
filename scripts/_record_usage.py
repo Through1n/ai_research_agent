@@ -305,27 +305,55 @@ def do_read(pg):
     if t:
         click_el(pg, t, wait=1.6)
     time.sleep(1.0)
+    # 点击前的 iframe 指纹（"top:height"）：后面判断"哪个 iframe 是这次新出来的"要用。
+    # 放在 if 外面，按钮没找到时也有值（空列表），不会 NameError。
+    _before = pg.evaluate(
+        "() => [...document.querySelectorAll('[data-testid=\"stMain\"] iframe')]"
+        ".map(f => Math.round(f.getBoundingClientRect().top) + ':'"
+        " + Math.round(f.getBoundingClientRect().height))")
     btn = main_btn(pg, "加载并逐段翻译")
     if btn:
         click_el(pg, btn, wait=1.0, settle_timeout=60)
-        # 等待串必须是**只属于结果区**的文字：页面副标题就写着「原生版式渲染 ·
-        # 中英对照 · …」（page_reading.py:1586），用「中英对照」判完成会从页面加载
-        # 那一刻起就恒为 True —— 录到的是「逐段翻译 5/16」的进行中画面。
-        print("   逐段翻译=%s" % wait_text(pg, "句级联动", 300), flush=True)
+        # 等**新出现的高 iframe**，不猜文案、也不假设 iframe 只有一个：
+        # ① 文案会骗人 —— 原等待串「句级联动」被同日加上的卡片描述
+        #    「…中英对照（句级联动 · 左右同步滚动）」命中，从页面加载那刻就恒真；
+        # ② 数量也会骗人 —— st.tabs 的各面板都在 DOM 里，切到「中英同步滚动」后
+        #    「原生渲染」那一页的 900px iframe 仍然存在，数个数同样会瞬间满足。
+        # 所以取点击前的 iframe 指纹，等一个**新的、高度 >700** 的 iframe 出现。
+        try:
+            pg.wait_for_function(
+                "(pre) => {"
+                "  const fs = [...document.querySelectorAll('[data-testid=\"stMain\"] iframe')];"
+                "  return fs.some(f => {"
+                "    const r = f.getBoundingClientRect();"
+                "    const k = Math.round(r.top) + ':' + Math.round(r.height);"
+                "    return !pre.includes(k) && r.height > 700;"
+                "  });"
+                "}", arg=_before, timeout=300000)
+        except Exception:
+            print("   !! 双栏 iframe 300s 未出现", flush=True)
         _settle(pg, 3.0, 300)
-    # ⚠️ 双栏正文在 components.v1.html 的 iframe 里。按文本（「中英对照」/「句级联动」）
-    #    猜位置都不可靠：前者会命中页面副标题（page_reading.py:1586）把页面滚回顶部，
-    #    后者只把标题滚到视口边缘、iframe 仍在下方。直接读 iframe 的实际坐标来滚。
+    # ⚠️ 双栏正文在 iframe 里，而 st.tabs 的每个面板都留在 DOM 中：切到「中英同步滚动」
+    #    之后，「原生渲染」那一页的 900px iframe 依然存在，且排在前面。按"第一个高的"
+    #    取会滚到原生版面去（2026-10-27 第二次录制就是这么录错的，双栏窗口里全是控件）。
+    #    取**点击后新出现的那个**（不在 _before 指纹里、高度 >700）；取不到才退回最后一个。
     try:
-        frames = pg.locator('[data-testid="stMain"] iframe')
-        target = None
-        for i in range(frames.count()):
-            b = frames.nth(i).bounding_box()
-            if b and b.get("height", 0) > 260:      # 双栏 iframe 才有这个高度
-                target = b
-                break
-        if target:
-            dy = int(target["y"] - 110)
+        info = pg.evaluate(
+            "(pre) => {"
+            "  const fs = [...document.querySelectorAll('[data-testid=\"stMain\"] iframe')];"
+            "  const fresh = fs.filter(f => {"
+            "    const r = f.getBoundingClientRect();"
+            "    const k = Math.round(r.top) + ':' + Math.round(r.height);"
+            "    return !pre.includes(k) && r.height > 700;"
+            "  });"
+            "  const pick = fresh.length ? fresh[fresh.length - 1]"
+            "                    : fs.filter(f => f.getBoundingClientRect().height > 700).pop();"
+            "  if (!pick) return null;"
+            "  const r = pick.getBoundingClientRect();"
+            "  return {y: r.top + window.scrollY, h: r.height};"
+            "}", arg=_before)
+        if info and info.get("h", 0) > 700:
+            dy = int(info["y"] - 110)
             if dy > 0:
                 pg.mouse.wheel(0, dy)
         else:

@@ -40,8 +40,8 @@ def ck(name, ok, detail=""):
     return ok
 
 
-def probe():
-    r = subprocess.run([FF, "-hide_banner", "-i", str(VIDEO)],
+def probe(path):
+    r = subprocess.run([FF, "-hide_banner", "-i", str(path)],
                        capture_output=True, text=True)
     err = r.stderr
     dur = re.search(r"Duration: (\d+):(\d+):([\d.]+)", err)
@@ -58,9 +58,9 @@ def probe():
     }
 
 
-def ass_rows():
+def ass_rows(path):
     rows = []
-    for line in ASS.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if not line.startswith("Dialogue:"):
             continue
         p = line.split(",", 9)
@@ -84,22 +84,32 @@ def expected_text():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dump", action="store_true")
+    ap.add_argument("--file", default="",
+                    help="要校验的 mp4（默认 资料/演示视频.mp4）。"
+                         "换交付物后必须带这个参数，否则校验的仍是旧片")
     args = ap.parse_args()
 
-    if not VIDEO.exists():
-        print(f"FAIL 视频不存在：{VIDEO}")
+    video = ROOT / args.file if args.file else VIDEO
+    # 字幕默认找视频同名的 .ass；找不到就退回构建目录里的那份（字幕是烧进画面的，
+    # 交付目录并不一定有同名文件 —— 旧校验器因此对新交付物一律 FAIL）。
+    ass_path = video.with_suffix(".ass")
+    if not ass_path.exists():
+        ass_path = ASS
+
+    if not video.exists():
+        print(f"FAIL 视频不存在：{video}")
         return 1
-    if not ASS.exists():
-        print(f"FAIL 字幕不存在：{ASS}")
+    if not ass_path.exists():
+        print(f"FAIL 字幕不存在：{ass_path}")
         return 1
 
-    info = probe()
+    info = probe(video)
     print("① 容器：", info)
     ck("分辨率 1920x1080", (info["w"], info["h"]) == (1920, 1080))
     ck("帧率 30fps", abs(info["fps"] - 30) < 0.5, f"{info['fps']}")
     ck("含 AAC 音轨（原声已挂上）", info["audio"])
 
-    rows = ass_rows()
+    rows = ass_rows(ass_path)
     print(f"② 字幕：{len(rows)} 条")
     got = re.sub(r"\s+", "", "".join(r[2].replace("\\N", "") for r in rows))
     exp = expected_text()
@@ -129,8 +139,18 @@ def main():
        spans[-1][1] <= info["dur"] + 0.01, f"{spans[-1][1]:.2f} / 视频 {info['dur']:.2f}s")
 
     print("③ 画面覆盖")
-    ck("时长 3–4 分钟（本片为 3:10 原声 + 尾部卡）",
-       180 <= info["dur"] <= 240, f"{info['dur']:.1f}s")
+    # 时长不再写死「3–4 分钟」——那是静态截图版（3:10 原声）的数值，真实使用版按
+    # 旁白句数重剪成 2'56"，硬编码会把交付的新片判成 FAIL。
+    # 改成区间式：旁白必须整条装进片子（差 ≥ -0.5s），也不许长出太多（≤20s，
+    # 20s 是片头卡 + 尾部卡的上限）。静态版 190s / 旁白 176s 与新片 176.5s 都能过。
+    nar = ROOT / "资料/_构建/演示视频/narration.wav"
+    if nar.exists():
+        nd = probe(nar)["dur"]
+        ck("视频时长装得下旁白且不超长（≤+20s）",
+           nd - 0.5 <= info["dur"] <= nd + 20,
+           f"视频 {info['dur']:.1f}s / 旁白 {nd:.1f}s")
+    else:
+        print("  [SKIP] 找不到 narration.wav，跳过时长比对")
     # 每段图源都在
     for name in ("title_card", "outro_card"):
         ck(f"{name}.png 存在", (ROOT / f"资料/_构建/{name}.png").exists())
