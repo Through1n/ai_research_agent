@@ -526,8 +526,11 @@ def render(ctx):
     # ===== 区二：领域综述与前沿方向生成（与图谱可视化明确区分） =====
     # 原先这里有一条 st.markdown("---")：但紧跟其后的 _sec_head 本身已经是分区信号，
     # 横线 + 标题 = 双重视觉打断，删掉横线用留白分区更干净。
-    section_header("领域综述与前沿方向生成")
+    # 2026-10-27：标题原先留在卡外、卡里只有两个按钮 —— 于是这张卡**没有卡头**
+    # （design.py 的规则是靠卡内首个子元素里的 .ai-section 来画头行的）。
+    # 标题移进卡内当卡头，与全站「一区一卡一条头行」同构。
     with st.container(border=True, key="card06"):
+        section_header("领域综述与前沿方向生成")
         c2, c3 = st.columns([1, 1])
         _gr_review = bg_running(kinds={_GRAPH_REVIEW_KIND})
         _gr_future = bg_running(kinds={_GRAPH_FUTURE_KIND})

@@ -1436,7 +1436,7 @@ def _resolve_doc(ctx, prefer=None):
     """解析 PDF 路径：临时上传 > 文献库选择（prefer 为跨页跳转指定的文件名）。"""
     path = None
     try:
-        up = st.file_uploader("或临时上传 PDF", type=["pdf"], key="read_up")
+        up = st.file_uploader("临时上传 PDF", type=["pdf"], key="read_up")
         if up:
             # Streamlit 每次 rerun 都会重跑这里：无条件新建会产生一份永不删除的
             # 临时 PDF（实测本机残留 143 个 / 1.1GB；Linux 容器里 /tmp 同理会涨满）。
@@ -1607,7 +1607,12 @@ def render(ctx):
             if cand in ctx.files:
                 prefer = cand
 
-        path = _resolve_doc(ctx, prefer)
+        # 论文来源做成卡（2026-10-27 逐块重排）：页签里的功能全部卡片化了，页签上方
+        # 这块「选哪篇」反而裸着，首屏看着像没归属的控件。卡片头一句说明优先级，
+        # 也顺手修掉上传框原来那半截话（"或临时上传 PDF" 的"或"上面没有前项）。
+        with st.container(border=True, key="card36"):
+            section_header("当前论文", "临时上传优先；未上传时用文献库选中项。")
+            path = _resolve_doc(ctx, prefer)
         if not path:
             empty_state("请先在文献库导入论文，或临时上传 PDF。",
                         hints=["点击左侧「一键加载演示数据（6 篇）」",
@@ -1672,28 +1677,29 @@ def render(ctx):
         # ---------- 1 原生渲染（A1） ----------
         with tabs[0]:
             try:
-                p = st.number_input("页码", 1, tps, value=default_page, key="np")
-                section_header("单页操作", "渲染当前页的原生版式（不重排）；栏数等解析诊断收在下方折叠区。")
-                if st.button("渲染该页", key="np_go", use_container_width=True):
-                    try:
-                        # T2：标题树跳转命中的那页，把标题文字高亮出来
-                        hl_word = ""
+                with st.container(border=True, key="card26"):
+                    section_header("单页操作", "渲染当前页的原生版式（不重排）；栏数等解析诊断收在下方折叠区。")
+                    p = st.number_input("页码", 1, tps, value=default_page, key="np")
+                    if st.button("渲染该页", key="np_go", use_container_width=True):
                         try:
-                            hlv = st.session_state.get("read_hl")
-                            if isinstance(hlv, dict) and int(hlv.get("page", 0)) == int(p):
-                                hl_word = str(hlv.get("title") or "")
-                        except Exception:
+                            # T2：标题树跳转命中的那页，把标题文字高亮出来
                             hl_word = ""
-                        h, pw, ph = native_page_html(doc, int(p), highlight=hl_word or None)
-                        # 结果落会话态：Streamlit 每次重跑都重建元素树，若只在按钮
-                        # 分支里 embed_html，用户点任意其他控件（如「检测本页栏数」）
-                        # 渲染结果就整块消失（2026-10-24 真机复现，见
-                        # scripts/_verify_read_render_persist.py）。
-                        st.session_state["read_np_render"] = {
-                            "page": int(p), "html": h,
-                            "height": min(int(ph * 1.18) + 60, 900), "hl": hl_word or ""}
-                    except Exception as e:
-                        st.session_state["read_np_render"] = {"err": str(e)[:160]}
+                            try:
+                                hlv = st.session_state.get("read_hl")
+                                if isinstance(hlv, dict) and int(hlv.get("page", 0)) == int(p):
+                                    hl_word = str(hlv.get("title") or "")
+                            except Exception:
+                                hl_word = ""
+                            h, pw, ph = native_page_html(doc, int(p), highlight=hl_word or None)
+                            # 结果落会话态：Streamlit 每次重跑都重建元素树，若只在按钮
+                            # 分支里 embed_html，用户点任意其他控件（如「检测本页栏数」）
+                            # 渲染结果就整块消失（2026-10-24 真机复现，见
+                            # scripts/_verify_read_render_persist.py）。
+                            st.session_state["read_np_render"] = {
+                                "page": int(p), "html": h,
+                                "height": min(int(ph * 1.18) + 60, 900), "hl": hl_word or ""}
+                        except Exception as e:
+                            st.session_state["read_np_render"] = {"err": str(e)[:160]}
                 # ---- 结果区（会话态驱动：跨重跑保留，宽度占满整行）----
                 _r = st.session_state.get("read_np_render")
                 if _r:
@@ -1734,8 +1740,11 @@ def render(ctx):
             except Exception as e:
                 st.warning(f"⚠️ 原生渲染区异常：{str(e)[:160]}")
 
-            st.divider()
-            with st.expander("长文档批量扫描（性能 / 内存加固）", expanded=False):
+            # 原先是默认收起的 expander：卡片本来就是边界明确的视觉分区，再套一层折叠
+            # 会出现「卡片框 + 折叠框」两道边。控制区全部进卡，折叠只留给诊断类信息。
+            with st.container(border=True, key="card27"):
+                section_header("长文档批量扫描",
+                               "性能 / 内存加固：逐页扫描并可选抽取页面图片，结果在本卡下方。")
                 try:
                     c1, c2, c3 = st.columns([1, 1, 1])
                     with c1:
@@ -1773,34 +1782,36 @@ def render(ctx):
         # ---------- 2 中英同步滚动（A2 + B3 + 句级对齐 + 术语表） ----------
         with tabs[1]:
             try:
-                p2 = st.number_input("页码", 1, tps, value=default_page, key="sp")
-                _gl = _glossary_editor(doc, int(p2), path)
-                _gl_mark = _gl if st.session_state.get(GLOSSARY_HL_KEY) else None
-                _tr_run = bg_running(kinds={_K_TR_PAIRS})
-                if st.button("📥 加载并逐段翻译（段落对齐）", key="sp_go", disabled=_tr_run,
-                             help="后台翻译：提交后可切换其他页面，逐段进度见左侧「任务中心」"):
-                    if not getattr(getattr(ctx, "llm", None), "available", False):
-                        st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
-                        st.caption("🛠️ 怎么办：在左侧「接入方式」填写 Key 后重试。")
-                    else:
-                        paras = _page_paragraphs(doc, int(p2))
-                        if not paras:
-                            st.error("该页文本过少，可能是扫描件（无文本层）。")
+                with st.container(border=True, key="card28"):
+                    section_header("逐段翻译与术语表", "按段落对齐翻译，结果在下方给出中英对照（句级联动 · 左右同步滚动）。")
+                    p2 = st.number_input("页码", 1, tps, value=default_page, key="sp")
+                    _gl = _glossary_editor(doc, int(p2), path)
+                    _gl_mark = _gl if st.session_state.get(GLOSSARY_HL_KEY) else None
+                    _tr_run = bg_running(kinds={_K_TR_PAIRS})
+                    if st.button("📥 加载并逐段翻译（段落对齐）", key="sp_go", disabled=_tr_run,
+                                 help="后台翻译：提交后可切换其他页面，逐段进度见左侧「任务中心」"):
+                        if not getattr(getattr(ctx, "llm", None), "available", False):
+                            st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
+                            st.caption("🛠️ 怎么办：在左侧「接入方式」填写 Key 后重试。")
                         else:
-                            # 后台化改造（Round 19）：原内联跑主线程，逐段 LLM 调用期间
-                            # 整个 UI 冻结。术语表/段落/缓存在提交时由主线程捕获传入，
-                            # 结果经 bg_consume 交付后由下方 fresh 分支渲染。
-                            _cache = st.session_state.get("read_tr_cache")
-                            if not isinstance(_cache, dict):
-                                _cache = {}
-                            bg_submit("逐段翻译（第 %d 页）" % int(p2),
-                                      lambda progress, _p=paras, _g=_gl, _c=_cache, _pg=int(p2):
-                                          _w_translate_pairs(ctx, _p, _g, _c, progress, page=_pg),
-                                      kind=_K_TR_PAIRS)
-                            _toast("📥 已转入后台翻译，可切换其他页面")
-                if _tr_run:
-                    st.caption("⏳ 逐段翻译正在后台运行（实时进度见左侧「任务中心」）——"
-                               "可切换其他页面，完成后结果自动出现在本页。")
+                            paras = _page_paragraphs(doc, int(p2))
+                            if not paras:
+                                st.error("该页文本过少，可能是扫描件（无文本层）。")
+                            else:
+                                # 后台化改造（Round 19）：原内联跑主线程，逐段 LLM 调用期间
+                                # 整个 UI 冻结。术语表/段落/缓存在提交时由主线程捕获传入，
+                                # 结果经 bg_consume 交付后由下方 fresh 分支渲染。
+                                _cache = st.session_state.get("read_tr_cache")
+                                if not isinstance(_cache, dict):
+                                    _cache = {}
+                                bg_submit("逐段翻译（第 %d 页）" % int(p2),
+                                          lambda progress, _p=paras, _g=_gl, _c=_cache, _pg=int(p2):
+                                              _w_translate_pairs(ctx, _p, _g, _c, progress, page=_pg),
+                                          kind=_K_TR_PAIRS)
+                                _toast("📥 已转入后台翻译，可切换其他页面")
+                    if _tr_run:
+                        st.caption("⏳ 逐段翻译正在后台运行（实时进度见左侧「任务中心」）——"
+                                   "可切换其他页面，完成后结果自动出现在本页。")
                 # 后台交付的本次结果（fresh 一次性标记）：降级横幅 + 汇总 + 双语视图
                 _bi_fresh = st.session_state.pop("read_bi_fresh", False)
                 _prev_bi = st.session_state.get("read_bilingual")
@@ -1844,27 +1855,29 @@ def render(ctx):
         # ---------- 3 原位 PDF（A4） ----------
         with tabs[2]:
             try:
-                p3 = st.number_input("页码", 1, tps, value=default_page, key="pp")
-                _pdf_run = bg_running(kinds={_K_INPLACE_PDF})
-                if st.button("⚡ 翻译并生成原位 PDF", key="pp_go", disabled=_pdf_run,
-                             help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
-                    if not getattr(getattr(ctx, "llm", None), "available", False):
-                        st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
-                        st.caption("🛠️ 怎么办：在左侧「API 模型」区填入 Key 后重试。")
-                    else:
-                        _p3 = min(max(1, int(p3)), tps)
-                        # 后台化改造（Round 19）：原内联 st.status 跑主线程，翻译 + 排版
-                        # 全程 UI 冻结。worker 用独立 doc 实例（in_place_pdf 会写文档，
-                        # 句柄不跨线程共享），术语表提交时捕获；各失败分支随结果返回
-                        # stage 标记，由 _consume_inplace_pdf 按旧话术五档分档提示。
-                        bg_submit("原位 PDF 翻译（第 %d 页）" % _p3,
-                                  lambda progress, _pg=_p3, _g=_current_glossary():
-                                      _w_inplace_pdf(ctx, path, _pg, _g, progress),
-                                  kind=_K_INPLACE_PDF)
-                        _toast("⚡ 已转入后台生成，可切换其他页面")
-                if _pdf_run:
-                    st.caption("⏳ 原位 PDF 正在后台生成（实时进度见左侧「任务中心」）——"
-                               "可切换其他页面，完成后下载按钮自动出现在本页。")
+                with st.container(border=True, key="card29"):
+                    section_header("原位 PDF 翻译", "保留原版式把译文回填到 PDF，生成后可下载成品。")
+                    p3 = st.number_input("页码", 1, tps, value=default_page, key="pp")
+                    _pdf_run = bg_running(kinds={_K_INPLACE_PDF})
+                    if st.button("⚡ 翻译并生成原位 PDF", key="pp_go", disabled=_pdf_run,
+                                 help="后台生成：提交后可切换其他页面，进度见左侧「任务中心」"):
+                        if not getattr(getattr(ctx, "llm", None), "available", False):
+                            st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
+                            st.caption("🛠️ 怎么办：在左侧「API 模型」区填入 Key 后重试。")
+                        else:
+                            _p3 = min(max(1, int(p3)), tps)
+                            # 后台化改造（Round 19）：原内联 st.status 跑主线程，翻译 + 排版
+                            # 全程 UI 冻结。worker 用独立 doc 实例（in_place_pdf 会写文档，
+                            # 句柄不跨线程共享），术语表提交时捕获；各失败分支随结果返回
+                            # stage 标记，由 _consume_inplace_pdf 按旧话术五档分档提示。
+                            bg_submit("原位 PDF 翻译（第 %d 页）" % _p3,
+                                      lambda progress, _pg=_p3, _g=_current_glossary():
+                                          _w_inplace_pdf(ctx, path, _pg, _g, progress),
+                                      kind=_K_INPLACE_PDF)
+                            _toast("⚡ 已转入后台生成，可切换其他页面")
+                    if _pdf_run:
+                        st.caption("⏳ 原位 PDF 正在后台生成（实时进度见左侧「任务中心」）——"
+                                   "可切换其他页面，完成后下载按钮自动出现在本页。")
 
                 # 结果常驻渲染：来自 session_state，任何交互后都不消失
                 _r = st.session_state.get("inplace_pdf_result")
@@ -1881,151 +1894,156 @@ def render(ctx):
         # ---------- 4 引用双向跳转（T1：正文 [n] ↔ References 条目） ----------
         with tabs[3]:
             try:
-                _ensure_cite_state()
-                ref_page = None
-                try:
-                    ref_page = find_reference_start_page(doc)
-                except Exception:
+                with st.container(border=True, key="card30"):
+                    section_header("引用索引与页码范围", "先定位 References 条目，再框定正文页码范围；引用标记只在窗口内检索。")
+                    _ensure_cite_state()
                     ref_page = None
-                refs, meta = _ensure_ref_index(doc, doc_id)
-
-                if not refs:
-                    st.warning("⚠️ 未能从该 PDF 抽取到 References 列表"
-                               f"（{meta.get('message') or '未定位到 References 标题'}）。"
-                               "正文引用标记仍会显示，但不提供跳转。")
-                    st.caption("🛠️ 怎么办：改用带文本层的 PDF（扫描件 / 非标准标题无法抽取）。")
-                else:
-                    st.success(f"✅ References 抽取成功：{len(refs)} 条"
-                               f"（来源：{meta.get('source') or '-'}"
-                               f"{'，标题页 p%d' % ref_page if ref_page else ''}）")
-                    if not meta.get("numbered", True):
-                        # 抗幻觉：该 PDF 文献表本身不带 [n] 编号（如 BERT 作者-年份式），
-                        # 界面上的 [n] 是按出现顺序生成的索引号，必须如实说明、不冒充原文编号
-                        st.caption("ℹ️ 该 PDF 参考文献不带 [n] 编号，界面 [n] 为按出现顺序生成的索引号。")
-
-                c1, c2 = st.columns([1, 1])
-                with c1:
-                    bs = st.number_input("正文起始页", 1, max(1, tps), value=1, key="cj_s")
-                with c2:
-                    be_def = (ref_page - 1) if (ref_page and ref_page > 1) else min(tps, 12)
-                    be_def = min(max(1, int(be_def)), max(1, tps))
-                    be = st.number_input("正文结束页", 1, max(1, tps), value=be_def, key="cj_e")
-                cit = st.text_input("按编号快速定位单条（如 11，可留空）", key="cit")
-
-                # ---- 跳转持久化控制条（考生11）：跳转写入 session_state，rerun 后可恢复 ----
-                _n_max = max(1, len(refs))
-                _snap0 = _cite_view(doc_id) or {}
-                view_start = int(_snap0.get("start") or int(bs))
-                view_end = int(_snap0.get("end") or int(be))
-                jc1, jc2, jc3, jc4 = st.columns([1, 1, 1, 1])
-                with jc1:
-                    jn = st.number_input("跳转编号", 1, _n_max, value=1, key="cit_jn")
-                with jc2:
-                    if st.button("➡️ 跳到第 n 条", key="cit_go_ref", use_container_width=True):
-                        try:
-                            tgt = _cite_set_jump("ref", int(jn))
-                            if tgt:
-                                st.success(f"🎯 已跳转并保存：{tgt}（rerun 后自动恢复到该位置）")
-                        except Exception as e:
-                            st.caption(f"（跳转保存失败：{str(e)[:80]}）")
-                with jc3:
-                    if st.button("↩ 回到正文（循环）", key="cit_go_cit", use_container_width=True):
-                        try:
-                            n_j = int(jn)
-                            # 分母 m 用视图快照里的权威计数（含作者-年份/区间引用），
-                            # 快照缺失时才退回 regex 逐页重扫
-                            _snap_j = _cite_view(doc_id) or {}
-                            _per_ref = (_snap_j.get("stats") or {}).get("per_ref") or {}
-                            total_j = _cite_ref_total(doc, view_start, view_end, n_j, _per_ref)
-                            tgt = _cite_cursor_next(n_j, max(1, total_j))
-                            if tgt:
-                                cur = dict(st.session_state.get(CITE_CURSOR_KEY) or {})
-                                st.success(f"↩ 已定位并保存：{tgt}"
-                                           f"（第 {cur.get(str(n_j), 1)}/{total_j} 处，rerun 后保留游标）")
-                        except Exception as e:
-                            st.caption(f"（反向跳转失败：{str(e)[:80]}）")
-                with jc4:
-                    if st.button("🧹 清除跳转状态", key="cit_clr", use_container_width=True):
-                        _cite_clear_jump()
-                        st.caption("已清除跳转状态（视图保留）。")
-                try:
-                    cur_jump = st.session_state.get(CITE_JUMP_KEY)
-                    if isinstance(cur_jump, dict) and cur_jump.get("target"):
-                        st.caption(f"📌 当前跳转：{cur_jump.get('target')}")
-                except Exception:
-                    pass
-
-                # autoscroll 标记「一次性消费」：本次 rerun 用它恢复跳转位置，之后自动清空
-                auto_target = _cite_consume_autoscroll()
-                st.markdown("**🔗 生成正文 ↔ 参考文献 双向跳转视图**")
-                built_now = False
-                if st.button("🔗 生成双向跳转视图", key="cit_go"):
-                    probe = _new_probe("引用双向跳转")
-                    probe.start()
                     try:
-                        if not refs:
-                            st.info("ℹ️ 当前 PDF 无 References 索引，已转为单条回溯定位模式。")
-                            body, ref, scanned = _find_citation(doc, cit or "1", tps)
-                            try:
-                                embed_html(citation_jump_html(body or "未找到正文位置。",
-                                                              ref or "未找到参考文献条目。"),
-                                           height=560, scrolling=True)
-                            except Exception as e:
-                                st.warning(f"⚠️ 跳转视图渲染失败：{str(e)[:160]}")
-                            st.caption(f"🔎 已回溯扫描 {scanned} 页（上限 {CITE_SCAN_CAP}）")
-                        else:
-                            s_i, e_i = int(bs), int(be)
-                            if e_i < s_i:
-                                s_i, e_i = e_i, s_i
-                            if (e_i - s_i + 1) > CITE_BODY_CAP:
-                                e_i = s_i + CITE_BODY_CAP - 1
-                                st.caption(f"ℹ️ 正文窗口已限制为 {CITE_BODY_CAP} 页。")
-                            body_pages = []
-                            for pno in range(s_i, e_i + 1):
-                                try:
-                                    body_pages.append((pno, doc[pno - 1].get_text() or ""))
-                                except Exception:
-                                    body_pages.append((pno, ""))
-                            html, cst = citation_links_html(body_pages, refs)
-                            html = _inject_restore_js(html, auto_target, _scroll_seed())
-                            built_now = True
-                            try:
-                                embed_html(html, height=780, scrolling=True)
-                            except Exception as e:
-                                st.warning(f"⚠️ 跳转视图渲染失败：{str(e)[:160]}")
-                            # 保存视图快照：后续任何 rerun 都能据此重建 iframe
-                            _cite_activate_view(doc_id, s_i, e_i, cst)
-                            st.success(
-                                f"🔗 双向跳转已生成：正文 {cst.get('pages', 0)} 页 / "
-                                f"引用标记 {cst.get('markers', 0)} 个 / "
-                                f"References {cst.get('refs', 0)} 条")
-                            st.caption("点击正文蓝色 [n] 跳到对应条目；点条目下「↩ 回到正文」循环定位。")
-                    except Exception as e:
-                        st.warning(f"⚠️ 引用跳转视图生成失败：{str(e)[:160]}")
+                        ref_page = find_reference_start_page(doc)
+                    except Exception:
+                        ref_page = None
+                    refs, meta = _ensure_ref_index(doc, doc_id)
 
-                # ---- 持久化重绘：rerun 后按快照自动重建 iframe（否则任何交互都会销毁视图） ----
-                if (not built_now) and refs:
-                    snap = _cite_view(doc_id)
-                    if snap:
+                    if not refs:
+                        st.warning("⚠️ 未能从该 PDF 抽取到 References 列表"
+                                   f"（{meta.get('message') or '未定位到 References 标题'}）。"
+                                   "正文引用标记仍会显示，但不提供跳转。")
+                        st.caption("🛠️ 怎么办：改用带文本层的 PDF（扫描件 / 非标准标题无法抽取）。")
+                    else:
+                        st.success(f"✅ References 抽取成功：{len(refs)} 条"
+                                   f"（来源：{meta.get('source') or '-'}"
+                                   f"{'，标题页 p%d' % ref_page if ref_page else ''}）")
+                        if not meta.get("numbered", True):
+                            # 抗幻觉：该 PDF 文献表本身不带 [n] 编号（如 BERT 作者-年份式），
+                            # 界面上的 [n] 是按出现顺序生成的索引号，必须如实说明、不冒充原文编号
+                            st.caption("ℹ️ 该 PDF 参考文献不带 [n] 编号，界面 [n] 为按出现顺序生成的索引号。")
+
+                    c1, c2 = st.columns([1, 1])
+                    with c1:
+                        bs = st.number_input("正文起始页", 1, max(1, tps), value=1, key="cj_s")
+                    with c2:
+                        be_def = (ref_page - 1) if (ref_page and ref_page > 1) else min(tps, 12)
+                        be_def = min(max(1, int(be_def)), max(1, tps))
+                        be = st.number_input("正文结束页", 1, max(1, tps), value=be_def, key="cj_e")
+                    cit = st.text_input("按编号快速定位单条（如 11，可留空）", key="cit")
+
+                with st.container(border=True, key="card31"):
+                    section_header("双向跳转控制", "跳到第 n 条 / 回到正文（按处循环）；跳转位置写入会话态，重跑后自动恢复。")
+                    # ---- 跳转持久化控制条（考生11）：跳转写入 session_state，rerun 后可恢复 ----
+                    _n_max = max(1, len(refs))
+                    _snap0 = _cite_view(doc_id) or {}
+                    view_start = int(_snap0.get("start") or int(bs))
+                    view_end = int(_snap0.get("end") or int(be))
+                    jc1, jc2, jc3, jc4 = st.columns([1, 1, 1, 1])
+                    with jc1:
+                        jn = st.number_input("跳转编号", 1, _n_max, value=1, key="cit_jn")
+                    with jc2:
+                        if st.button("➡️ 跳到第 n 条", key="cit_go_ref", use_container_width=True):
+                            try:
+                                tgt = _cite_set_jump("ref", int(jn))
+                                if tgt:
+                                    st.success(f"🎯 已跳转并保存：{tgt}（rerun 后自动恢复到该位置）")
+                            except Exception as e:
+                                st.caption(f"（跳转保存失败：{str(e)[:80]}）")
+                    with jc3:
+                        if st.button("↩ 回到正文（循环）", key="cit_go_cit", use_container_width=True):
+                            try:
+                                n_j = int(jn)
+                                # 分母 m 用视图快照里的权威计数（含作者-年份/区间引用），
+                                # 快照缺失时才退回 regex 逐页重扫
+                                _snap_j = _cite_view(doc_id) or {}
+                                _per_ref = (_snap_j.get("stats") or {}).get("per_ref") or {}
+                                total_j = _cite_ref_total(doc, view_start, view_end, n_j, _per_ref)
+                                tgt = _cite_cursor_next(n_j, max(1, total_j))
+                                if tgt:
+                                    cur = dict(st.session_state.get(CITE_CURSOR_KEY) or {})
+                                    st.success(f"↩ 已定位并保存：{tgt}"
+                                               f"（第 {cur.get(str(n_j), 1)}/{total_j} 处，rerun 后保留游标）")
+                            except Exception as e:
+                                st.caption(f"（反向跳转失败：{str(e)[:80]}）")
+                    with jc4:
+                        if st.button("🧹 清除跳转状态", key="cit_clr", use_container_width=True):
+                            _cite_clear_jump()
+                            st.caption("已清除跳转状态（视图保留）。")
+                    try:
+                        cur_jump = st.session_state.get(CITE_JUMP_KEY)
+                        if isinstance(cur_jump, dict) and cur_jump.get("target"):
+                            st.caption(f"📌 当前跳转：{cur_jump.get('target')}")
+                    except Exception:
+                        pass
+
+                with st.container(border=True, key="card32"):
+                    # autoscroll 标记「一次性消费」：本次 rerun 用它恢复跳转位置，之后自动清空
+                    auto_target = _cite_consume_autoscroll()
+                    section_header("双向跳转视图", "点「生成」后在此查看 正文 [n] ↔ References 的双向跳转。")
+                    built_now = False
+                    if st.button("🔗 生成双向跳转视图", key="cit_go"):
+                        probe = _new_probe("引用双向跳转")
+                        probe.start()
                         try:
-                            s_i = max(1, int(snap.get("start") or 1))
-                            e_i = max(s_i, int(snap.get("end") or s_i))
-                            e_i = min(e_i, s_i + CITE_BODY_CAP - 1, max(1, tps))
-                            body_pages = []
-                            for pno in range(s_i, e_i + 1):
+                            if not refs:
+                                st.info("ℹ️ 当前 PDF 无 References 索引，已转为单条回溯定位模式。")
+                                body, ref, scanned = _find_citation(doc, cit or "1", tps)
                                 try:
-                                    body_pages.append((pno, doc[pno - 1].get_text() or ""))
-                                except Exception:
-                                    body_pages.append((pno, ""))
-                            html2, cst2 = citation_links_html(body_pages, refs)
-                            html2 = _inject_restore_js(html2, auto_target, _scroll_seed())
-                            embed_html(html2, height=780, scrolling=True)
-                            st.caption(f"♻️ 已按上次状态重建跳转视图（正文 p{s_i}–p{e_i}）")
+                                    embed_html(citation_jump_html(body or "未找到正文位置。",
+                                                                  ref or "未找到参考文献条目。"),
+                                               height=560, scrolling=True)
+                                except Exception as e:
+                                    st.warning(f"⚠️ 跳转视图渲染失败：{str(e)[:160]}")
+                                st.caption(f"🔎 已回溯扫描 {scanned} 页（上限 {CITE_SCAN_CAP}）")
+                            else:
+                                s_i, e_i = int(bs), int(be)
+                                if e_i < s_i:
+                                    s_i, e_i = e_i, s_i
+                                if (e_i - s_i + 1) > CITE_BODY_CAP:
+                                    e_i = s_i + CITE_BODY_CAP - 1
+                                    st.caption(f"ℹ️ 正文窗口已限制为 {CITE_BODY_CAP} 页。")
+                                body_pages = []
+                                for pno in range(s_i, e_i + 1):
+                                    try:
+                                        body_pages.append((pno, doc[pno - 1].get_text() or ""))
+                                    except Exception:
+                                        body_pages.append((pno, ""))
+                                html, cst = citation_links_html(body_pages, refs)
+                                html = _inject_restore_js(html, auto_target, _scroll_seed())
+                                built_now = True
+                                try:
+                                    embed_html(html, height=780, scrolling=True)
+                                except Exception as e:
+                                    st.warning(f"⚠️ 跳转视图渲染失败：{str(e)[:160]}")
+                                # 保存视图快照：后续任何 rerun 都能据此重建 iframe
+                                _cite_activate_view(doc_id, s_i, e_i, cst)
+                                st.success(
+                                    f"🔗 双向跳转已生成：正文 {cst.get('pages', 0)} 页 / "
+                                    f"引用标记 {cst.get('markers', 0)} 个 / "
+                                    f"References {cst.get('refs', 0)} 条")
+                                st.caption("点击正文蓝色 [n] 跳到对应条目；点条目下「↩ 回到正文」循环定位。")
                         except Exception as e:
-                            st.caption(f"（跳转视图重建失败：{str(e)[:120]}）")
-                # 刚执行跳转的下一次 rerun：尽力把父页面标签切回「引用跳转」（一次性）
-                if auto_target:
-                    _restore_tab_js("引用跳转")
+                            st.warning(f"⚠️ 引用跳转视图生成失败：{str(e)[:160]}")
+
+                    # ---- 持久化重绘：rerun 后按快照自动重建 iframe（否则任何交互都会销毁视图） ----
+                    if (not built_now) and refs:
+                        snap = _cite_view(doc_id)
+                        if snap:
+                            try:
+                                s_i = max(1, int(snap.get("start") or 1))
+                                e_i = max(s_i, int(snap.get("end") or s_i))
+                                e_i = min(e_i, s_i + CITE_BODY_CAP - 1, max(1, tps))
+                                body_pages = []
+                                for pno in range(s_i, e_i + 1):
+                                    try:
+                                        body_pages.append((pno, doc[pno - 1].get_text() or ""))
+                                    except Exception:
+                                        body_pages.append((pno, ""))
+                                html2, cst2 = citation_links_html(body_pages, refs)
+                                html2 = _inject_restore_js(html2, auto_target, _scroll_seed())
+                                embed_html(html2, height=780, scrolling=True)
+                                st.caption(f"♻️ 已按上次状态重建跳转视图（正文 p{s_i}–p{e_i}）")
+                            except Exception as e:
+                                st.caption(f"（跳转视图重建失败：{str(e)[:120]}）")
+                    # 刚执行跳转的下一次 rerun：尽力把父页面标签切回「引用跳转」（一次性）
+                    if auto_target:
+                        _restore_tab_js("引用跳转")
 
                 # 按编号快速定位单条（无需生成整窗视图）
                 try:
@@ -2045,13 +2063,15 @@ def render(ctx):
         # ---------- 5 划词翻译（A3） ----------
         with tabs[4]:
             try:
-                p5 = st.number_input("页码", 1, tps, value=default_page, key="hp")
-                if st.button("📥 加载该页", key="hp_go"):
-                    try:
-                        st.session_state["hl"] = (doc[int(p5) - 1].get_text() or "")[:4500]
-                    except Exception as e:
-                        st.session_state["hl"] = ""
-                        st.warning(f"⚠️ 第 {p5} 页读取失败：{str(e)[:120]}")
+                with st.container(border=True, key="card33"):
+                    section_header("划词翻译", "先加载该页正文，划选词句后到下方「片段翻译」粘贴。")
+                    p5 = st.number_input("页码", 1, tps, value=default_page, key="hp")
+                    if st.button("📥 加载该页", key="hp_go"):
+                        try:
+                            st.session_state["hl"] = (doc[int(p5) - 1].get_text() or "")[:4500]
+                        except Exception as e:
+                            st.session_state["hl"] = ""
+                            st.warning(f"⚠️ 第 {p5} 页读取失败：{str(e)[:120]}")
                 hl = str(st.session_state.get("hl") or "")
                 if hl:
                     st.caption("划选下方词句后自动复制到剪贴板，再到输入框 Ctrl+V 粘贴"
@@ -2067,25 +2087,26 @@ def render(ctx):
                 else:
                     st.caption("点击「📥 加载该页」后即可划选翻译。")
 
-                st.markdown("**✍️ 片段翻译**")
-                frag = st.text_area("选中/粘贴原文片段", height=110, key="hl_frag")
-                _tf_run = bg_running(kinds={_K_TR_FRAG})
-                if st.button("🌐 翻译该片段", key="hl_tr", disabled=_tf_run,
-                             help="后台翻译：提交后可切换其他页面，进度见左侧「任务中心」") \
-                        and str(frag or "").strip():
-                    if not getattr(getattr(ctx, "llm", None), "available", False):
-                        st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
-                    else:
-                        # 后台化改造（Round 19）：旧内联 st.write_stream 流式展示跑主线程。
-                        # 后台任务无人观看增量输出，改用带超时的非流式 _safe_translate；
-                        # 失败/降级话术在交付侧完整保留（见下方 _hl_res 渲染）。
-                        bg_submit("片段翻译",
-                                  lambda progress, _t=str(frag).strip(), _g=_current_glossary():
-                                      _w_translate_frag(ctx, _t, _g, progress),
-                                  kind=_K_TR_FRAG)
-                        _toast("🌐 已转入后台翻译，可切换其他页面")
-                if _tf_run:
-                    st.caption("⏳ 片段翻译正在后台运行（进度见左侧「任务中心」）——可切换其他页面。")
+                with st.container(border=True, key="card34"):
+                    section_header("片段翻译", "粘贴或划选原文片段；不足 40 字会自动扩展到所在句子。")
+                    frag = st.text_area("选中/粘贴原文片段", height=110, key="hl_frag")
+                    _tf_run = bg_running(kinds={_K_TR_FRAG})
+                    if st.button("🌐 翻译该片段", key="hl_tr", disabled=_tf_run,
+                                 help="后台翻译：提交后可切换其他页面，进度见左侧「任务中心」") \
+                            and str(frag or "").strip():
+                        if not getattr(getattr(ctx, "llm", None), "available", False):
+                            st.warning("⚠️ 未检测到可用 API Key，无法调用翻译模型。")
+                        else:
+                            # 后台化改造（Round 19）：旧内联 st.write_stream 流式展示跑主线程。
+                            # 后台任务无人观看增量输出，改用带超时的非流式 _safe_translate；
+                            # 失败/降级话术在交付侧完整保留（见下方 _hl_res 渲染）。
+                            bg_submit("片段翻译",
+                                      lambda progress, _t=str(frag).strip(), _g=_current_glossary():
+                                          _w_translate_frag(ctx, _t, _g, progress),
+                                      kind=_K_TR_FRAG)
+                            _toast("🌐 已转入后台翻译，可切换其他页面")
+                    if _tf_run:
+                        st.caption("⏳ 片段翻译正在后台运行（进度见左侧「任务中心」）——可切换其他页面。")
                 # 后台交付的译文：渲染即清（与旧内联行为一致）
                 _hl_res = st.session_state.pop("hl_tr_result", None)
                 if _hl_res is not None:
@@ -2107,38 +2128,40 @@ def render(ctx):
         # ---------- 6 标题树（T2：内置书签 + 推断回退 + 点击定位） ----------
         with tabs[5]:
             try:
-                toc, inferred = _ensure_headings(doc, doc_id, tps)
-                if inferred:
-                    st.caption(f"无内置书签，已按字号/粗体/章节编号推断 {len(toc)} 条标题，点击可跳转。")
-                elif not toc:
-                    st.caption("未检测到书签，也未能从正文推断出标题（可能是扫描件）。")
-                # 标题树可折叠、默认收起：长文档时避免大量按钮占据垂直空间；
-                # 需要跳转时再展开，点击标题仍写入 TOC_JUMP_KEY 并立即 st.rerun() 定位。
-                n_total = len(toc)
-                with st.expander(f"📑 标题目录（{n_total} 条 · 点击跳转并高亮）", expanded=False):
-                    shown = toc[:TOC_RENDER_CAP]
-                    for i, item in enumerate(shown):
-                        try:
-                            level, title, pg = int(item[0]), str(item[1]), int(item[2])
-                        except Exception:
-                            continue
-                        pg = min(max(1, pg), max(1, int(tps)))
-                        if st.button(f"{'　' * (max(1, level) - 1)}{title} · p{pg}", key=f"toc{i}"):
+                with st.container(border=True, key="card35"):
+                    section_header("标题目录", "内置书签优先，无书签时按字号 / 粗体 / 章节编号推断；点击跳转并高亮。")
+                    toc, inferred = _ensure_headings(doc, doc_id, tps)
+                    if inferred:
+                        st.caption(f"无内置书签，已按字号/粗体/章节编号推断 {len(toc)} 条标题，点击可跳转。")
+                    elif not toc:
+                        st.caption("未检测到书签，也未能从正文推断出标题（可能是扫描件）。")
+                    # 标题树可折叠、默认收起：长文档时避免大量按钮占据垂直空间；
+                    # 需要跳转时再展开，点击标题仍写入 TOC_JUMP_KEY 并立即 st.rerun() 定位。
+                    n_total = len(toc)
+                    with st.expander(f"📑 标题目录（{n_total} 条 · 点击跳转并高亮）", expanded=False):
+                        shown = toc[:TOC_RENDER_CAP]
+                        for i, item in enumerate(shown):
                             try:
-                                st.session_state[TOC_JUMP_KEY] = {"page": pg, "title": title}
+                                level, title, pg = int(item[0]), str(item[1]), int(item[2])
                             except Exception:
-                                pass
-                            # 立即重跑：让 render 开头就消费跳转、把页码控件切到目标页。
-                            # 旧实现只写 key 就返回，用户要再做一次任意交互才生效——
-                            # 实测点击后 read_jump_page 仍是 1，切到「原生渲染」看到旧页。
-                            # （RerunException 继承 BaseException，不会被下面的 except 吞掉）
-                            try:
-                                st.rerun()
-                            except Exception:
-                                st.success(f"已定位到第 {pg} 页「{title[:40]}」"
-                                           f"（再任意操作一次即切换到「📄 原生渲染」标签）")
-                    if len(toc) > len(shown):
-                        st.caption(f"（共 {len(toc)} 条，首屏显示前 {len(shown)} 条）")
+                                continue
+                            pg = min(max(1, pg), max(1, int(tps)))
+                            if st.button(f"{'　' * (max(1, level) - 1)}{title} · p{pg}", key=f"toc{i}"):
+                                try:
+                                    st.session_state[TOC_JUMP_KEY] = {"page": pg, "title": title}
+                                except Exception:
+                                    pass
+                                # 立即重跑：让 render 开头就消费跳转、把页码控件切到目标页。
+                                # 旧实现只写 key 就返回，用户要再做一次任意交互才生效——
+                                # 实测点击后 read_jump_page 仍是 1，切到「原生渲染」看到旧页。
+                                # （RerunException 继承 BaseException，不会被下面的 except 吞掉）
+                                try:
+                                    st.rerun()
+                                except Exception:
+                                    st.success(f"已定位到第 {pg} 页「{title[:40]}」"
+                                               f"（再任意操作一次即切换到「📄 原生渲染」标签）")
+                        if len(toc) > len(shown):
+                            st.caption(f"（共 {len(toc)} 条，首屏显示前 {len(shown)} 条）")
             except Exception as e:
                 st.warning(f"⚠️ 目录解析失败：{str(e)[:160]}")
     finally:

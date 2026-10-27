@@ -765,237 +765,248 @@ def render(ctx):
         _render_library_health(ctx)
 
         # ---------------- 上传 & 语义查重（本页主操作，必须在首屏可见） ----------------
-        _section("上传 PDF", "自动解析并语义查重；命中已有论文会提示版本决策，扫描件走 OCR。")
-        # 上一轮后台解析的告警（失败页/截断/OCR 状态）在这里展示后即清——
-        # 独立于 flash 单槽位，避免被入库成功提示覆盖（R9 T4 的如实展示不能丢）。
-        _w = st.session_state.get("_parse_warnings")
-        if _w:
-            st.session_state["_parse_warnings"] = None
-            st.caption(str(_w))
-        f = st.file_uploader("选择 PDF", type=["pdf"], key="lib_up")
-        _parsing = bg_running(kinds={_LIB_PARSE_KIND})
-        if f and st.button("解析并查重", disabled=_parsing,
-                           help="后台解析：提交后可切换其他页面，实时进度见左侧任务中心"):
-            if not f.name:
-                st.caption("⚠️ 未取得文件名，请重新选择文件。")
-            else:
-                data = f.read()
-                # 应用层体积闸门（Round 12 场景 9）：超限在**提交之前**友好拒绝，
-                # 避免超大 PDF 进了后台队列才报错、用户还不知道发生了什么。
-                try:
-                    _mb = len(data) / 1048576.0
-                except Exception:
-                    _mb = 0.0
-                if _mb > MAX_UPLOAD_MB:
-                    st.caption(f"⚠️ 这个文件有 {_mb:.0f} MB，超过 {MAX_UPLOAD_MB} MB 上限，"
-                               f"已停止解析（现场解析会很慢且占用大量内存）。")
-                    st.caption("🛠️ 怎么办：换一个更小的 PDF（建议 "
-                               f"≤ {MAX_UPLOAD_MB} MB）；或先点击左侧"
-                               "「一键加载演示数据（6 篇）」继续演示，其余功能不受影响。")
+        # 三个功能区各包一张卡（2026-10-27 逐块重排）：卡片首个子元素里的 .ai-section
+        # 会被 design.py 的规则接管成卡头（上下分隔线 + 标题上边距归零），于是
+        # 「一个区 = 一张卡 = 一条头行」。卡外的库状态 caption 仍留在卡外，
+        # 保持「一行状态 → 一个主操作」的首屏层级（见 _render_library_health 的减法说明）。
+        with st.container(border=True, key="card23"):
+            _section("上传 PDF", "自动解析并语义查重；命中已有论文会提示版本决策，扫描件走 OCR。")
+            # 上一轮后台解析的告警（失败页/截断/OCR 状态）在这里展示后即清——
+            # 独立于 flash 单槽位，避免被入库成功提示覆盖（R9 T4 的如实展示不能丢）。
+            _w = st.session_state.get("_parse_warnings")
+            if _w:
+                st.session_state["_parse_warnings"] = None
+                st.caption(str(_w))
+            f = st.file_uploader("选择 PDF", type=["pdf"], key="lib_up")
+            _parsing = bg_running(kinds={_LIB_PARSE_KIND})
+            if f and st.button("解析并查重", disabled=_parsing,
+                               help="后台解析：提交后可切换其他页面，实时进度见左侧任务中心"):
+                if not f.name:
+                    st.caption("⚠️ 未取得文件名，请重新选择文件。")
                 else:
-                    bg_submit("解析并查重：" + f.name,
-                              lambda progress, _d=data, _n=f.name:
-                                  _parse_worker(ctx, _d, _n, progress),
-                              kind=_LIB_PARSE_KIND)
+                    data = f.read()
+                    # 应用层体积闸门（Round 12 场景 9）：超限在**提交之前**友好拒绝，
+                    # 避免超大 PDF 进了后台队列才报错、用户还不知道发生了什么。
                     try:
-                        st.toast("📄 已转入后台解析，进度见左侧任务中心，可随时切换其他页面",
-                                 icon="🚀")
+                        _mb = len(data) / 1048576.0
                     except Exception:
-                        pass
-        if _parsing:
-            st.caption("⏳ 解析任务正在后台运行（实时进度见左侧「任务中心」）——"
-                       "可切换其他页面，完成后结果自动出现在本页。")
-
-        pend = st.session_state.get("pending")
-        if pend and isinstance(pend, dict):
-            st.caption(f"⚠️ 语义查重命中：库中已有《{pend.get('dup_name','未知')}》，"
-                       f"内容相似度 {float(pend.get('dup_sim') or 0):.1%}。请选择版本决策：")
-            if pend.get("dup_evidence"):
-                st.caption(f"判定依据：{pend['dup_evidence']}（基于正文内容指纹，非文件名）")
-            c1, c2, c3 = st.columns([1, 1, 1])
-            if c1.button("♻️ 覆盖旧版（保留新版）"):
-                try:
-                    p = library.commit(ctx, pend, replace=pend.get("dup_name"))
-                    # 写入 flash 而非 st.success：下方紧跟 st.rerun()，直接渲染会被吞掉
-                    set_flash("success", f"✅ 已覆盖：{p.get('filename', '')}")
-                    st.session_state.pending = None
-                    st.rerun()
-                except Exception as e:
-                    friendly_error("覆盖旧版", e, reasons=["文献写入失败"], actions=["重试一次"])
-            if c2.button("🗂️ 保留两个版本"):
-                try:
-                    library.commit(ctx, pend)
-                    set_flash("success", "✅ 已同时保留两版，可在「版本差异」页签查看版本建议。")
-                    st.session_state.pending = None
-                    st.rerun()
-                except Exception as e:
-                    friendly_error("保留双版本", e, reasons=["文献写入失败"], actions=["重试一次"])
-            if c3.button("❌ 取消本次上传"):
-                st.session_state.pending = None
-                st.rerun()
-
-        # ---------------- 元数据 / 排版 ----------------
-        _section("元数据与排版识别")
-        if not ctx.files:
-            empty_state("文献库为空，暂无可识别元数据的论文。",
-                        hints=["在上方上传 PDF", "或点击左侧「一键加载演示数据（6 篇）」"])
-        else:
-            mf = st.selectbox("选择论文", ctx.files, key="meta_sel")
-            _meta_bg = bg_running(kinds={_LIB_META_KIND})
-            if st.button("抽取标题/作者/机构/摘要 + 判断排版",
-                         disabled=_meta_bg,
-                         help="后台抽取：提交后可切换其他页面，实时进度见左侧「任务中心」"):
-                if not llm_guard(ctx, "元数据智能抽取"):
-                    st.caption("📭 演示语料的元数据已在入库时自动生成，见「文献库」页签。")
-                else:
-                    _p = resolve_pdf(mf)
-                    if not _p or not os.path.exists(str(_p)):
-                        st.caption("📭 该论文为内置演示语料（无原始 PDF），元数据已在入库时抽取完成，见「文献库」页签。")
+                        _mb = 0.0
+                    if _mb > MAX_UPLOAD_MB:
+                        st.caption(f"⚠️ 这个文件有 {_mb:.0f} MB，超过 {MAX_UPLOAD_MB} MB 上限，"
+                                   f"已停止解析（现场解析会很慢且占用大量内存）。")
+                        st.caption("🛠️ 怎么办：换一个更小的 PDF（建议 "
+                                   f"≤ {MAX_UPLOAD_MB} MB）；或先点击左侧"
+                                   "「一键加载演示数据（6 篇）」继续演示，其余功能不受影响。")
                     else:
-                        bg_submit("元数据抽取：" + str(mf),
-                                  lambda progress, _p=_p: _meta_worker(ctx, _p, progress),
-                                  kind=_LIB_META_KIND)
+                        bg_submit("解析并查重：" + f.name,
+                                  lambda progress, _d=data, _n=f.name:
+                                      _parse_worker(ctx, _d, _n, progress),
+                                  kind=_LIB_PARSE_KIND)
                         try:
-                            st.toast("📄 已转入后台抽取，进度见左侧任务中心，可随时切换其他页面",
+                            st.toast("📄 已转入后台解析，进度见左侧任务中心，可随时切换其他页面",
                                      icon="🚀")
                         except Exception:
                             pass
-            if _meta_bg:
-                st.caption("⏳ 元数据抽取正在后台运行（实时进度见左侧「任务中心」）——"
+            if _parsing:
+                st.caption("⏳ 解析任务正在后台运行（实时进度见左侧「任务中心」）——"
                            "可切换其他页面，完成后结果自动出现在本页。")
-            if st.session_state.get("meta_view"):
-                with st.expander("🪪 元数据 JSON（点击展开 / 收起）", expanded=False):
-                    st.json(st.session_state.meta_view)
+
+            pend = st.session_state.get("pending")
+            if pend and isinstance(pend, dict):
+                st.caption(f"⚠️ 语义查重命中：库中已有《{pend.get('dup_name','未知')}》，"
+                           f"内容相似度 {float(pend.get('dup_sim') or 0):.1%}。请选择版本决策：")
+                if pend.get("dup_evidence"):
+                    st.caption(f"判定依据：{pend['dup_evidence']}（基于正文内容指纹，非文件名）")
+                c1, c2, c3 = st.columns([1, 1, 1])
+                if c1.button("♻️ 覆盖旧版（保留新版）"):
+                    try:
+                        p = library.commit(ctx, pend, replace=pend.get("dup_name"))
+                        # 写入 flash 而非 st.success：下方紧跟 st.rerun()，直接渲染会被吞掉
+                        set_flash("success", f"✅ 已覆盖：{p.get('filename', '')}")
+                        st.session_state.pending = None
+                        st.rerun()
+                    except Exception as e:
+                        friendly_error("覆盖旧版", e, reasons=["文献写入失败"], actions=["重试一次"])
+                if c2.button("🗂️ 保留两个版本"):
+                    try:
+                        library.commit(ctx, pend)
+                        set_flash("success", "✅ 已同时保留两版，可在「版本差异」页签查看版本建议。")
+                        st.session_state.pending = None
+                        st.rerun()
+                    except Exception as e:
+                        friendly_error("保留双版本", e, reasons=["文献写入失败"], actions=["重试一次"])
+                if c3.button("❌ 取消本次上传"):
+                    st.session_state.pending = None
+                    st.rerun()
+
+        # ---------------- 元数据 / 排版 ----------------
+        # 与上传卡片同构：标题即卡头，选择器与按钮是该卡的唯一可用动作。
+        with st.container(border=True, key="card24"):
+            _section("元数据与排版识别")
+            if not ctx.files:
+                empty_state("文献库为空，暂无可识别元数据的论文。",
+                            hints=["在上方上传 PDF", "或点击左侧「一键加载演示数据（6 篇）」"])
+            else:
+                mf = st.selectbox("选择论文", ctx.files, key="meta_sel")
+                _meta_bg = bg_running(kinds={_LIB_META_KIND})
+                if st.button("抽取标题/作者/机构/摘要 + 判断排版",
+                             disabled=_meta_bg,
+                             help="后台抽取：提交后可切换其他页面，实时进度见左侧「任务中心」"):
+                    if not llm_guard(ctx, "元数据智能抽取"):
+                        st.caption("📭 演示语料的元数据已在入库时自动生成，见「文献库」页签。")
+                    else:
+                        _p = resolve_pdf(mf)
+                        if not _p or not os.path.exists(str(_p)):
+                            st.caption("📭 该论文为内置演示语料（无原始 PDF），元数据已在入库时抽取完成，见「文献库」页签。")
+                        else:
+                            bg_submit("元数据抽取：" + str(mf),
+                                      lambda progress, _p=_p: _meta_worker(ctx, _p, progress),
+                                      kind=_LIB_META_KIND)
+                            try:
+                                st.toast("📄 已转入后台抽取，进度见左侧任务中心，可随时切换其他页面",
+                                         icon="🚀")
+                            except Exception:
+                                pass
+                if _meta_bg:
+                    st.caption("⏳ 元数据抽取正在后台运行（实时进度见左侧「任务中心」）——"
+                               "可切换其他页面，完成后结果自动出现在本页。")
+                if st.session_state.get("meta_view"):
+                    with st.expander("🪪 元数据 JSON（点击展开 / 收起）", expanded=False):
+                        st.json(st.session_state.meta_view)
 
         # ---------------- 细粒度结构 ----------------
-        _section("细粒度结构解析")
-        if not ctx.files:
-            empty_state("文献库为空，暂无可解析的细粒度结构。",
-                        hints=["在上方上传 PDF", "或点击左侧「一键加载演示数据（6 篇）」"])
-        else:
-            sf = st.selectbox("选择论文", ctx.files, key="struct_sel")
-            with_vision = st.checkbox("🖼️ 用多模态模型逐图理解（较慢 / 消耗额度）")
-            _struct_bg = bg_running(kinds={_LIB_STRUCT_KIND})
-            if st.button("全方位解析（标题树/表格/图表）",
-                         disabled=_struct_bg,
-                         help="后台解析：提交后可切换其他页面，实时进度见左侧「任务中心」"):
-                _p = resolve_pdf(sf)
-                if not _p or not os.path.exists(str(_p)):
-                    st.caption("📭 该论文为内置演示语料（无原始 PDF），版式级解析不适用；问答与图谱功能不受影响。")
-                else:
-                    bg_submit("结构解析：" + str(sf),
-                              lambda progress, _p=_p, _s=sf, _v=with_vision:
-                                  _struct_worker(ctx, _p, _s, _v, progress),
-                              kind=_LIB_STRUCT_KIND)
-                    try:
-                        st.toast("📄 已转入后台解析，进度见左侧任务中心，可随时切换其他页面",
-                                 icon="🚀")
-                    except Exception:
-                        pass
-            if _struct_bg:
-                st.caption("⏳ 结构解析正在后台运行（实时进度见左侧「任务中心」）——"
-                           "可切换其他页面，完成后结果自动出现在本页。")
-
-            stobj = st.session_state.get("struct")
-            if stobj and isinstance(stobj, dict):
-                if stobj.get("file") != sf:
-                    st.caption(f"下方结构来自上一次解析的《{stobj.get('file','—')}》，"
-                               f"重新点击「全方位解析」可刷新为《{sf}》。")
-                if not any(stobj.get(k) for k in ("toc", "tables", "figs")):
-                    st.caption("📭 未识别到标题树 / 表格 / 插图（该 PDF 可能无书签式章节结构或版式表格）。")
-                if stobj.get("toc"):
-                    with st.expander(f"📚 标题树（{len(stobj['toc'])} 项）", expanded=False):
-                        for item in stobj["toc"]:
-                            try:
-                                level, title, page = item
-                            except (TypeError, ValueError):
-                                continue
-                            st.markdown(f"{'　'*(max(int(level), 1)-1)}- {title} "
-                                        f"<span style='color:var(--c-text-3)'>·p{page}</span>", unsafe_allow_html=True)
-
-                if stobj.get("tables"):
-                    st.markdown(f"##### 📊 表格（{len(stobj['tables'])}）")
-                    for t in stobj["tables"]:
-                        try:
-                            pretty_table(t.get("df"),
-                                         title=f"第 {t.get('page','?')} 页 · 表 {t.get('index','?')}")
-                        except Exception as e:
-                            friendly_error("表格渲染", e, reasons=["表格数据格式异常"],
-                                           actions=["换一个 PDF 重试"])
-
-                if stobj.get("figs"):
-                    figs = stobj["figs"]
-                    st.markdown(f"##### 🖼️ 图表（{len(figs)}）")
-                    for fig in figs[:MAX_FIG_SHOW]:
-                        path = fig.get("path", "")
-                        if not path or not os.path.exists(str(path)):
-                            st.caption(f"⚠️ 插图文件缺失：{path or '(空路径)'}")
-                            continue
-                        try:
-                            st.image(path, caption=f"第 {fig.get('page','?')} 页插图")
-                            desc = (fig.get("desc") or "").strip()
-                            if desc and not desc.startswith("（当前"):
-                                st.markdown(desc)
-                        except Exception as e:
-                            st.caption(f"⚠️ 插图渲染失败（p{fig.get('page','?')}）：{str(e)[:100]}")
-                    if len(figs) > MAX_FIG_SHOW:
-                        st.caption(f"共 {len(figs)} 张插图，已展示前 {MAX_FIG_SHOW} 张，其余见 storage/uploads/figs。")
-
-            c1, c2 = st.columns([1, 1])
-            _formula_bg = bg_running(kinds={_LIB_FORMULA_KIND})
-            if c1.button("🧮 提取 LaTeX 公式", disabled=_formula_bg,
-                         help="后台抽取：提交后可切换其他页面，进度见左侧「任务中心」"):
-                if llm_guard(ctx, "LaTeX 公式抽取"):
-                    bg_submit("公式抽取：" + str(sf),
-                              lambda progress, _s=sf: _formula_worker(ctx, _s, progress),
-                              kind=_LIB_FORMULA_KIND)
-                    try:
-                        st.toast("📄 已转入后台抽取，进度见左侧任务中心", icon="🚀")
-                    except Exception:
-                        pass
-            if _formula_bg:
-                c1.caption("⏳ 公式抽取正在后台运行（进度见左侧「任务中心」）…")
-            _ref_bg = bg_running(kinds={_LIB_REF_KIND})
-            if c2.button("📚 结构化参考文献", disabled=_ref_bg,
-                         help="后台抽取：提交后可切换其他页面，进度见左侧「任务中心」"):
-                if llm_guard(ctx, "参考文献结构化"):
+        # 卡片内包含「解析 → 结果（标题树/表格/图表）→ 公式/参考文献」三段，
+        # 但只有一条动作主链（选论文 → 点击解析），所以仍是一张卡而非三张：
+        # 拆开会让「结果属于谁」在视觉上断链。
+        with st.container(border=True, key="card25"):
+            _section("细粒度结构解析")
+            if not ctx.files:
+                empty_state("文献库为空，暂无可解析的细粒度结构。",
+                            hints=["在上方上传 PDF", "或点击左侧「一键加载演示数据（6 篇）」"])
+            else:
+                sf = st.selectbox("选择论文", ctx.files, key="struct_sel")
+                with_vision = st.checkbox("🖼️ 用多模态模型逐图理解（较慢 / 消耗额度）")
+                _struct_bg = bg_running(kinds={_LIB_STRUCT_KIND})
+                if st.button("全方位解析（标题树/表格/图表）",
+                             disabled=_struct_bg,
+                             help="后台解析：提交后可切换其他页面，实时进度见左侧「任务中心」"):
                     _p = resolve_pdf(sf)
                     if not _p or not os.path.exists(str(_p)):
-                        st.caption("📭 该论文为内置演示语料（无原始 PDF），无版式级参考文献区。")
+                        st.caption("📭 该论文为内置演示语料（无原始 PDF），版式级解析不适用；问答与图谱功能不受影响。")
                     else:
-                        bg_submit("参考文献结构化：" + str(sf),
-                                  lambda progress, _p=_p: _ref_worker(ctx, _p, progress),
-                                  kind=_LIB_REF_KIND)
+                        bg_submit("结构解析：" + str(sf),
+                                  lambda progress, _p=_p, _s=sf, _v=with_vision:
+                                      _struct_worker(ctx, _p, _s, _v, progress),
+                                  kind=_LIB_STRUCT_KIND)
+                        try:
+                            st.toast("📄 已转入后台解析，进度见左侧任务中心，可随时切换其他页面",
+                                     icon="🚀")
+                        except Exception:
+                            pass
+                if _struct_bg:
+                    st.caption("⏳ 结构解析正在后台运行（实时进度见左侧「任务中心」）——"
+                               "可切换其他页面，完成后结果自动出现在本页。")
+
+                stobj = st.session_state.get("struct")
+                if stobj and isinstance(stobj, dict):
+                    if stobj.get("file") != sf:
+                        st.caption(f"下方结构来自上一次解析的《{stobj.get('file','—')}》，"
+                                   f"重新点击「全方位解析」可刷新为《{sf}》。")
+                    if not any(stobj.get(k) for k in ("toc", "tables", "figs")):
+                        st.caption("📭 未识别到标题树 / 表格 / 插图（该 PDF 可能无书签式章节结构或版式表格）。")
+                    if stobj.get("toc"):
+                        with st.expander(f"📚 标题树（{len(stobj['toc'])} 项）", expanded=False):
+                            for item in stobj["toc"]:
+                                try:
+                                    level, title, page = item
+                                except (TypeError, ValueError):
+                                    continue
+                                st.markdown(f"{'　'*(max(int(level), 1)-1)}- {title} "
+                                            f"<span style='color:var(--c-text-3)'>·p{page}</span>", unsafe_allow_html=True)
+
+                    if stobj.get("tables"):
+                        st.markdown(f"##### 📊 表格（{len(stobj['tables'])}）")
+                        for t in stobj["tables"]:
+                            try:
+                                pretty_table(t.get("df"),
+                                             title=f"第 {t.get('page','?')} 页 · 表 {t.get('index','?')}")
+                            except Exception as e:
+                                friendly_error("表格渲染", e, reasons=["表格数据格式异常"],
+                                               actions=["换一个 PDF 重试"])
+
+                    if stobj.get("figs"):
+                        figs = stobj["figs"]
+                        st.markdown(f"##### 🖼️ 图表（{len(figs)}）")
+                        for fig in figs[:MAX_FIG_SHOW]:
+                            path = fig.get("path", "")
+                            if not path or not os.path.exists(str(path)):
+                                st.caption(f"⚠️ 插图文件缺失：{path or '(空路径)'}")
+                                continue
+                            try:
+                                st.image(path, caption=f"第 {fig.get('page','?')} 页插图")
+                                desc = (fig.get("desc") or "").strip()
+                                if desc and not desc.startswith("（当前"):
+                                    st.markdown(desc)
+                            except Exception as e:
+                                st.caption(f"⚠️ 插图渲染失败（p{fig.get('page','?')}）：{str(e)[:100]}")
+                        if len(figs) > MAX_FIG_SHOW:
+                            st.caption(f"共 {len(figs)} 张插图，已展示前 {MAX_FIG_SHOW} 张，其余见 storage/uploads/figs。")
+
+                c1, c2 = st.columns([1, 1])
+                _formula_bg = bg_running(kinds={_LIB_FORMULA_KIND})
+                if c1.button("🧮 提取 LaTeX 公式", disabled=_formula_bg,
+                             help="后台抽取：提交后可切换其他页面，进度见左侧「任务中心」"):
+                    if llm_guard(ctx, "LaTeX 公式抽取"):
+                        bg_submit("公式抽取：" + str(sf),
+                                  lambda progress, _s=sf: _formula_worker(ctx, _s, progress),
+                                  kind=_LIB_FORMULA_KIND)
                         try:
                             st.toast("📄 已转入后台抽取，进度见左侧任务中心", icon="🚀")
                         except Exception:
                             pass
-            if _ref_bg:
-                c2.caption("⏳ 参考文献结构化正在后台运行（进度见左侧「任务中心」）…")
-            if st.session_state.get("formula_view"):
-                with st.expander(f"🧮 公式（{len(st.session_state.formula_view)} 条）", expanded=False):
-                    # 公式取自库里**已入库正文**（不是当前下拉框选的 PDF），
-                    # 与下方标题树/参考文献可能不是同一篇 —— 必须标明来源，
-                    # 否则「公式来自 A、下拉框是 B」在画面上无任何提示。
-                    _ffile = st.session_state.get("formula_view_file")
-                    if _ffile:
-                        st.caption(f"公式来自《{_ffile}》")
-                    for fml in st.session_state.formula_view:
-                        if not isinstance(fml, dict):
-                            continue
-                        st.caption(fml.get("name", "公式"))
-                        try:
-                            st.latex(str(fml.get("latex", "")).strip().strip("$"))
-                        except Exception:
-                            st.code(str(fml.get("latex", "")))
-            if st.session_state.get("ref_view"):
-                _rfile = st.session_state.get("ref_view_file")
-                if _rfile:
-                    st.caption(f"参考文献来自《{_rfile}》")
-                try:
-                    pretty_table(pd.DataFrame(st.session_state.ref_view), title="📚 参考文献")
-                except Exception as e:
-                    friendly_error("参考文献表格渲染", e, reasons=["返回结构不规则"], actions=["重试一次"])
+                if _formula_bg:
+                    c1.caption("⏳ 公式抽取正在后台运行（进度见左侧「任务中心」）…")
+                _ref_bg = bg_running(kinds={_LIB_REF_KIND})
+                if c2.button("📚 结构化参考文献", disabled=_ref_bg,
+                             help="后台抽取：提交后可切换其他页面，进度见左侧「任务中心」"):
+                    if llm_guard(ctx, "参考文献结构化"):
+                        _p = resolve_pdf(sf)
+                        if not _p or not os.path.exists(str(_p)):
+                            st.caption("📭 该论文为内置演示语料（无原始 PDF），无版式级参考文献区。")
+                        else:
+                            bg_submit("参考文献结构化：" + str(sf),
+                                      lambda progress, _p=_p: _ref_worker(ctx, _p, progress),
+                                      kind=_LIB_REF_KIND)
+                            try:
+                                st.toast("📄 已转入后台抽取，进度见左侧任务中心", icon="🚀")
+                            except Exception:
+                                pass
+                if _ref_bg:
+                    c2.caption("⏳ 参考文献结构化正在后台运行（进度见左侧「任务中心」）…")
+                if st.session_state.get("formula_view"):
+                    with st.expander(f"🧮 公式（{len(st.session_state.formula_view)} 条）", expanded=False):
+                        # 公式取自库里**已入库正文**（不是当前下拉框选的 PDF），
+                        # 与下方标题树/参考文献可能不是同一篇 —— 必须标明来源，
+                        # 否则「公式来自 A、下拉框是 B」在画面上无任何提示。
+                        _ffile = st.session_state.get("formula_view_file")
+                        if _ffile:
+                            st.caption(f"公式来自《{_ffile}》")
+                        for fml in st.session_state.formula_view:
+                            if not isinstance(fml, dict):
+                                continue
+                            st.caption(fml.get("name", "公式"))
+                            try:
+                                st.latex(str(fml.get("latex", "")).strip().strip("$"))
+                            except Exception:
+                                st.code(str(fml.get("latex", "")))
+                if st.session_state.get("ref_view"):
+                    _rfile = st.session_state.get("ref_view_file")
+                    if _rfile:
+                        st.caption(f"参考文献来自《{_rfile}》")
+                    try:
+                        pretty_table(pd.DataFrame(st.session_state.ref_view), title="📚 参考文献")
+                    except Exception as e:
+                        friendly_error("参考文献表格渲染", e, reasons=["返回结构不规则"], actions=["重试一次"])
 
     with tab_lib:
         # ---------------- 当前库 & 删除 ----------------
@@ -1031,6 +1042,11 @@ def render(ctx):
             pretty_table(rows, title=f"✅ 当前共 {len(ctx.files)} 篇文献",
                          max_rows=MAX_FAILED_SHOW)
             with st.container(border=True, key="card07"):
+                # 卡头（2026-10-27）：这张卡原来没有分区标题，首块直接是「选择器 + 删除」
+                # 两列 —— design.py 画头行靠的是卡内首个子元素里的 .ai-section，所以它
+                # 是全站唯一一张「有边框、没头行」的卡（_verify_cards.py 抓到的）。
+                # 删除是不可撤销操作，标题写清楚比省一行更重要。
+                _section("删除文献", "从库中移除该论文及其全部片段，不可撤销。")
                 # ⚠️ 删除后 options（ctx.files）会变短，而 selectbox 的选中值存在
                 # session_state 里不会自动失效——残留的旧文件名已不在新选项中，
                 # 下一轮渲染会拿它当选中项。必须在实例化 selectbox **之前**清掉
@@ -1038,9 +1054,8 @@ def render(ctx):
                 _rm_key = "lib_rm_sel"
                 if st.session_state.get(_rm_key) not in ctx.files:
                     st.session_state[_rm_key] = None
-                # 卡片头行结构（Element Card header）：标题/选择器在左、唯一主操作在右，
-                # 同一行。原来按钮独占一行，卡片里形成"上下两截"的堆叠感；改成列之后
-                # 「这一块是干什么的 + 点哪里」在一眼之内，纵向也少一行。
+                # 选择器在左、唯一主操作在右，同一行。原来按钮独占一行，卡片里形成
+                # "上下两截"的堆叠感；改成列之后「选哪篇 + 点哪里」在一眼之内。
                 _c_sel, _c_del = st.columns([3, 1], vertical_alignment="bottom")
                 with _c_sel:
                     delf = st.selectbox("选择要删除的文献", ctx.files, key=_rm_key)
