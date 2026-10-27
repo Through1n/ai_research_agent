@@ -365,21 +365,27 @@ def do_read(pg):
 
 
 def do_graph(pg):
-    """图谱：点「构建引用图谱」跑真实构建 → KPI 出来后滚动看结构。"""
+    """图谱：点「构建引用图谱」跑真实构建 → 等 KPI 条真的出现 → 定住看图。
+
+    2026-10-27 第二次修等待串：原来等 "逻辑节点"，而**空状态卡片 footer**
+    （"本地演示语料经版本合并后仅 2-3 个逻辑节点…"）里就有这四个字 ⇒ 从页面加载
+    起恒真，构建根本没等。后果比没等更糟：录制在横幅弹出前后结束，成片图谱段
+    全程停在「尚未构建图谱」，旁白却说「把论文之间的引用关系画成图」。
+    改用 KPI 条独有的 "同一 arXiv 多版本已合并"（空态 desc/footer 均无此句）。
+    与 read 段「句级联动」是同一类事故：**等待串必须取自"只有结果态才有"的文案**。
+    """
     if not goto(pg, "引用图谱与综述"):
         return
     time.sleep(1.6)
     btn = main_btn(pg, "构建引用图谱")
     if btn:
         click_el(pg, btn, wait=1.0, settle_timeout=60)
-        wait_text(pg, "逻辑节点", 180)
+        print("   KPI=%s" % wait_text(pg, "同一 arXiv 多版本已合并", 180), flush=True)
         _settle(pg, 2.2, 180)
-    pg.mouse.wheel(0, 460)
-    time.sleep(2.4)
-    t = pg.locator(f'{MAIN} [role="tab"]').last
-    if t.count():
-        click_el(pg, t, wait=1.8)
-    time.sleep(2.0)
+    # 不再下滚 460px：图谱 iframe 实测 top=385 / 高 560 ⇒ 385–945 整块落在
+    # 1080 视口内，KPI 条 + 网络图 + 卡片边框同框；下滚只会把它们推出画面、
+    # 露出折叠区。定住 3 秒让评委看清节点与引用边。
+    time.sleep(3.0)
 
 
 def do_search(pg):
