@@ -353,35 +353,34 @@ ai_research_agent/
 
 ---
 
-## 👥 团队信息
+## 👥 参赛信息
 
-<!-- 团队信息以省级赛事报名系统填报内容为准；本页与 资料/团队信息.md 仅作结构展示，不含个人隐私信息。-->
+> 本赛项为**个人赛**（赛题：「以个人为单位进行比赛」）。个人身份信息不在此公开，一律以赛事报名系统填报为准。
 
 | 项目 | 内容 |
 |---|---|
-| **参赛队伍名称** | 队伍信息见省级赛事报名系统（以报名填报为准） |
-| **组别** | 以报名系统填报组别为准（本科组 / 研究生组 / 高职组，须与报名表单一致） |
+| **参赛形式** | 个人赛（独立完成） |
+| **参赛者** | 见报名系统（不公开个人隐私信息） |
+| **组别** | 以报名系统填报为准（研究生组 / A 组 / B 组 / C 组） |
 | **所属高校 / 院系** | 以报名系统填报为准 |
+| **指导教师** | 以报名系统填报为准（无则记为「无指导教师」） |
+| **作品名称** | MoreHand —— 意图驱动 · 抗幻觉 · 全流程科研助手 |
 | **代码仓库** | `https://github.com/Through1n/ai_research_agent`（Public，已推送） |
-| **在线演示地址** | **https://ai4s-research-agent.app.workbuddy.host/**（已部署，两项线上访问问题已修复，已重部署并线上复验通过；见上方「路径三：在线访问」） |
+| **在线演示地址** | **https://ai4s-research-agent.app.workbuddy.host/**（已部署，开放式访问，无需登录与 Key；见上方「路径三：在线访问」） |
 
-**成员与分工**（按七大代码模块：Agent 内核 / 文档感知 / 抗幻觉 RAG / 图谱挖掘 / 学术 Copilot / UI / 测试交付）：
+**个人独立完成的七大模块与代码定位**
 
-| # | 姓名 | 学校 / 专业 | 组别 | 负责模块 | 主要交付物 |
-|---|---|---|---|---|---|
-| 1 | 队长（个人信息见报名系统） | 见报名系统 | 见报名系统 | Agent 内核 + 总体架构 | `core/`（agent / planner / router / memory / guardrails / sandbox / trace） |
-| 2 | 见报名系统 | 见报名系统 | 见报名系统 | 多模态文档感知与长文档工程化 | `services/parsing.py`、`services/library.py` |
-| 3 | 见报名系统 | 见报名系统 | 见报名系统 | 抗幻觉 RAG | `services/rag.py`、`query_expansion.py` |
-| 4 | 见报名系统 | 见报名系统 | 见报名系统 | 引用图谱与综述 | `services/graph.py`、`citation_quality.py` |
-| 5 | 见报名系统 | 见报名系统 | 见报名系统 | 学术 Copilot（写作 / 翻译 / 可视化） | `services/writing.py`、`translate.py` |
-| 6 | 见报名系统 | 见报名系统 | 见报名系统 | 前端交互与桌面壳 | `ui/`（9 页）、`app.py`、`desktop/` |
-| 7 | 见报名系统 | 见报名系统 | 见报名系统 | 测试、压测与交付材料 | `tests/`、`scripts/`、`资料/`、`Dockerfile` |
+| # | 模块 | 关键代码入口 |
+|---|---|---|
+| ① | Agent 内核（任务规划 / 路由 / 记忆 / Guardrails） | `core/`（`agent.py`、`planner.py`、`router.py`、`memory.py`、`guardrails.py`、`sandbox.py`、`trace.py`） |
+| ② | 多模态与细粒度文档感知（双栏判栏 / OCR / 语义去重 / 版本管理） | `services/parsing.py`、`services/library.py` |
+| ③ | 抗幻觉 RAG（混合检索 / 引用校验 / 修复环） | `services/rag.py`、`services/query_expansion.py`、`core/guardrails.py` |
+| ④ | 自主工具调用（Function Calling / 工具链） | `core/agent.py`、`tools/definitions.py` |
+| ⑤ | 引用图谱挖掘与自动综述 | `services/graph.py`、`services/citation_quality.py` |
+| ⑥ | 学术 Copilot（写作 / 可视化 / 翻译） | `services/writing.py`、`services/translate.py` |
+| ⑦ | 前端交互、桌面壳与交付 | `ui/`（9 页）、`app.py`、`desktop/`、`tests/`、`Dockerfile` |
 
-- **指导教师**：见报名系统（若实际无指导教师，则明确写"无指导教师"）
-- **联系方式（队长）**：见报名系统（不在此公开个人隐私信息）
-- 分工矩阵完整版、项目时间线、人员与代码目录对应关系见 **[`资料/团队信息.md`](资料/团队信息.md)**
-
-> 注明：若实际人数与上述 7 个模块不一致，请自行合并或拆分对应行，保持"每个模块有且仅有一名主要负责人"。
+开发过程见 Git 提交历史（193 次提交，2026-10-10 起），逐模块演进过程完整可查。完整模块说明与项目时间线见 **[`资料/团队信息.md`](资料/团队信息.md)**。
 
 ---
 
